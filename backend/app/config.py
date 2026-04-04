@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     testnet_lcd_url: str = "https://lcd.preyominet-1.initia.tech"
     private_key: str = ""
     contract_address: str = ""
-    signal_interval_minutes: int = 5
+    signal_interval_minutes: int = 2
     signal_resolve_timeout_hours: int = 24
 
     @property

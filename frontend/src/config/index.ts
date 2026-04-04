@@ -45,7 +45,7 @@ export const customChain = {
     rpc: [{ address: import.meta.env.VITE_COSMOS_RPC_URL || 'http://localhost:26657' }],
     rest: [{ address: import.meta.env.VITE_REST_URL || 'http://localhost:1317' }],
     'json-rpc': [{ address: config.chain.rpcUrls.default.http[0] }],
-    indexer: [{ address: 'http://localhost:8080' }],
+    indexer: [{ address: import.meta.env.VITE_INDEXER_URL || 'http://localhost:8080' }],
   },
   fees: {
     fee_tokens: [{
@@ -89,17 +89,27 @@ export function truncateAddress(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
-// Explorer URL for Initia Scan
-const EXPLORER_BASE = `https://scan.testnet.initia.xyz/${import.meta.env.VITE_CHAIN_ID || 'initia-signal-1'}`;
+// Explorer URLs
+const SCAN_BASE = `https://scan.testnet.initia.xyz/${import.meta.env.VITE_CHAIN_ID || 'initia-signal-1'}`;
+const INDEXER_BASE = import.meta.env.VITE_INDEXER_URL || 'http://localhost:8080';
 
 export function explorerTxUrl(txHash: string): string {
-  return `${EXPLORER_BASE}/txs/${txHash}`;
+  return `${SCAN_BASE}/txs/${txHash}`;
 }
 
 export function explorerAccountUrl(address: string): string {
-  return `${EXPLORER_BASE}/accounts/${address}`;
+  return `${SCAN_BASE}/accounts/${address}`;
 }
 
 export function explorerContractUrl(address: string): string {
-  return `${EXPLORER_BASE}/evm-contracts/${address}`;
+  return `${SCAN_BASE}/evm-contracts/${address}`;
+}
+
+export async function lookupTx(txHash: string): Promise<any | null> {
+  try {
+    const res = await fetch(`${INDEXER_BASE}/indexer/tx/v1/txs/${txHash}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.tx || null;
+  } catch { return null; }
 }

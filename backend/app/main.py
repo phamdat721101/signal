@@ -1,6 +1,5 @@
 import logging
 import time
-import random
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +44,8 @@ async def lifespan(app: FastAPI):
             get_chain()
             logger.info("Chain client connected")
             from app.scheduler import start_scheduler
+            from app.signal_engine import bootstrap_price_history
+            bootstrap_price_history()
             start_scheduler()
         except Exception as e:
             logger.warning(f"Chain client init failed: {e}")
@@ -187,10 +188,20 @@ async def get_leaderboard():
 
 @app.post("/api/signals/generate")
 async def trigger_signal_generation():
-    from app.signal_engine import run_signal_cycle
+    from app.signal_engine import run_signal_cycle, price_history, recent_signal_txs
     try:
+        before = len(recent_signal_txs)
         run_signal_cycle()
-        return {"status": "ok", "message": "Signal cycle triggered"}
+        after = len(recent_signal_txs)
+        new_signals = after - before
+        history_depth = {k: len(v) for k, v in price_history.items()}
+        _cache.clear()
+        return {
+            "status": "ok",
+            "newSignals": new_signals,
+            "priceHistory": history_depth,
+            "recentTxs": [t for t in recent_signal_txs[-new_signals:]] if new_signals > 0 else [],
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -200,67 +211,18 @@ async def trigger_signal_generation():
 async def get_tx_history():
     """Return recent AI signal transaction hashes for explorer tracking."""
     from app.signal_engine import recent_signal_txs
-    chain_id = get_settings().contract_address and "initia-signal-1"
-    explorer_base = f"https://scan.testnet.initia.xyz/{chain_id}"
+    chain_id = "initia-signal-1"
+    scan_base = f"https://scan.testnet.initia.xyz/{chain_id}"
+    indexer_base = "http://localhost:8080"
     return {
         "transactions": [
-            {**tx, "explorerUrl": f"{explorer_base}/txs/{tx['txHash']}"}
+            {
+                **tx,
+                "scanUrl": f"{scan_base}/txs/{tx['txHash']}",
+                "indexerUrl": f"{indexer_base}/indexer/tx/v1/txs/{tx['txHash']}",
+            }
             for tx in reversed(recent_signal_txs)
         ],
-        "explorerBase": explorer_base,
+        "scanBase": scan_base,
+        "indexerBase": indexer_base,
     }
-
-@app.post("/api/seed")
-async def seed_data():
-    """Create demo signals for hackathon presentation."""
-    from app.signal_engine import TRACKED_ASSETS
-    try:
-        chain = get_chain()
-        assets = list(TRACKED_ASSETS.keys())
-        created = 0
-
-        # Demo prices per asset (in wei, 18 decimals)
-        demo_prices = {
-            assets[0]: (65000, 68000, 63000),   # BTC: entry, win_exit, loss_exit
-            assets[1]: (3200, 3400, 3100),       # ETH
-            assets[2]: (1.5, 1.65, 1.35),        # INIT
-        }
-
-        for asset in assets:
-            entry_base, win_exit, loss_exit = demo_prices.get(asset, (100, 110, 90))
-
-            # 3 resolved bullish (2 win, 1 loss)
-            for i in range(3):
-                entry = int(entry_base * 1e18)
-                target = int(entry_base * 1.05 * 1e18)
-                conf = random.randint(60, 90)
-                sid, _ = chain.create_signal(asset, True, conf, target, entry)
-                exit_p = int(win_exit * 1e18) if i < 2 else int(loss_exit * 1e18)
-                chain.resolve_signal(sid, exit_p)
-                created += 1
-
-            # 2 resolved bearish (1 win, 1 loss)
-            for i in range(2):
-                entry = int(entry_base * 1e18)
-                target = int(entry_base * 0.95 * 1e18)
-                conf = random.randint(55, 85)
-                sid, _ = chain.create_signal(asset, False, conf, target, entry)
-                exit_p = int(loss_exit * 1e18) if i == 0 else int(win_exit * 1e18)
-                chain.resolve_signal(sid, exit_p)
-                created += 1
-
-        # 5 active (unresolved) signals
-        for i in range(5):
-            asset = random.choice(assets)
-            entry_base = demo_prices[asset][0]
-            is_bull = random.choice([True, False])
-            entry = int(entry_base * 1e18)
-            target = int(entry_base * (1.05 if is_bull else 0.95) * 1e18)
-            conf = random.randint(55, 95)
-            _, _ = chain.create_signal(asset, is_bull, conf, target, entry)
-            created += 1
-
-        _cache.clear()
-        return {"status": "ok", "signals_created": created}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

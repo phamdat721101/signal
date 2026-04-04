@@ -21,6 +21,7 @@ export default function SignalDetail() {
 
   const entryNum = Number(BigInt(signal.entryPrice)) / 1e18;
   const targetNum = Number(BigInt(signal.targetPrice)) / 1e18;
+  const stopLoss = signal.isBull ? entryNum * 0.95 : entryNum * 1.05;
 
   const handleExecute = () => {
     executeSignal(
@@ -67,18 +68,35 @@ export default function SignalDetail() {
           data={priceData?.history || []}
           entryPrice={entryNum}
           targetPrice={targetNum}
+          isBull={signal.isBull}
         />
       </div>
 
-      {/* Info Grid */}
+      {/* Trading Levels */}
+      <div className="grid grid-cols-3 gap-4 mb-4">
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-4">
+          <div className="text-sm text-[var(--color-muted)]">🟡 Entry Price</div>
+          <div className="text-lg font-mono text-amber-400">${formatPrice(signal.entryPrice)}</div>
+        </div>
+        <div className="bg-[var(--color-surface)] border border-green-500/30 rounded-xl p-4">
+          <div className="text-sm text-[var(--color-muted)]">🟢 Take Profit</div>
+          <div className="text-lg font-mono text-green-400">${formatPrice(signal.targetPrice)}</div>
+        </div>
+        <div className="bg-[var(--color-surface)] border border-red-500/30 rounded-xl p-4">
+          <div className="text-sm text-[var(--color-muted)]">🔴 Stop Loss</div>
+          <div className="text-lg font-mono text-red-400">${stopLoss >= 1000 ? stopLoss.toLocaleString(undefined, { maximumFractionDigits: 2 }) : stopLoss.toFixed(4)}</div>
+        </div>
+      </div>
+
+      {/* Signal Info */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-4">
-          <div className="text-sm text-[var(--color-muted)]">Entry Price</div>
-          <div className="text-lg font-mono text-white">${formatPrice(signal.entryPrice)}</div>
+          <div className="text-sm text-[var(--color-muted)]">Risk/Reward</div>
+          <div className="text-lg font-mono text-white">1:1</div>
         </div>
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-4">
-          <div className="text-sm text-[var(--color-muted)]">Target Price</div>
-          <div className="text-lg font-mono text-[var(--color-accent)]">${formatPrice(signal.targetPrice)}</div>
+          <div className="text-sm text-[var(--color-muted)]">Confidence</div>
+          <div className="text-lg font-mono text-white">{signal.confidence}%</div>
         </div>
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-4">
           <div className="text-sm text-[var(--color-muted)]">Creator</div>
@@ -88,6 +106,39 @@ export default function SignalDetail() {
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-4">
           <div className="text-sm text-[var(--color-muted)]">Created</div>
           <div className="text-lg text-white">{new Date(signal.timestamp * 1000).toLocaleDateString()}</div>
+        </div>
+      </div>
+
+      {/* AI Workflow */}
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-5 mb-6">
+        <div className="text-sm font-semibold text-white mb-4">AI Signal Generation Pipeline</div>
+        <div className="flex items-center gap-2 text-xs overflow-x-auto pb-2">
+          <div className="flex-shrink-0 px-3 py-2 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400">
+            📡 Price Feed
+          </div>
+          <span className="text-[var(--color-muted)]">→</span>
+          <div className="flex-shrink-0 px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400">
+            📈 EMA(5/10)
+          </div>
+          <span className="text-[var(--color-muted)]">→</span>
+          <div className="flex-shrink-0 px-3 py-2 rounded-lg bg-purple-500/10 border border-purple-500/30 text-purple-400">
+            📊 RSI Filter
+          </div>
+          <span className="text-[var(--color-muted)]">→</span>
+          <div className="flex-shrink-0 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400">
+            🎯 {signal.confidence}%
+          </div>
+          <span className="text-[var(--color-muted)]">→</span>
+          <div className={`flex-shrink-0 px-3 py-2 rounded-lg ${signal.isBull ? 'bg-green-500/10 border border-green-500/30 text-green-400' : 'bg-red-500/10 border border-red-500/30 text-red-400'}`}>
+            {signal.isBull ? '📈 BULL' : '📉 BEAR'}
+          </div>
+          <span className="text-[var(--color-muted)]">→</span>
+          <div className="flex-shrink-0 px-3 py-2 rounded-lg bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/30 text-[var(--color-accent)]">
+            ⛓️ On-Chain
+          </div>
+        </div>
+        <div className="mt-3 text-xs text-[var(--color-muted)]">
+          Real-time prices → EMA(5) vs EMA(10) crossover for direction → RSI confirms not overbought/oversold → confidence scored → ±1.5% target → on-chain → auto-resolve 24h
         </div>
       </div>
 
@@ -113,13 +164,27 @@ export default function SignalDetail() {
           </p>
 
           {txStatus === 'success' ? (
-            <div className="text-green-400 text-sm">
-              Signal executed!
+            <div className="space-y-2">
+              <div className="text-green-400 text-sm font-semibold">✓ Signal executed on-chain!</div>
               {txHash && (
-                <a href={explorerTxUrl(txHash)} target="_blank" rel="noopener noreferrer"
-                  className="ml-2 underline text-[var(--color-accent)] hover:opacity-80">View on Explorer ↗</a>
+                <div className="bg-[var(--color-bg)] rounded-lg p-3 space-y-2">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-[var(--color-muted)]">TX Hash:</span>
+                    <code className="font-mono text-white break-all">{txHash}</code>
+                  </div>
+                  <div className="flex gap-2">
+                    <a href={explorerTxUrl(txHash)} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-1 text-xs bg-[var(--color-accent)]/20 text-[var(--color-accent)] rounded hover:bg-[var(--color-accent)]/30 transition-colors">
+                      Initia Scan ↗
+                    </a>
+                    <button onClick={() => navigator.clipboard.writeText(txHash)}
+                      className="px-3 py-1 text-xs bg-[var(--color-surface)] border border-[var(--color-border)] text-white rounded hover:border-[var(--color-accent)] transition-colors">
+                      Copy Hash
+                    </button>
+                  </div>
+                </div>
               )}
-              <button onClick={reset} className="ml-2 underline text-[var(--color-muted)]">Reset</button>
+              <button onClick={reset} className="text-xs underline text-[var(--color-muted)]">Reset</button>
             </div>
           ) : txStatus === 'error' ? (
             <div className="text-red-400 text-sm">

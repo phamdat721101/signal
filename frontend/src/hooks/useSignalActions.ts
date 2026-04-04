@@ -34,6 +34,7 @@ export function useSignalActions() {
         args: [asset as `0x${string}`, isBull, confidence, targetPrice, entryPrice],
       });
 
+      console.log('[Signal] Executing tx...');
       const result = await requestTxBlock({
         chainId: customChain.chain_id,
         messages: [{
@@ -49,12 +50,14 @@ export function useSignalActions() {
         }],
       });
 
-      setTxHash(result?.txhash || null);
+      console.log('[Signal] TX result:', result);
+      setTxHash(result?.transactionHash || null);
       setStatus('success');
       queryClient.invalidateQueries({ queryKey: ['signals'] });
       queryClient.invalidateQueries({ queryKey: ['signalCount'] });
       queryClient.invalidateQueries({ queryKey: ['userSignals'] });
     } catch (e: any) {
+      console.error('[Signal] TX error:', e);
       setError(e.message || 'Transaction failed');
       setStatus('error');
     }
