@@ -1,0 +1,12 @@
+{
+  "project_name": "Initia Signal",
+  "repo_url": "https://github.com/PLACEHOLDER/initia-signal",
+  "commit_sha": "PLACEHOLDER_AFTER_COMMIT",
+  "rollup_chain_id": "initia-signal-1",
+  "deployed_address": "0x4A17D58C328158FAF35f1E9a8C6E474Bf37A8513",
+  "vm": "evm",
+  "native_feature": "auto-signing",
+  "core_logic_path": "contracts/src/SignalRegistry.sol",
+  "native_feature_frontend_path": "frontend/src/hooks/useSignalActions.ts",
+  "demo_video_url": "https://youtu.be/PLACEHOLDER"
+}

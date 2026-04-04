@@ -1,0 +1,47 @@
+# Foundry build & cache
+contracts/out/
+contracts/cache/
+contracts/lib/
+*.bin
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+backend/.venv/
+backend/.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/dist/
+package-lock.json
+
+# Environment & credentials
+.env
+*.env.local
+*.env.production
+*.key
+*.pem
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Logs
+*.log
+/tmp/
+
+# Local dev
+tasks/
+.claude/
+
+# Keep submission dir
+!.initia/
