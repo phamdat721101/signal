@@ -1,12 +1,12 @@
 {
   "project_name": "Initia Signal",
-  "repo_url": "https://github.com/PLACEHOLDER/initia-signal",
-  "commit_sha": "PLACEHOLDER_AFTER_COMMIT",
+  "repo_url": "https://github.com/phamdat721101/signal",
+  "commit_sha": "1425c6f00e5f4f8235543f47727d3d9c1113b1c9",
   "rollup_chain_id": "initia-signal-1",
   "deployed_address": "0x4A17D58C328158FAF35f1E9a8C6E474Bf37A8513",
   "vm": "evm",
   "native_feature": "auto-signing",
   "core_logic_path": "contracts/src/SignalRegistry.sol",
   "native_feature_frontend_path": "frontend/src/hooks/useSignalActions.ts",
-  "demo_video_url": "https://youtu.be/PLACEHOLDER"
+  "demo_video_url": "https://www.youtube.com/watch?v=jxFBdxR2dqU"
 }

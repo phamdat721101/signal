@@ -4,32 +4,45 @@ Open-source AI-powered on-chain trading signal kit for Initia EVM appchains.
 
 Generate market signals from real price data, store them immutably on-chain, execute with one-click auto-signing, and track verifiable performance history — all on your own appchain.
 
-## What It Does
+## Initia Hackathon Submission
 
-Initia Signal is a full-stack trading intelligence platform that:
+- **Project Name**: Initia Signal
 
-1. **Fetches real market data** from Initia's Slinky oracle (with CoinGecko fallback) for BTC, ETH, and INIT
-2. **Generates buy/sell signals** using a momentum-based algorithm that detects clean price trends with confidence scoring
-3. **Stores signals on-chain** via a Solidity smart contract — every signal is immutable and verifiable
-4. **Auto-resolves signals** after 24 hours by comparing entry price to current market price
-5. **Tracks performance** with win rates, P&L calculations, and a trader leaderboard
+### Project Overview
+
+Initia Signal is an AI-powered trading intelligence platform that generates verifiable buy/sell signals using technical analysis (EMA crossover + RSI) on real-time market data, stores every signal immutably on-chain via a Solidity smart contract, and lets users execute signals with one-click auto-signing. It solves the problem of unverifiable trading calls — every signal's entry price, target, confidence, and outcome is recorded on-chain, creating transparent and provable track records for signal providers and traders.
+
+### Implementation Detail
+
+- **The Custom Implementation**: An AI signal engine that fetches real prices from Initia's Slinky oracle (with CoinGecko OHLC fallback), runs EMA(5)/EMA(10) crossover detection with RSI(14) confirmation to generate directional signals with confidence scoring, submits them on-chain to a SignalRegistry contract with realistic ±1.5% targets, and auto-resolves after 24h with the actual market price. The frontend reads signals directly from the EVM contract via viem, displays candlestick charts with entry/TP/SL levels, and shows a trader leaderboard with verifiable P&L.
+- **The Native Feature**: **Auto-signing** via InterwovenKit's ghost wallet enables one-click signal execution — users approve a session once and all subsequent `MsgCall` transactions are signed automatically without wallet popups, creating a seamless trading UX. The **Interwoven Bridge** button in the header lets users fund their appchain wallet directly from Initia L1.
+
+### How to Run Locally
+
+1. Launch an EVM appchain: `weave init` (select EVM, enable oracle) → `weave opinit start executor -d` → `weave relayer start -d`
+2. Import keys: `MNEMONIC=$(jq -r '.common.gas_station.mnemonic' ~/.weave/config.json) && minitiad keys add gas-station --recover --keyring-backend test --coin-type 60 --key-type eth_secp256k1 --source <(echo -n "$MNEMONIC")`
+3. Deploy contract: `cd contracts && forge build --via-ir && ./deploy.sh` (or manually via `minitiad tx evm create`)
+4. Start the app: `./start.sh` — backend on http://localhost:8000, frontend on http://localhost:5173
+
+---
 
 ## How It Works
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Price Feeds (Slinky Oracle / CoinGecko)            │
+│  Price Feeds (Slinky Oracle / CoinGecko OHLC)       │
 └──────────────────────┬──────────────────────────────┘
                        ▼
 ┌──────────────────────────────────────────────────────┐
-│  Signal Engine (Python)                              │
-│  • Momentum analysis: 3-point trend, >2% movement   │
-│  • Confidence scoring: 50-95% based on magnitude     │
-│  • Runs every 5 minutes via scheduler                │
+│  AI Signal Engine (Python)                           │
+│  • EMA(5) vs EMA(10) crossover for direction         │
+│  • RSI(14) filter: skip overbought/oversold          │
+│  • Confidence: EMA strength + RSI distance           │
+│  • Runs every 2 minutes via scheduler                │
 └──────────────────────┬───────────────────────────────┘
                        ▼
 ┌──────────────────────────────────────────────────────┐
-│  SignalRegistry Contract (Solidity)                   │
+│  SignalRegistry Contract (Solidity / EVM)             │
 │  • createSignal() — anyone can create                │
 │  • resolveSignal() — owner resolves with exit price  │
 │  • On-chain: asset, direction, confidence, prices    │
@@ -37,11 +50,10 @@ Initia Signal is a full-stack trading intelligence platform that:
                        ▼
 ┌──────────────────────────────────────────────────────┐
 │  Frontend (React + InterwovenKit)                    │
-│  • Dashboard with live stats                         │
-│  • Signal feed with filters                          │
+│  • Candlestick charts with Entry/TP/SL levels        │
 │  • One-click execute via auto-signing                │
-│  • Portfolio P&L + Leaderboard                       │
-│  • Price charts (lightweight-charts)                 │
+│  • AI workflow visualization                         │
+│  • Portfolio P&L + Trader Leaderboard                │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -53,83 +65,18 @@ backend/     → Python FastAPI — AI signal engine + REST API
 frontend/    → Vite + React + TailwindCSS — Trading dashboard
 ```
 
-## Quick Start
-
-### Prerequisites
-
-- [Go 1.22+](https://go.dev/doc/install) + [Docker](https://www.docker.com/products/docker-desktop/)
-- [Foundry](https://book.getfoundry.sh/getting-started/installation) (forge, cast)
-- [Node.js 18+](https://nodejs.org/) + Python 3.11+
-
-### 1. Launch Appchain
-
-```bash
-weave init
-# Select: EVM → chain ID: your-chain-id → Enable oracle
-weave opinit start executor -d
-weave relayer start -d
-```
-
-### 2. Import Keys
-
-```bash
-MNEMONIC=$(jq -r '.common.gas_station.mnemonic' ~/.weave/config.json)
-minitiad keys add gas-station --recover --keyring-backend test \
-  --coin-type 60 --key-type eth_secp256k1 --source <(echo -n "$MNEMONIC")
-```
-
-### 3. Deploy Contract
-
-```bash
-cd contracts
-forge build --via-ir
-jq -r '.bytecode.object' out/SignalRegistry.sol/SignalRegistry.json \
-  | sed 's/^0x//' | tr -d '\n' > SignalRegistry.bin
-minitiad tx evm create SignalRegistry.bin \
-  --from gas-station --keyring-backend test \
-  --chain-id <YOUR_CHAIN_ID> --gas auto --gas-adjustment 1.4 --yes
-rm SignalRegistry.bin
-```
-
-### 4. Configure & Run
-
-```bash
-# Set contract address and private key in backend/.env and frontend/.env
-# Then:
-./start.sh
-```
-
-Backend runs on http://localhost:8000, frontend on http://localhost:5173.
-
-### 5. Seed Demo Data
-
-```bash
-curl -X POST http://localhost:8000/api/seed
-```
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Backend health + chain connection status |
-| GET | `/api/signals` | All signals (paginated) |
-| GET | `/api/signals/:id` | Single signal detail |
-| GET | `/api/prices` | Current market prices |
-| GET | `/api/prices/:symbol/history` | Price history for charting |
-| GET | `/api/leaderboard` | Trader rankings by P&L |
-| GET | `/api/tx-history` | AI signal tx hashes with explorer URLs |
-| POST | `/api/signals/generate` | Trigger signal generation cycle |
-| POST | `/api/seed` | Create demo signals for testing |
-
 ## Signal Algorithm
 
-The momentum engine analyzes the last 3 price points per asset:
+The AI engine uses standard technical indicators on real market data:
 
-- **Bullish signal**: 3 consecutive ascending prices with >2% total movement
-- **Bearish signal**: 3 consecutive descending prices with >2% total movement
-- **Confidence**: `clamp(abs(pct_change) × 1000, 50, 95)`
-- **Target**: Entry price ± 5%
-- **Resolution**: Auto-resolved after 24h with current market price
+| Indicator | Usage |
+|-----------|-------|
+| EMA(5) / EMA(10) | Crossover detection for trend direction |
+| RSI(14) | Overbought (>75) / oversold (<25) filter |
+| Confidence | Composite score: EMA strength + RSI distance (50-95%) |
+| Target | Entry ± 1.5% (realistic 24h target) |
+| Stop-Loss | Entry ∓ 1.5% (1:1 risk/reward) |
+| Resolution | Auto-resolved after 24h with current market price |
 
 ## Smart Contract
 
@@ -137,7 +84,7 @@ The momentum engine analyzes the last 3 price points per asset:
 
 ```solidity
 struct Signal {
-    address asset;      // Tracked asset identifier
+    address asset;      // Tracked asset (BTC, ETH, INIT)
     bool isBull;        // Bull (buy) or Bear (sell)
     uint8 confidence;   // 0-100 confidence score
     uint256 targetPrice;
@@ -155,10 +102,25 @@ struct Signal {
 
 ## Initia-Native Features
 
-- **InterwovenKit** — Wallet connection + social login
-- **Auto-Signing** — One-click signal execution via ghost wallet
-- **Interwoven Bridge** — Fund appchain from L1
-- **Oracle Price Feed** — Real-time data from Slinky oracle
+| Feature | How It's Used |
+|---------|---------------|
+| **InterwovenKit** | Wallet connection + social login for the trading dashboard |
+| **Auto-Signing** | One-click signal execution via ghost wallet — no popups after first approval |
+| **Interwoven Bridge** | Header button to fund appchain wallet from Initia L1 |
+| **Slinky Oracle** | Primary price feed for signal generation (CoinGecko OHLC fallback) |
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | Backend health + chain connection status |
+| GET | `/api/signals` | All signals (paginated) |
+| GET | `/api/signals/:id` | Single signal detail |
+| GET | `/api/prices` | Current market prices |
+| GET | `/api/prices/:symbol/history` | Price history for charting |
+| GET | `/api/leaderboard` | Trader rankings by P&L |
+| GET | `/api/tx-history` | AI signal tx hashes with explorer URLs |
+| POST | `/api/signals/generate` | Trigger signal generation cycle |
 
 ## Tech Stack
 
@@ -169,18 +131,19 @@ struct Signal {
 | Frontend | React 19, TypeScript, Vite, TailwindCSS v4 |
 | Data | viem, TanStack Query, lightweight-charts |
 | Wallet | InterwovenKit, wagmi |
+| Indexer | Rollytics (Postgres-backed) |
 
 ## Explorer
 
-Transaction history is available via the API:
+Transaction history via API:
 
 ```bash
 curl http://localhost:8000/api/tx-history | jq '.transactions[:3]'
 ```
 
-When your rollup is indexed on Initia Scan:
-- Transactions: `https://scan.testnet.initia.xyz/<chain-id>/txs/<hash>`
-- Contract: `https://scan.testnet.initia.xyz/<chain-id>/evm-contracts/<address>`
+Initia Scan (when rollup is indexed):
+- Transactions: `https://scan.testnet.initia.xyz/initia-signal-1/txs/<hash>`
+- Contract: `https://scan.testnet.initia.xyz/initia-signal-1/evm-contracts/0x4A17D58C328158FAF35f1E9a8C6E474Bf37A8513`
 
 ## License
 
