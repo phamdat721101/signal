@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     contract_address: str = ""
     signal_interval_minutes: int = 2
     signal_resolve_timeout_hours: int = 24
+    # MPP Session Vault
+    session_vault_address: str = ""
+    mock_iusd_address: str = ""
+    payment_gateway_address: str = ""
+    enable_payment_gating: bool = True
+    free_signals_per_day: int = 3
 
     @property
     def json_rpc_url(self) -> str:

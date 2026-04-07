@@ -29,6 +29,10 @@ export const config = {
   contractAddress: import.meta.env.VITE_CONTRACT_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
   backendUrl: import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000',
   demoMode: import.meta.env.VITE_DEMO_MODE === 'true',
+  mockIUSDAddress: import.meta.env.VITE_MOCK_IUSD_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+  sessionVaultAddress: import.meta.env.VITE_SESSION_VAULT_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+  paymentGatewayAddress: import.meta.env.VITE_PAYMENT_GATEWAY_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+  paymentEnabled: import.meta.env.VITE_PAYMENT_ENABLED === 'true',
 };
 
 // InterwovenKit custom chain definition

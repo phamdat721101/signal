@@ -1,7 +1,7 @@
 import logging
 import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 
@@ -187,7 +187,25 @@ async def get_leaderboard():
 
 
 @app.post("/api/signals/generate")
-async def trigger_signal_generation():
+async def trigger_signal_generation(request: Request):
+    """Generate signals. Requires MPP payment when gating is enabled."""
+    settings = get_settings()
+    payment_info = None
+
+    if settings.enable_payment_gating and settings.session_vault_address:
+        payment_header = request.headers.get("X-PAYMENT")
+        if not payment_header:
+            from app.mpp_middleware import SERVICE_PRICING
+            verifier = _get_payment_verifier()
+            raise HTTPException(status_code=402, detail=verifier.build_402_response(
+                "signal-premium", SERVICE_PRICING["signal-premium"]["price_wei"], settings.mock_iusd_address))
+        verifier = _get_payment_verifier()
+        result = verifier.verify_voucher(payment_header)
+        if not result["valid"]:
+            raise HTTPException(status_code=402, detail={"error": result.get("error")})
+        verifier.redeem_voucher_onchain(payment_header)
+        payment_info = {"status": "paid", "session_id": result["session_id"], "amount_paid": str(result["amount"])}
+
     from app.signal_engine import run_signal_cycle, price_history, recent_signal_txs
     try:
         before = len(recent_signal_txs)
@@ -196,12 +214,15 @@ async def trigger_signal_generation():
         new_signals = after - before
         history_depth = {k: len(v) for k, v in price_history.items()}
         _cache.clear()
-        return {
+        result = {
             "status": "ok",
             "newSignals": new_signals,
             "priceHistory": history_depth,
             "recentTxs": [t for t in recent_signal_txs[-new_signals:]] if new_signals > 0 else [],
         }
+        if payment_info:
+            result["payment"] = payment_info
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -226,3 +247,102 @@ async def get_tx_history():
         "scanBase": scan_base,
         "indexerBase": indexer_base,
     }
+
+
+# ─── Payment-gated endpoints ────────────────────────────────
+
+_payment_verifier = None
+
+def _get_payment_verifier():
+    global _payment_verifier
+    if _payment_verifier is None:
+        from app.mpp_middleware import MPPPaymentVerifier
+        import json
+        from pathlib import Path
+        settings = get_settings()
+        chain = get_chain()
+        vault_abi_path = Path(__file__).parent / "session_vault_abi.json"
+        vault_abi = json.loads(vault_abi_path.read_text()) if vault_abi_path.exists() else []
+        _payment_verifier = MPPPaymentVerifier(chain, settings.session_vault_address, vault_abi)
+    return _payment_verifier
+
+
+@app.get("/api/signals/premium")
+async def get_premium_signals(request: Request, offset: int = 0, limit: int = Query(default=100, le=100)):
+    settings = get_settings()
+    if not settings.enable_payment_gating or not settings.session_vault_address:
+        return await get_signals(offset, limit)
+    payment_header = request.headers.get("X-PAYMENT")
+    if not payment_header:
+        from app.mpp_middleware import SERVICE_PRICING
+        verifier = _get_payment_verifier()
+        raise HTTPException(status_code=402, detail=verifier.build_402_response("signal-premium", SERVICE_PRICING["signal-premium"]["price_wei"], settings.mock_iusd_address))
+    verifier = _get_payment_verifier()
+    result = verifier.verify_voucher(payment_header)
+    if not result["valid"]:
+        raise HTTPException(status_code=402, detail={"error": result.get("error")})
+    verifier.redeem_voucher_onchain(payment_header)
+    try:
+        chain = get_chain()
+        total = chain.get_signal_count()
+        signals = chain.get_signals(offset, limit) if total > 0 else []
+        return {"signals": signals, "total": total, "payment": {"status": "paid", "session_id": result["session_id"], "amount_paid": str(result["amount"])}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/signals/single/{signal_id}")
+async def get_paid_signal(signal_id: int, request: Request):
+    settings = get_settings()
+    if not settings.enable_payment_gating or not settings.session_vault_address:
+        return await get_signal(signal_id)
+    payment_header = request.headers.get("X-PAYMENT")
+    if not payment_header:
+        from app.mpp_middleware import SERVICE_PRICING
+        verifier = _get_payment_verifier()
+        raise HTTPException(status_code=402, detail=verifier.build_402_response("signal-single", SERVICE_PRICING["signal-single"]["price_wei"], settings.mock_iusd_address))
+    verifier = _get_payment_verifier()
+    result = verifier.verify_voucher(payment_header)
+    if not result["valid"]:
+        raise HTTPException(status_code=402, detail={"error": result.get("error")})
+    verifier.redeem_voucher_onchain(payment_header)
+    try:
+        return {"signal": get_chain().get_signal(signal_id), "payment": {"status": "paid", "amount_paid": str(result["amount"])}}
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/payment/session/{session_id}")
+async def get_session_info(session_id: int):
+    try:
+        session = _get_payment_verifier().vault.functions.getSession(session_id).call()
+        return {"sessionId": session_id, "depositor": session[0], "depositAmount": str(session[1]), "remainingBalance": str(session[2]), "totalRedeemed": str(session[3]), "voucherCount": session[4], "createdAt": session[5], "expiresAt": session[6], "active": session[7]}
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/payment/pricing")
+async def get_pricing():
+    from app.mpp_middleware import SERVICE_PRICING
+    settings = get_settings()
+    return {"pricing": {k: {"price_iusd": v["price_wei"] / 1e18, "price_wei": str(v["price_wei"]), "description": v["description"]} for k, v in SERVICE_PRICING.items()}, "token": settings.mock_iusd_address, "sessionVault": settings.session_vault_address}
+
+
+@app.post("/api/payment/faucet")
+async def claim_faucet(address: str):
+    settings = get_settings()
+    if not settings.mock_iusd_address:
+        raise HTTPException(status_code=400, detail="MockIUSD not deployed")
+    try:
+        chain = get_chain()
+        import json
+        from pathlib import Path
+        iusd_abi_path = Path(__file__).parent / "mock_iusd_abi.json"
+        iusd_abi = json.loads(iusd_abi_path.read_text()) if iusd_abi_path.exists() else []
+        from web3 import Web3
+        iusd = chain.w3.eth.contract(address=Web3.to_checksum_address(settings.mock_iusd_address), abi=iusd_abi)
+        fn = iusd.functions.mint(Web3.to_checksum_address(address), int(1000 * 1e18))
+        receipt = chain._send_tx(fn)
+        return {"status": "ok", "amount": "1000", "token": "iUSD", "recipient": address, "txHash": receipt["transactionHash"].hex()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

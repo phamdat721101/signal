@@ -1,47 +1,79 @@
-# Foundry build & cache
-contracts/out/
-contracts/cache/
-contracts/lib/
+# ── Build & Compiled Output ──
+build/
+dist/
+dist-ssr/
+out/
+bin/
 *.bin
-
-# Python
-__pycache__/
 *.pyc
 *.pyo
-backend/.venv/
-backend/.pytest_cache/
+*.pyd
 *.egg-info/
 
-# Node
-node_modules/
-frontend/dist/
-package-lock.json
+# Foundry build artifacts
+contracts/out/
+contracts/cache/
+contracts/broadcast/
 
-# Environment & credentials
+# Python cache
+__pycache__/
+.pytest_cache/
+
+# Frontend build
+frontend/dist/
+frontend/dist-ssr/
+
+# ── Dependencies ──
+node_modules/
+.venv/
+venv/
+env/
+
+# ── Environment & Credentials ──
 .env
-*.env.local
-*.env.production
+.env.local
+.env.*.local
 *.key
 *.pem
+*.p12
+*.pfx
+credentials.json
 
-# OS
+# Keep .env.example files
+!.env.example
+!backend/.env.example
+!frontend/.env.example
+!contracts/.env.example
+
+# ── Logs ──
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ── OS Generated ──
 .DS_Store
 Thumbs.db
 *.swp
 *.swo
+*.sw?
 
-# IDE
+# ── IDE & Editor ──
 .vscode/
 .idea/
 *.iml
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.local
 
-# Logs
-*.log
-/tmp/
-
-# Local dev
+# ── Tools & Local Configs ──
 tasks/
 .claude/
+coverage/
+.nyc_output/
+/tmp/
 
-# Keep submission dir
+# ── Keep submission dir ──
 !.initia/
