@@ -32,7 +32,7 @@ function TxStepRow({ step }: { step: TxStep }) {
 export default function Dashboard() {
   const { data: total = 0 } = useSignalCount();
   const { data: signals = [], isLoading } = useSignals(0, 100);
-  const { claimFaucet, approveAndDeposit, clearSteps, loading: sessionLoading, steps, connected } = useSession();
+  const { claimFaucet, approveAndDeposit, clearSteps, findActiveSession, payForService, loading: sessionLoading, steps, connected } = useSession();
   const [genLoading, setGenLoading] = useState(false);
   const [genResult, setGenResult] = useState<any>(null);
 
@@ -50,11 +50,50 @@ export default function Dashboard() {
     setGenLoading(true);
     setGenResult(null);
     try {
-      const resp = await fetch(`${config.backendUrl}/api/signals/generate`, { method: 'POST' });
+      const headers: Record<string, string> = {};
+
+      if (config.paymentEnabled) {
+        if (!connected) {
+          setGenResult({ error: 'Connect wallet first.' });
+          return;
+        }
+
+        // 1. Get pricing
+        const pricingResp = await fetch(`${config.backendUrl}/api/payment/pricing`);
+        const pricing = await pricingResp.json();
+        const priceWei = BigInt(pricing.pricing['signal-premium'].price_wei);
+
+        // 2. Find active session
+        const session = await findActiveSession(priceWei);
+        if (!session) {
+          setGenResult({ error: 'No active session with sufficient balance. Deposit iUSD first.' });
+          return;
+        }
+
+        // 3. Pay on-chain
+        const txHash = await payForService(session.sessionId, priceWei, 'signal-premium');
+        if (!txHash) {
+          setGenResult({ error: 'Payment transaction failed.' });
+          return;
+        }
+        headers['X-PAYMENT-TX'] = txHash;
+      }
+
+      // 4. Call backend
+      const resp = await fetch(`${config.backendUrl}/api/signals/generate`, {
+        method: 'POST',
+        headers,
+      });
       const data = await resp.json();
+      if (!resp.ok) {
+        setGenResult({ error: data.detail?.error || data.detail?.['x-payment-required']?.serviceId
+          ? 'Payment verification failed. Try again.'
+          : `Server error: ${JSON.stringify(data.detail)}` });
+        return;
+      }
       setGenResult(data);
     } catch (e: any) {
-      setGenResult({ error: e.message });
+      setGenResult({ error: e.message || 'Generation failed' });
     } finally {
       setGenLoading(false);
     }
@@ -147,20 +186,24 @@ export default function Dashboard() {
       {genResult && (
         <div className={`rounded-lg p-4 mb-8 text-sm ${genResult.error ? 'bg-red-500/10 border border-red-500/20' : 'bg-green-500/10 border border-green-500/20'}`}>
           {genResult.error ? (
-            <div className="text-red-400">{genResult.detail?.['x-payment-required'] ? '🔒 Payment required — deposit iUSD first' : genResult.error}</div>
+            <div className="text-red-400">{genResult.error}</div>
           ) : (
             <div>
-              <div className="text-green-400 font-semibold mb-2">✓ Generated {genResult.newSignals || 0} new signal(s)</div>
+              <div className="text-green-400 font-semibold mb-2">
+                {genResult.newSignals > 0
+                  ? `Generated ${genResult.newSignals} new signal(s)`
+                  : 'No new signals \u2014 market conditions unchanged'}
+              </div>
               {genResult.recentTxs?.map((tx: any, i: number) => (
                 <div key={i} className="flex items-center gap-2 text-xs mt-1">
-                  <span className="text-white">{tx.symbol} {tx.isBull ? '📈' : '📉'} {tx.confidence}%</span>
+                  <span className="text-white">{tx.symbol} {tx.isBull ? '\u{1F4C8}' : '\u{1F4C9}'} {tx.confidence}%</span>
                   <a href={explorerTxUrl(tx.txHash)} target="_blank" rel="noopener noreferrer"
                     className="font-mono text-[var(--color-accent)] hover:underline">{tx.txHash?.slice(0, 16)}...</a>
                 </div>
               ))}
               {genResult.payment && (
                 <div className="text-xs text-[var(--color-muted)] mt-2">
-                  Paid: {(Number(genResult.payment.amount_paid) / 1e18).toFixed(4)} iUSD from session #{genResult.payment.session_id}
+                  Paid: {(Number(genResult.payment.amount_paid) / 1e18).toFixed(4)} iUSD | Session #{genResult.payment.session_id} | <a href={explorerTxUrl(genResult.payment.tx_hash)} target="_blank" rel="noopener noreferrer" className="text-[var(--color-accent)] hover:underline">tx</a>
                 </div>
               )}
             </div>

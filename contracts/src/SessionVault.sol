@@ -43,6 +43,7 @@ contract SessionVault is Ownable {
     event VoucherRedeemed(uint256 indexed sessionId, uint256 nonce, uint256 amount, string serviceId);
     event SessionClosed(uint256 indexed sessionId, uint256 refunded, uint256 totalRedeemed);
     event BatchSettled(uint256 totalAmount, uint256 platformFee, uint256 operatorAmount);
+    event ServicePaid(uint256 indexed sessionId, address indexed payer, uint256 amount, string serviceId);
 
     constructor(address _iUSD, address _treasury) Ownable(msg.sender) {
         iUSD = IERC20(_iUSD);
@@ -130,6 +131,17 @@ contract SessionVault is Ownable {
     function getSession(uint256 sessionId) external view returns (Session memory) { return sessions[sessionId]; }
     function getSessionCount() external view returns (uint256) { return sessions.length; }
     function getUserSessions(address user) external view returns (uint256[] memory) { return userSessions[user]; }
+
+    function payFromSession(uint256 sessionId, uint256 amount, string calldata serviceId) external {
+        Session storage s = sessions[sessionId];
+        require(s.depositor == msg.sender, "Not session owner");
+        require(s.active && block.timestamp < s.expiresAt, "Session not active");
+        require(s.remainingBalance >= amount, "Insufficient balance");
+        s.remainingBalance -= amount;
+        s.totalRedeemed += amount;
+        s.voucherCount += 1;
+        emit ServicePaid(sessionId, msg.sender, amount, serviceId);
+    }
 
     function isVoucherValid(Voucher calldata v) external view returns (bool) {
         if (v.sessionId >= sessions.length) return false;

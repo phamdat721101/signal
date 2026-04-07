@@ -1,14 +1,11 @@
-"""MPP/x402 Payment Middleware for FastAPI"""
-import base64
+"""MPP Payment Middleware — tx receipt verification for FastAPI"""
 import json
 import logging
-from typing import Optional
+from pathlib import Path
 
-from eth_account.messages import encode_defunct
 from web3 import Web3
 
 logger = logging.getLogger(__name__)
-
 
 SERVICE_PRICING = {
     "signal-basic": {"price_wei": int(0.001 * 1e18), "description": "Latest 10 signals"},
@@ -16,94 +13,81 @@ SERVICE_PRICING = {
     "signal-single": {"price_wei": int(0.002 * 1e18), "description": "Individual signal detail"},
 }
 
+# ServicePaid(uint256 indexed sessionId, address indexed payer, uint256 amount, string serviceId)
+SERVICE_PAID_TOPIC = Web3.keccak(text="ServicePaid(uint256,address,uint256,string)")
+
 
 class MPPPaymentVerifier:
-    """Verifies MPP session vouchers against the on-chain SessionVault."""
+    """Verifies payment by checking tx receipts for ServicePaid events."""
 
     def __init__(self, chain_client, session_vault_address: str, session_vault_abi: list):
         self.chain = chain_client
+        self.vault_address = Web3.to_checksum_address(session_vault_address)
         self.vault = chain_client.w3.eth.contract(
-            address=Web3.to_checksum_address(session_vault_address),
+            address=self.vault_address,
             abi=session_vault_abi,
         )
-        self._pending_redemptions: list = []
+        self._used_tx_hashes: set[str] = set()
 
     def build_402_response(self, service_id: str, price_wei: int, token_address: str) -> dict:
         return {
             "x-payment-required": {
-                "version": "mpp-session-v1",
+                "version": "pay-from-session-v1",
                 "price": str(price_wei),
                 "token": token_address,
                 "network": "initia",
                 "chainId": self.chain.w3.eth.chain_id,
-                "sessionVault": self.vault.address,
-                "accepts": ["mpp-session-v1", "x402-v1"],
+                "sessionVault": self.vault_address,
+                "accepts": ["pay-from-session-v1"],
                 "serviceId": service_id,
             }
         }
 
-    def verify_voucher(self, voucher_b64: str) -> dict:
-        try:
-            voucher = json.loads(base64.b64decode(voucher_b64))
-        except Exception as e:
-            return {"valid": False, "error": f"Invalid encoding: {e}"}
-
-        for field in ["sessionId", "amount", "nonce", "serviceId", "signature"]:
-            if field not in voucher:
-                return {"valid": False, "error": f"Missing: {field}"}
-
-        session_id = int(voucher["sessionId"])
-        amount = int(voucher["amount"])
-        nonce = int(voucher["nonce"])
-        service_id = voucher["serviceId"]
-
-        message_hash = Web3.solidity_keccak(
-            ["uint256", "uint256", "uint256", "string"],
-            [session_id, amount, nonce, service_id]
-        )
-        try:
-            msg = encode_defunct(message_hash)
-            signer = Web3().eth.account.recover_message(msg, signature=voucher["signature"])
-        except Exception as e:
-            return {"valid": False, "error": f"Signature failed: {e}"}
+    def verify_payment_tx(self, tx_hash: str, service_id: str, min_amount: int) -> dict:
+        """Verify a payment tx contains a valid ServicePaid event."""
+        tx_hash = tx_hash.strip()
+        if tx_hash in self._used_tx_hashes:
+            return {"valid": False, "error": "Transaction already used"}
 
         try:
-            session = self.vault.functions.getSession(session_id).call()
-            depositor, _, remaining, _, _, _, _, is_active = session[0], session[1], session[2], session[3], session[4], session[5], session[6], session[7]
+            receipt = self.chain.w3.eth.get_transaction_receipt(tx_hash)
         except Exception as e:
-            return {"valid": False, "error": f"On-chain lookup failed: {e}"}
+            return {"valid": False, "error": f"Cannot fetch receipt: {e}"}
 
-        if signer.lower() != depositor.lower():
-            return {"valid": False, "error": "Signer != depositor"}
-        if not is_active:
-            return {"valid": False, "error": "Session not active"}
-        if remaining < amount:
-            return {"valid": False, "error": f"Insufficient: {remaining} < {amount}"}
+        if receipt["status"] != 1:
+            return {"valid": False, "error": "Transaction failed"}
 
-        return {"valid": True, "session_id": session_id, "depositor": depositor, "amount": amount, "nonce": nonce, "service_id": service_id}
+        # Find ServicePaid event from our vault contract
+        for log in receipt["logs"]:
+            if log["address"].lower() != self.vault_address.lower():
+                continue
+            if len(log["topics"]) < 3:
+                continue
+            if log["topics"][0].hex() != SERVICE_PAID_TOPIC.hex():
+                continue
 
-    def redeem_voucher_onchain(self, voucher_b64: str) -> Optional[str]:
-        voucher = json.loads(base64.b64decode(voucher_b64))
-        self._pending_redemptions.append(voucher)
-        if len(self._pending_redemptions) >= 10:
-            return self._flush_batch()
-        return None
+            # Decode: topics[1] = sessionId, topics[2] = payer
+            # data = abi.encode(amount, serviceId)
+            try:
+                decoded = self.vault.events.ServicePaid().process_log(log)
+                event_amount = decoded["args"]["amount"]
+                event_service = decoded["args"]["serviceId"]
+            except Exception:
+                continue
 
-    def _flush_batch(self) -> Optional[str]:
-        if not self._pending_redemptions:
-            return None
-        vouchers = self._pending_redemptions
-        self._pending_redemptions = []
-        try:
-            tuples = [(int(v["sessionId"]), int(v["amount"]), int(v["nonce"]), v["serviceId"], bytes.fromhex(v["signature"].replace("0x", ""))) for v in vouchers]
-            fn = self.vault.functions.redeemBatch(tuples)
-            tx = fn.build_transaction({"from": self.chain.account.address, "nonce": self.chain.w3.eth.get_transaction_count(self.chain.account.address), "gas": 1_000_000, "gasPrice": 0})
-            signed = self.chain.account.sign_transaction(tx)
-            tx_hash = self.chain.w3.eth.send_raw_transaction(signed.raw_transaction)
-            self.chain.w3.eth.wait_for_transaction_receipt(tx_hash)
-            logger.info(f"Batch settled: {len(vouchers)} vouchers, tx={tx_hash.hex()}")
-            return tx_hash.hex()
-        except Exception as e:
-            logger.error(f"Batch failed: {e}")
-            self._pending_redemptions.extend(vouchers)
-            return None
+            if event_amount < min_amount:
+                return {"valid": False, "error": f"Paid {event_amount} < required {min_amount}"}
+            if event_service != service_id:
+                return {"valid": False, "error": f"Service mismatch: {event_service} != {service_id}"}
+
+            self._used_tx_hashes.add(tx_hash)
+            return {
+                "valid": True,
+                "tx_hash": tx_hash,
+                "amount": event_amount,
+                "service_id": event_service,
+                "session_id": decoded["args"]["sessionId"],
+                "payer": decoded["args"]["payer"],
+            }
+
+        return {"valid": False, "error": "No ServicePaid event found in transaction"}

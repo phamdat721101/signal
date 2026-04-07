@@ -188,23 +188,25 @@ async def get_leaderboard():
 
 @app.post("/api/signals/generate")
 async def trigger_signal_generation(request: Request):
-    """Generate signals. Requires MPP payment when gating is enabled."""
+    """Generate signals. Requires on-chain payment when gating is enabled."""
     settings = get_settings()
     payment_info = None
 
     if settings.enable_payment_gating and settings.session_vault_address:
-        payment_header = request.headers.get("X-PAYMENT")
-        if not payment_header:
+        tx_hash = request.headers.get("X-PAYMENT-TX")
+        if not tx_hash:
             from app.mpp_middleware import SERVICE_PRICING
             verifier = _get_payment_verifier()
             raise HTTPException(status_code=402, detail=verifier.build_402_response(
                 "signal-premium", SERVICE_PRICING["signal-premium"]["price_wei"], settings.mock_iusd_address))
+        from app.mpp_middleware import SERVICE_PRICING
         verifier = _get_payment_verifier()
-        result = verifier.verify_voucher(payment_header)
+        result = verifier.verify_payment_tx(tx_hash, "signal-premium",
+                                            SERVICE_PRICING["signal-premium"]["price_wei"])
         if not result["valid"]:
-            raise HTTPException(status_code=402, detail={"error": result.get("error")})
-        verifier.redeem_voucher_onchain(payment_header)
-        payment_info = {"status": "paid", "session_id": result["session_id"], "amount_paid": str(result["amount"])}
+            raise HTTPException(status_code=402, detail={"error": result["error"]})
+        payment_info = {"status": "paid", "tx_hash": tx_hash,
+                        "session_id": result["session_id"], "amount_paid": str(result["amount"])}
 
     from app.signal_engine import run_signal_cycle, price_history, recent_signal_txs
     try:
@@ -272,21 +274,24 @@ async def get_premium_signals(request: Request, offset: int = 0, limit: int = Qu
     settings = get_settings()
     if not settings.enable_payment_gating or not settings.session_vault_address:
         return await get_signals(offset, limit)
-    payment_header = request.headers.get("X-PAYMENT")
-    if not payment_header:
+    tx_hash = request.headers.get("X-PAYMENT-TX")
+    if not tx_hash:
         from app.mpp_middleware import SERVICE_PRICING
         verifier = _get_payment_verifier()
-        raise HTTPException(status_code=402, detail=verifier.build_402_response("signal-premium", SERVICE_PRICING["signal-premium"]["price_wei"], settings.mock_iusd_address))
+        raise HTTPException(status_code=402, detail=verifier.build_402_response(
+            "signal-premium", SERVICE_PRICING["signal-premium"]["price_wei"], settings.mock_iusd_address))
+    from app.mpp_middleware import SERVICE_PRICING
     verifier = _get_payment_verifier()
-    result = verifier.verify_voucher(payment_header)
+    result = verifier.verify_payment_tx(tx_hash, "signal-premium",
+                                        SERVICE_PRICING["signal-premium"]["price_wei"])
     if not result["valid"]:
-        raise HTTPException(status_code=402, detail={"error": result.get("error")})
-    verifier.redeem_voucher_onchain(payment_header)
+        raise HTTPException(status_code=402, detail={"error": result["error"]})
     try:
         chain = get_chain()
         total = chain.get_signal_count()
         signals = chain.get_signals(offset, limit) if total > 0 else []
-        return {"signals": signals, "total": total, "payment": {"status": "paid", "session_id": result["session_id"], "amount_paid": str(result["amount"])}}
+        return {"signals": signals, "total": total,
+                "payment": {"status": "paid", "tx_hash": tx_hash, "amount_paid": str(result["amount"])}}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -296,18 +301,21 @@ async def get_paid_signal(signal_id: int, request: Request):
     settings = get_settings()
     if not settings.enable_payment_gating or not settings.session_vault_address:
         return await get_signal(signal_id)
-    payment_header = request.headers.get("X-PAYMENT")
-    if not payment_header:
+    tx_hash = request.headers.get("X-PAYMENT-TX")
+    if not tx_hash:
         from app.mpp_middleware import SERVICE_PRICING
         verifier = _get_payment_verifier()
-        raise HTTPException(status_code=402, detail=verifier.build_402_response("signal-single", SERVICE_PRICING["signal-single"]["price_wei"], settings.mock_iusd_address))
+        raise HTTPException(status_code=402, detail=verifier.build_402_response(
+            "signal-single", SERVICE_PRICING["signal-single"]["price_wei"], settings.mock_iusd_address))
+    from app.mpp_middleware import SERVICE_PRICING
     verifier = _get_payment_verifier()
-    result = verifier.verify_voucher(payment_header)
+    result = verifier.verify_payment_tx(tx_hash, "signal-single",
+                                        SERVICE_PRICING["signal-single"]["price_wei"])
     if not result["valid"]:
-        raise HTTPException(status_code=402, detail={"error": result.get("error")})
-    verifier.redeem_voucher_onchain(payment_header)
+        raise HTTPException(status_code=402, detail={"error": result["error"]})
     try:
-        return {"signal": get_chain().get_signal(signal_id), "payment": {"status": "paid", "amount_paid": str(result["amount"])}}
+        return {"signal": get_chain().get_signal(signal_id),
+                "payment": {"status": "paid", "tx_hash": tx_hash, "amount_paid": str(result["amount"])}}
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
 
