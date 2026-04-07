@@ -86,14 +86,13 @@ export default function Dashboard() {
       });
       const data = await resp.json();
       if (!resp.ok) {
-        setGenResult({ error: data.detail?.error || data.detail?.['x-payment-required']?.serviceId
-          ? 'Payment verification failed. Try again.'
-          : `Server error: ${JSON.stringify(data.detail)}` });
+        const detail = data?.detail; const msg = typeof detail === 'string' ? detail : detail?.error || data?.error?.message || JSON.stringify(data);
+        setGenResult({ error: `Server error: ${msg}` });
         return;
       }
       setGenResult(data);
     } catch (e: any) {
-      setGenResult({ error: e.message || 'Generation failed' });
+      setGenResult({ error: e.message === 'Failed to fetch' ? 'Backend unreachable — is the server running on ' + config.backendUrl + '?' : (e.message || 'Generation failed') });
     } finally {
       setGenLoading(false);
     }
@@ -194,6 +193,11 @@ export default function Dashboard() {
                   ? `Generated ${genResult.newSignals} new signal(s)`
                   : 'No new signals \u2014 market conditions unchanged'}
               </div>
+              {genResult.errors?.length > 0 && (
+                <div className="text-amber-400 text-xs mt-1">
+                  {genResult.errors.map((err: string, i: number) => <div key={i}>⚠ {err}</div>)}
+                </div>
+              )}
               {genResult.recentTxs?.map((tx: any, i: number) => (
                 <div key={i} className="flex items-center gap-2 text-xs mt-1">
                   <span className="text-white">{tx.symbol} {tx.isBull ? '\u{1F4C8}' : '\u{1F4C9}'} {tx.confidence}%</span>

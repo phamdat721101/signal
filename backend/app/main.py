@@ -2,8 +2,10 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
+from app.error_tracker import error_tracker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -52,6 +54,8 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("CONTRACT_ADDRESS not set — running in API-only mode")
     yield
+    from app.scheduler import stop_scheduler
+    stop_scheduler()
     logger.info("Shutting down")
 
 
@@ -62,6 +66,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    code = "INTERNAL_ERROR"
+    message = str(exc)
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"error": {"code": code, "message": exc.detail}})
+    error_tracker.track(code, message)
+    return JSONResponse(status_code=500, content={"error": {"code": code, "message": message}})
 
 
 @app.get("/api/health")
@@ -82,6 +96,11 @@ async def health():
     }
 
 
+@app.get("/api/errors")
+async def get_errors():
+    return {"errors": error_tracker.get_recent()}
+
+
 @app.get("/api/signals")
 async def get_signals(offset: int = 0, limit: int = Query(default=100, le=100)):
     cache_key = f"signals:{offset}:{limit}"
@@ -96,6 +115,7 @@ async def get_signals(offset: int = 0, limit: int = Query(default=100, le=100)):
         set_cache(cache_key, result)
         return result
     except Exception as e:
+        error_tracker.track("SIGNALS_FETCH_ERROR", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -105,6 +125,7 @@ async def get_signal(signal_id: int):
         chain = get_chain()
         return chain.get_signal(signal_id)
     except Exception as e:
+        error_tracker.track("SIGNAL_FETCH_ERROR", str(e), {"signal_id": signal_id})
         raise HTTPException(status_code=404, detail=str(e))
 
 
@@ -211,21 +232,24 @@ async def trigger_signal_generation(request: Request):
     from app.signal_engine import run_signal_cycle, price_history, recent_signal_txs
     try:
         before = len(recent_signal_txs)
-        run_signal_cycle()
+        cycle_result = run_signal_cycle()
         after = len(recent_signal_txs)
         new_signals = after - before
         history_depth = {k: len(v) for k, v in price_history.items()}
         _cache.clear()
         result = {
-            "status": "ok",
+            "status": "ok" if cycle_result["success"] else "partial",
             "newSignals": new_signals,
             "priceHistory": history_depth,
             "recentTxs": [t for t in recent_signal_txs[-new_signals:]] if new_signals > 0 else [],
         }
+        if cycle_result["errors"]:
+            result["errors"] = cycle_result["errors"]
         if payment_info:
             result["payment"] = payment_info
         return result
     except Exception as e:
+        error_tracker.track("GENERATE_ENDPOINT_ERROR", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 

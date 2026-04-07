@@ -3,6 +3,7 @@ import time
 from collections import defaultdict
 import httpx
 from app.config import get_settings
+from app.error_tracker import error_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,8 @@ def fetch_prices() -> dict[str, float]:
     prices = fetch_oracle_prices()
     if not prices:
         prices = fetch_coingecko_fallback()
+    if not prices:
+        error_tracker.track("PRICE_FETCH_FAILED", "Both Oracle and CoinGecko price feeds unavailable")
     return prices
 
 
@@ -194,32 +197,44 @@ recent_signal_txs: list[dict] = []
 MAX_RECENT_TXS = 100
 
 
-def submit_signals(signals: list[dict]):
+def submit_signals(signals: list[dict]) -> list[str]:
     from app.main import get_chain
+    errors = []
     try:
         chain = get_chain()
         for s in signals:
-            signal_id, tx_hash = chain.create_signal(
-                s["asset"], s["isBull"], s["confidence"],
-                s["targetPrice"], s["entryPrice"],
-            )
-            recent_signal_txs.append({
-                "signalId": signal_id, "txHash": tx_hash,
-                "symbol": s["symbol"], "isBull": s["isBull"],
-                "confidence": s["confidence"],
-                "price": s["currentPrice"],
-                "timestamp": time.time(),
-            })
-            if len(recent_signal_txs) > MAX_RECENT_TXS:
-                recent_signal_txs.pop(0)
-            logger.info(f"On-chain: {s['symbol']} #{signal_id} tx={tx_hash}")
+            try:
+                signal_id, tx_hash = chain.create_signal(
+                    s["asset"], s["isBull"], s["confidence"],
+                    s["targetPrice"], s["entryPrice"],
+                )
+                recent_signal_txs.append({
+                    "signalId": signal_id, "txHash": tx_hash,
+                    "symbol": s["symbol"], "isBull": s["isBull"],
+                    "confidence": s["confidence"],
+                    "price": s["currentPrice"],
+                    "timestamp": time.time(),
+                })
+                if len(recent_signal_txs) > MAX_RECENT_TXS:
+                    recent_signal_txs.pop(0)
+                logger.info(f"On-chain: {s['symbol']} #{signal_id} tx={tx_hash}")
+            except Exception as e:
+                msg = f"Submit {s['symbol']} failed: {e}"
+                logger.error(msg)
+                error_tracker.track("SIGNAL_SUBMIT_FAILED", msg, {"symbol": s["symbol"]})
+                errors.append(msg)
     except Exception as e:
-        logger.error(f"Submit failed: {e}")
+        msg = f"Chain client unavailable: {e}"
+        logger.error(msg)
+        error_tracker.track("CHAIN_CLIENT_ERROR", msg)
+        errors.append(msg)
+    return errors
 
 
-def auto_resolve_old_signals():
+def auto_resolve_old_signals() -> list[str]:
     from app.main import get_chain
     settings = get_settings()
+    errors = []
     try:
         chain = get_chain()
         count = chain.get_signal_count()
@@ -228,72 +243,104 @@ def auto_resolve_old_signals():
         timeout = settings.signal_resolve_timeout_hours * 3600
 
         for i in range(count):
-            signal = chain.get_signal(i)
-            if signal["resolved"]:
-                continue
-            if now - signal["timestamp"] < timeout:
-                continue
+            try:
+                signal = chain.get_signal(i)
+                if signal["resolved"]:
+                    continue
+                if now - signal["timestamp"] < timeout:
+                    continue
 
-            symbol = TRACKED_ASSETS.get(signal["asset"].lower(), "")
-            oracle_key = ORACLE_PAIRS.get(symbol, symbol)
-            current = prices.get(oracle_key)
-            if current is None:
-                continue
+                symbol = TRACKED_ASSETS.get(signal["asset"].lower(), "")
+                oracle_key = ORACLE_PAIRS.get(symbol, symbol)
+                current = prices.get(oracle_key)
+                if current is None:
+                    continue
 
-            exit_wei = int(current * 1e18)
-            resolve_tx = chain.resolve_signal(i, exit_wei)
-            recent_signal_txs.append({
-                "signalId": i, "txHash": resolve_tx,
-                "symbol": symbol, "action": "resolve",
-                "timestamp": time.time(),
-            })
-            if len(recent_signal_txs) > MAX_RECENT_TXS:
-                recent_signal_txs.pop(0)
-            logger.info(f"Resolved #{i} at ${current:,.2f} tx={resolve_tx}")
+                exit_wei = int(current * 1e18)
+                resolve_tx = chain.resolve_signal(i, exit_wei)
+                recent_signal_txs.append({
+                    "signalId": i, "txHash": resolve_tx,
+                    "symbol": symbol, "action": "resolve",
+                    "timestamp": time.time(),
+                })
+                if len(recent_signal_txs) > MAX_RECENT_TXS:
+                    recent_signal_txs.pop(0)
+                logger.info(f"Resolved #{i} at ${current:,.2f} tx={resolve_tx}")
+            except Exception as e:
+                msg = f"Resolve signal #{i} failed: {e}"
+                logger.error(msg)
+                error_tracker.track("SIGNAL_RESOLVE_FAILED", msg, {"signal_id": i})
+                errors.append(msg)
     except Exception as e:
-        logger.error(f"Auto-resolve failed: {e}")
+        msg = f"Auto-resolve failed: {e}"
+        logger.error(msg)
+        error_tracker.track("AUTO_RESOLVE_ERROR", msg)
+        errors.append(msg)
+    return errors
 
 
 def bootstrap_price_history():
     """Fetch real prices to bootstrap history. No fake data."""
     logger.info("Bootstrapping price history from CoinGecko OHLC...")
     try:
-        # Fetch 1-day OHLC data (gives ~6 candles for last 24h)
         for coin_id, pair in [("bitcoin", "BTC/USD"), ("ethereum", "ETH/USD"), ("initia", "INIT/USD")]:
-            resp = httpx.get(
-                f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc",
-                params={"vs_currency": "usd", "days": "1"},
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                # OHLC format: [timestamp_ms, open, high, low, close]
-                for candle in data[-20:]:  # Last 20 candles
-                    ts = candle[0] / 1000
-                    close = candle[4]
-                    price_history[pair].append((ts, close))
-                logger.info(f"  {pair}: {len(data[-20:])} real candles loaded, latest=${data[-1][4]:,.2f}")
-            time.sleep(3)
+            try:
+                resp = httpx.get(
+                    f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc",
+                    params={"vs_currency": "usd", "days": "1"},
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for candle in data[-20:]:
+                        ts = candle[0] / 1000
+                        close = candle[4]
+                        price_history[pair].append((ts, close))
+                    logger.info(f"  {pair}: {len(data[-20:])} real candles loaded, latest=${data[-1][4]:,.2f}")
+                else:
+                    msg = f"OHLC {coin_id}: HTTP {resp.status_code}"
+                    logger.warning(msg)
+                    error_tracker.track("OHLC_FETCH_FAILED", msg, {"coin": coin_id, "status": resp.status_code})
+                time.sleep(3)
+            except Exception as e:
+                msg = f"OHLC {coin_id} failed: {e}"
+                logger.warning(msg)
+                error_tracker.track("OHLC_FETCH_FAILED", msg, {"coin": coin_id})
     except Exception as e:
-        logger.warning(f"OHLC bootstrap failed: {e}, falling back to spot price")
+        msg = f"OHLC bootstrap failed: {e}"
+        logger.warning(msg)
+        error_tracker.track("BOOTSTRAP_FAILED", msg)
         prices = fetch_prices()
         if prices:
             update_price_history(prices)
 
 
-def run_signal_cycle():
+def run_signal_cycle() -> dict:
     logger.info("Running signal cycle...")
-    prices = fetch_prices()
-    if not prices:
-        logger.warning("No prices available, skipping cycle")
-        return
+    result = {"success": False, "signals_created": 0, "errors": []}
+    try:
+        prices = fetch_prices()
+        if not prices:
+            result["errors"].append("No prices available from Oracle or CoinGecko")
+            logger.warning("No prices available, skipping cycle")
+            return result
 
-    update_price_history(prices)
-    signals = generate_signals(prices)
-    if signals:
-        submit_signals(signals)
-    auto_resolve_old_signals()
-    logger.info(f"Cycle complete: {len(signals)} signals from {len(prices)} prices")
+        update_price_history(prices)
+        signals = generate_signals(prices)
+        if signals:
+            submit_errors = submit_signals(signals)
+            result["signals_created"] = len(signals) - len(submit_errors)
+            result["errors"].extend(submit_errors)
+        resolve_errors = auto_resolve_old_signals()
+        result["errors"].extend(resolve_errors)
+        result["success"] = len(result["errors"]) == 0
+        logger.info(f"Cycle complete: {result['signals_created']} signals from {len(prices)} prices")
+    except Exception as e:
+        msg = f"Signal cycle crashed: {e}"
+        logger.error(msg)
+        error_tracker.track("SIGNAL_CYCLE_CRASH", msg)
+        result["errors"].append(msg)
+    return result
 
 
 def get_current_prices() -> dict[str, float]:

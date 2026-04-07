@@ -22,3 +22,11 @@ def start_scheduler():
     )
     _scheduler.start()
     logger.info(f"Scheduler started — signal cycle every {settings.signal_interval_minutes}m")
+
+
+def stop_scheduler():
+    global _scheduler
+    if _scheduler:
+        _scheduler.shutdown()
+        logger.info("Scheduler stopped")
+        _scheduler = None

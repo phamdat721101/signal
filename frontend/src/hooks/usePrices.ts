@@ -1,21 +1,30 @@
 import { useQuery } from '@tanstack/react-query';
 import { config } from '../config';
 
+async function parseError(resp: Response, fallback: string): Promise<string> {
+  try {
+    const data = await resp.json();
+    return data?.error?.message || data?.detail || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 async function fetchPrices() {
   const resp = await fetch(`${config.backendUrl}/api/prices`);
-  if (!resp.ok) throw new Error('Failed to fetch prices');
+  if (!resp.ok) throw new Error(await parseError(resp, `Prices: HTTP ${resp.status}`));
   return resp.json();
 }
 
 async function fetchPriceHistory(symbol: string) {
   const resp = await fetch(`${config.backendUrl}/api/prices/${symbol}/history`);
-  if (!resp.ok) throw new Error('Failed to fetch price history');
+  if (!resp.ok) throw new Error(await parseError(resp, `Price history: HTTP ${resp.status}`));
   return resp.json();
 }
 
 async function fetchLeaderboard() {
   const resp = await fetch(`${config.backendUrl}/api/leaderboard`);
-  if (!resp.ok) throw new Error('Failed to fetch leaderboard');
+  if (!resp.ok) throw new Error(await parseError(resp, `Leaderboard: HTTP ${resp.status}`));
   return resp.json();
 }
 

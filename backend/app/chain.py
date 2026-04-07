@@ -4,6 +4,7 @@ from pathlib import Path
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 from app.config import get_settings
+from app.error_tracker import error_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -28,19 +29,29 @@ class ChainClient:
         )
         self._nonce = self.w3.eth.get_transaction_count(self.account.address)
 
-    def _send_tx(self, fn):
-        tx = fn.build_transaction({
-            "from": self.account.address,
-            "nonce": self._nonce,
-            "gas": 500_000,
-            "gasPrice": 0,
-        })
-        signed = self.account.sign_transaction(tx)
-        tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
-        self._nonce += 1
-        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
-        logger.info(f"TX {tx_hash.hex()} status={receipt['status']}")
-        return receipt
+    def _send_tx(self, fn, _retry: bool = True):
+        try:
+            tx = fn.build_transaction({
+                "from": self.account.address,
+                "nonce": self._nonce,
+                "gas": 500_000,
+                "gasPrice": 0,
+            })
+            signed = self.account.sign_transaction(tx)
+            tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
+            self._nonce += 1
+            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
+            logger.info(f"TX {tx_hash.hex()} status={receipt['status']}")
+            return receipt
+        except Exception as e:
+            err_str = str(e).lower()
+            if _retry and ("nonce" in err_str or "already known" in err_str):
+                logger.warning(f"Nonce error, resyncing: {e}")
+                self._nonce = self.w3.eth.get_transaction_count(self.account.address)
+                error_tracker.track("NONCE_RESYNC", f"Resynced nonce to {self._nonce}", {"error": str(e)})
+                return self._send_tx(fn, _retry=False)
+            error_tracker.track("TX_SEND_FAILED", str(e))
+            raise
 
     def create_signal(self, asset: str, is_bull: bool, confidence: int,
                       target_price: int, entry_price: int) -> tuple[int, str]:
