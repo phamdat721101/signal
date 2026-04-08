@@ -8,6 +8,7 @@ const navItems = [
   { to: '/signals', label: 'Signals', icon: 'S' },
   { to: '/portfolio', label: 'Portfolio', icon: 'P' },
   { to: '/leaderboard', label: 'Leaderboard', icon: 'L' },
+  { to: '/report', label: 'Report', icon: 'R' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

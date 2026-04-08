@@ -77,3 +77,4 @@ coverage/
 
 # ── Keep submission dir ──
 !.initia/
+backend/reports/

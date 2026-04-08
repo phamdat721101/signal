@@ -51,3 +51,17 @@ export function useLeaderboard() {
     staleTime: 60_000,
   });
 }
+
+async function fetchReport() {
+  const resp = await fetch(`${config.backendUrl}/api/report`);
+  if (!resp.ok) throw new Error(await parseError(resp, `Report: HTTP ${resp.status}`));
+  return resp.json();
+}
+
+export function useReport() {
+  return useQuery({
+    queryKey: ['report'],
+    queryFn: fetchReport,
+    staleTime: 60_000,
+  });
+}

@@ -68,6 +68,39 @@ app.add_middleware(
 )
 
 
+def _fallback_metadata(signal: dict) -> dict:
+    """Compute metadata for old signals that lack it."""
+    entry = int(signal.get("entryPrice", 0))
+    target = int(signal.get("targetPrice", 0))
+    is_bull = signal.get("isBull", True)
+    price = entry / 1e18 if entry else 0
+    target_price = target / 1e18 if target else 0
+    stop_loss = price * 0.985 if is_bull else price * 1.015
+
+    if is_bull:
+        pattern = "Golden Cross" if target_price > price else "Bullish Momentum"
+    else:
+        pattern = "Death Cross" if target_price < price else "Bearish Momentum"
+
+    from app.signal_engine import TRACKED_ASSETS
+    symbol = TRACKED_ASSETS.get(signal.get("asset", "").lower(), "UNKNOWN")
+    direction = "bullish" if is_bull else "bearish"
+    action = "BUY" if is_bull else "SELL"
+
+    analysis = (
+        f"{action} {symbol} | {pattern} detected on 30-min chart. "
+        f"Signal indicates {direction} momentum. "
+        f"Entry ${price:,.2f} → Target ${target_price:,.2f} / Stop ${stop_loss:,.2f} (1:1 R:R). "
+        f"Confidence {signal.get('confidence', 0)}%. Auto-resolves in 24h."
+    )
+    return {
+        "pattern": pattern,
+        "analysis": analysis,
+        "timeframe": "30m candles / 24h horizon",
+        "stopLoss": str(int(stop_loss * 1e18)),
+    }
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     code = "INTERNAL_ERROR"
@@ -111,6 +144,13 @@ async def get_signals(offset: int = 0, limit: int = Query(default=100, le=100)):
         chain = get_chain()
         total = chain.get_signal_count()
         signals = chain.get_signals(offset, limit) if total > 0 else []
+        from app.signal_engine import signal_metadata
+        for s in signals:
+            meta = signal_metadata.get(s["id"])
+            if meta:
+                s.update(meta)
+            elif not s.get("pattern"):
+                s.update(_fallback_metadata(s))
         result = {"signals": signals, "total": total}
         set_cache(cache_key, result)
         return result
@@ -123,7 +163,14 @@ async def get_signals(offset: int = 0, limit: int = Query(default=100, le=100)):
 async def get_signal(signal_id: int):
     try:
         chain = get_chain()
-        return chain.get_signal(signal_id)
+        signal = chain.get_signal(signal_id)
+        from app.signal_engine import signal_metadata
+        meta = signal_metadata.get(signal_id)
+        if meta:
+            signal.update(meta)
+        elif not signal.get("pattern"):
+            signal.update(_fallback_metadata(signal))
+        return signal
     except Exception as e:
         error_tracker.track("SIGNAL_FETCH_ERROR", str(e), {"signal_id": signal_id})
         raise HTTPException(status_code=404, detail=str(e))
@@ -208,10 +255,11 @@ async def get_leaderboard():
 
 
 @app.post("/api/signals/generate")
-async def trigger_signal_generation(request: Request):
-    """Generate signals. Requires on-chain payment when gating is enabled."""
+async def trigger_signal_generation(request: Request, assets: str | None = Query(default=None)):
+    """Generate signals. Optional ?assets=BTC/USD,ETH/USD to filter token pairs."""
     settings = get_settings()
     payment_info = None
+    asset_list = [a.strip() for a in assets.split(",") if a.strip()] if assets else None
 
     if settings.enable_payment_gating and settings.session_vault_address:
         tx_hash = request.headers.get("X-PAYMENT-TX")
@@ -232,7 +280,7 @@ async def trigger_signal_generation(request: Request):
     from app.signal_engine import run_signal_cycle, price_history, recent_signal_txs
     try:
         before = len(recent_signal_txs)
-        cycle_result = run_signal_cycle()
+        cycle_result = run_signal_cycle(asset_list)
         after = len(recent_signal_txs)
         new_signals = after - before
         history_depth = {k: len(v) for k, v in price_history.items()}
@@ -252,6 +300,20 @@ async def trigger_signal_generation(request: Request):
         error_tracker.track("GENERATE_ENDPOINT_ERROR", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
+@app.get("/api/report")
+async def get_report():
+    """Performance report: ROI, win/loss, simulated balance."""
+    try:
+        from app.report import generate_report
+        chain = get_chain()
+        from app.signal_engine import signal_metadata
+        report = generate_report(chain, signal_metadata)
+        return report
+    except Exception as e:
+        error_tracker.track("REPORT_ERROR", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/tx-history")

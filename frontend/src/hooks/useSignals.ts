@@ -23,6 +23,13 @@ async function fetchSignalCount(): Promise<number> {
 }
 
 async function fetchSignals(offset: number, limit: number): Promise<Signal[]> {
+  try {
+    const resp = await fetch(`${config.backendUrl}/api/signals?offset=${offset}&limit=${limit}`);
+    if (resp.ok) {
+      const data = await resp.json();
+      return data.signals;
+    }
+  } catch { /* fallback to contract */ }
   const raw = await client.readContract({
     ...contractConfig,
     functionName: 'getSignals',
@@ -43,6 +50,10 @@ async function fetchSignals(offset: number, limit: number): Promise<Signal[]> {
 }
 
 async function fetchSignalById(id: number): Promise<Signal> {
+  try {
+    const resp = await fetch(`${config.backendUrl}/api/signals/${id}`);
+    if (resp.ok) return resp.json();
+  } catch { /* fallback to contract */ }
   const s: any = await client.readContract({
     ...contractConfig,
     functionName: 'getSignal',

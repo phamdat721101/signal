@@ -5,6 +5,7 @@ import SignalFeed from './pages/SignalFeed';
 import SignalDetail from './pages/SignalDetail';
 import Portfolio from './pages/Portfolio';
 import Leaderboard from './pages/Leaderboard';
+import Report from './pages/Report';
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
         <Route path="/signal/:id" element={<SignalDetail />} />
         <Route path="/portfolio" element={<Portfolio />} />
         <Route path="/leaderboard" element={<Leaderboard />} />
+        <Route path="/report" element={<Report />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

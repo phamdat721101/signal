@@ -8,6 +8,7 @@ from app.error_tracker import error_tracker
 logger = logging.getLogger(__name__)
 
 price_history: dict[str, list[tuple[float, float]]] = defaultdict(list)
+signal_metadata: dict[int, dict] = {}
 MAX_HISTORY = 100
 
 TRACKED_ASSETS = {
@@ -113,16 +114,59 @@ def rsi(prices: list[float], period: int = 14) -> float | None:
     return 100 - (100 / (1 + rs))
 
 
-def generate_signals(prices: dict[str, float]) -> list[dict]:
+def _classify_pattern(crossover_bull: bool, crossover_bear: bool, is_bull: bool) -> str:
+    if crossover_bull:
+        return "Golden Cross"
+    if crossover_bear:
+        return "Death Cross"
+    return "Bullish Momentum" if is_bull else "Bearish Momentum"
+
+
+def _build_analysis(symbol: str, pattern: str, rsi_val: float, curr_diff: float, current_price: float, is_bull: bool, confidence: int, target_price: float, stop_loss: float) -> str:
+    direction = "bullish" if is_bull else "bearish"
+    action = "BUY" if is_bull else "SELL"
+    ema_pct = abs(curr_diff / current_price) * 100 if current_price else 0
+
+    # RSI interpretation
+    if rsi_val > 70:
+        rsi_reading = f"RSI(14) is elevated at {rsi_val:.0f}, suggesting strong upward pressure but caution for reversal"
+    elif rsi_val > 60:
+        rsi_reading = f"RSI(14) at {rsi_val:.0f} confirms {direction} momentum with room to run"
+    elif rsi_val < 30:
+        rsi_reading = f"RSI(14) is depressed at {rsi_val:.0f}, indicating oversold conditions"
+    elif rsi_val < 40:
+        rsi_reading = f"RSI(14) at {rsi_val:.0f} shows weakness, supporting bearish bias"
+    else:
+        rsi_reading = f"RSI(14) at {rsi_val:.0f} in neutral zone, direction driven by EMA crossover"
+
+    # Pattern-specific reasoning
+    if pattern == "Golden Cross":
+        trigger = f"EMA(5) crossed above EMA(10) by {ema_pct:.3f}%, triggering a {pattern} — a classic {direction} reversal signal"
+    elif pattern == "Death Cross":
+        trigger = f"EMA(5) crossed below EMA(10) by {ema_pct:.3f}%, triggering a {pattern} — a classic {direction} reversal signal"
+    else:
+        trigger = f"EMA(5) {'above' if is_bull else 'below'} EMA(10) by {ema_pct:.3f}%, showing sustained {direction} momentum"
+
+    return (
+        f"{action} {symbol} | {trigger}. "
+        f"{rsi_reading}. "
+        f"Chart: 30-min candles over 24h. "
+        f"Entry ${current_price:,.2f} → Target ${target_price:,.2f} / Stop ${stop_loss:,.2f} (1:1 R:R). "
+        f"Confidence {confidence}% based on EMA divergence strength + RSI distance from equilibrium. "
+        f"Auto-resolves in 24h with market price."
+    )
+
+
+def generate_signals(prices: dict[str, float], assets: list[str] | None = None) -> list[dict]:
     """
-    Signal generation using EMA crossover + RSI confirmation:
-    - EMA(5) vs EMA(10) crossover for direction
-    - RSI for overbought/oversold confirmation
-    - Target: entry ± 1.5% (realistic 24h target)
-    - Stop-loss: entry ∓ 1.5% (1:1 risk/reward)
+    Signal generation using EMA crossover + RSI confirmation.
+    Optional `assets` filter: list of symbols like ["BTC/USD", "ETH/USD"].
     """
     signals = []
     for asset_addr, symbol in TRACKED_ASSETS.items():
+        if assets and symbol not in assets:
+            continue
+
         oracle_key = ORACLE_PAIRS.get(symbol, symbol)
         history = price_history.get(oracle_key, [])
         current_price = prices.get(oracle_key)
@@ -144,33 +188,33 @@ def generate_signals(prices: dict[str, float]) -> list[dict]:
         crossover_bear = prev_diff >= 0 and curr_diff < 0
 
         if not crossover_bull and not crossover_bear:
-            # No crossover — check trend strength instead
             trend_pct = curr_diff / current_price if current_price else 0
             if abs(trend_pct) < 0.001:
-                continue  # No meaningful trend
+                continue
             crossover_bull = trend_pct > 0.001
             crossover_bear = trend_pct < -0.001
 
         is_bull = crossover_bull
         rsi_val = rsi(closes) or 50
 
-        # RSI confirmation: don't buy overbought, don't sell oversold
         if is_bull and rsi_val > 75:
             continue
         if not is_bull and rsi_val < 25:
             continue
 
-        # Confidence from RSI distance + EMA strength
         ema_strength = min(abs(curr_diff / current_price) * 2000, 40) if current_price else 0
-        rsi_score = abs(rsi_val - 50) / 50 * 30  # 0-30 from RSI
+        rsi_score = abs(rsi_val - 50) / 50 * 30
         confidence = int(min(95, max(50, 25 + ema_strength + rsi_score)))
 
-        # Realistic target: ±1.5% (achievable in 24h)
         target_pct = 0.015
         target_price = current_price * (1 + target_pct) if is_bull else current_price * (1 - target_pct)
+        stop_loss = current_price * (1 - target_pct) if is_bull else current_price * (1 + target_pct)
 
         entry_wei = int(current_price * 1e18)
         target_wei = int(target_price * 1e18)
+
+        pattern = _classify_pattern(crossover_bull, crossover_bear, is_bull)
+        analysis = _build_analysis(symbol, pattern, rsi_val, curr_diff, current_price, is_bull, confidence, target_price, stop_loss)
 
         signals.append({
             "asset": asset_addr,
@@ -180,10 +224,14 @@ def generate_signals(prices: dict[str, float]) -> list[dict]:
             "entryPrice": entry_wei,
             "symbol": symbol,
             "currentPrice": current_price,
+            "pattern": pattern,
+            "analysis": analysis,
+            "timeframe": "30m candles / 24h horizon",
+            "stopLoss": int(stop_loss * 1e18),
         })
         direction = "BULL" if is_bull else "BEAR"
         logger.info(
-            f"Signal: {symbol} {direction} conf={confidence}% "
+            f"Signal: {symbol} {direction} [{pattern}] conf={confidence}% "
             f"RSI={rsi_val:.0f} EMA={curr_diff:+.2f} price=${current_price:,.2f} "
             f"target=${target_price:,.2f}"
         )
@@ -208,6 +256,12 @@ def submit_signals(signals: list[dict]) -> list[str]:
                     s["asset"], s["isBull"], s["confidence"],
                     s["targetPrice"], s["entryPrice"],
                 )
+                signal_metadata[signal_id] = {
+                    "pattern": s.get("pattern", ""),
+                    "analysis": s.get("analysis", ""),
+                    "timeframe": s.get("timeframe", "30m candles / 24h horizon"),
+                    "stopLoss": str(s.get("stopLoss", 0)),
+                }
                 recent_signal_txs.append({
                     "signalId": signal_id, "txHash": tx_hash,
                     "symbol": s["symbol"], "isBull": s["isBull"],
@@ -315,8 +369,8 @@ def bootstrap_price_history():
             update_price_history(prices)
 
 
-def run_signal_cycle() -> dict:
-    logger.info("Running signal cycle...")
+def run_signal_cycle(assets: list[str] | None = None) -> dict:
+    logger.info(f"Running signal cycle...{f' assets={assets}' if assets else ''}")
     result = {"success": False, "signals_created": 0, "errors": []}
     try:
         prices = fetch_prices()
@@ -326,7 +380,7 @@ def run_signal_cycle() -> dict:
             return result
 
         update_price_history(prices)
-        signals = generate_signals(prices)
+        signals = generate_signals(prices, assets)
         if signals:
             submit_errors = submit_signals(signals)
             result["signals_created"] = len(signals) - len(submit_errors)

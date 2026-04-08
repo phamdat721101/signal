@@ -21,7 +21,7 @@ export default function SignalDetail() {
 
   const entryNum = Number(BigInt(signal.entryPrice)) / 1e18;
   const targetNum = Number(BigInt(signal.targetPrice)) / 1e18;
-  const stopLoss = signal.isBull ? entryNum * 0.95 : entryNum * 1.05;
+  const stopLoss = signal.stopLoss ? Number(BigInt(signal.stopLoss)) / 1e18 : (signal.isBull ? entryNum * 0.985 : entryNum * 1.015);
 
   const handleExecute = () => {
     executeSignal(
@@ -52,6 +52,12 @@ export default function SignalDetail() {
             >
               {signal.isBull ? 'BULLISH' : 'BEARISH'}
             </span>
+            {signal.pattern && (
+              <span className="text-sm px-2 py-0.5 rounded bg-purple-500/20 text-purple-400">{signal.pattern}</span>
+            )}
+            {signal.timeframe && (
+              <span className="text-sm px-2 py-0.5 rounded bg-blue-500/20 text-blue-400">{signal.timeframe}</span>
+            )}
             <ConfidenceBadge confidence={signal.confidence} />
             {signal.resolved && (
               <span className="text-xs px-2 py-0.5 rounded bg-[var(--color-border)] text-[var(--color-muted)]">
@@ -141,6 +147,25 @@ export default function SignalDetail() {
           Real-time prices → EMA(5) vs EMA(10) crossover for direction → RSI confirms not overbought/oversold → confidence scored → ±1.5% target → on-chain → auto-resolve 24h
         </div>
       </div>
+
+      {/* Price Analysis */}
+      {signal.analysis && (
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-5 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm font-semibold text-white">📝 Why This Signal?</div>
+            {signal.timeframe && (
+              <span className="text-xs px-2 py-1 rounded bg-blue-500/10 border border-blue-500/30 text-blue-400">
+                ⏱ {signal.timeframe}
+              </span>
+            )}
+          </div>
+          {signal.analysis.split('. ').filter(Boolean).map((sentence, i) => (
+            <p key={i} className="text-sm text-[var(--color-muted)] leading-relaxed mb-1">
+              {sentence.endsWith('.') ? sentence : sentence + '.'}
+            </p>
+          ))}
+        </div>
+      )}
 
       {/* P&L (if resolved) */}
       {pnl && (

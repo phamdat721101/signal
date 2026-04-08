@@ -13,6 +13,10 @@ export interface Signal {
   timestamp: number;
   resolved: boolean;
   creator: string;
+  pattern?: string;
+  analysis?: string;
+  timeframe?: string;
+  stopLoss?: string;
 }
 
 export default function SignalCard({ signal }: { signal: Signal }) {
@@ -42,6 +46,12 @@ export default function SignalCard({ signal }: { signal: Signal }) {
         >
           {signal.isBull ? 'BULL' : 'BEAR'}
         </span>
+        {signal.pattern && (
+          <span className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-400">{signal.pattern}</span>
+        )}
+        {signal.timeframe && (
+          <span className="text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-400">{signal.timeframe.split(' / ')[0]}</span>
+        )}
         {signal.resolved && (
           <span className="text-xs text-[var(--color-muted)]">Resolved</span>
         )}
