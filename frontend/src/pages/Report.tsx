@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useReport } from '../hooks/usePrices';
+import { useInterwovenKit } from '@initia/interwovenkit-react';
 import StatCard from '../components/StatCard';
 import { createChart, ColorType, LineSeries } from 'lightweight-charts';
 
@@ -26,11 +27,35 @@ function BalanceChart({ history }: { history: { trade: number; balance: number }
   return <div ref={ref} />;
 }
 
+function bech32ToHex(addr: string): string {
+  const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+  const data = addr.slice(addr.lastIndexOf('1') + 1);
+  const words = [...data].map(c => CHARSET.indexOf(c)).slice(0, -6);
+  let bits = 0, value = 0;
+  const bytes: number[] = [];
+  for (const w of words) { value = (value << 5) | w; bits += 5; while (bits >= 8) { bits -= 8; bytes.push((value >> bits) & 0xff); } }
+  return `0x${bytes.map(b => b.toString(16).padStart(2, '0')).join('')}`;
+}
+
 export default function Report() {
-  const { data: report, isLoading } = useReport();
+  const { initiaAddress } = useInterwovenKit();
+  const evmAddress = initiaAddress ? bech32ToHex(initiaAddress) : undefined;
+  const { data: report, isLoading } = useReport(evmAddress);
+
+  if (!initiaAddress) {
+    return (
+      <div>
+        <h1 className="text-3xl font-bold text-white mb-6">Performance Report</h1>
+        <div className="text-center py-12 text-[var(--color-muted)]">
+          <p className="text-lg mb-2">Connect your wallet</p>
+          <p className="text-sm">Your report tracks performance of signals you've executed.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) return <div className="text-[var(--color-muted)]">Loading report...</div>;
-  if (!report) return <div className="text-[var(--color-muted)]">No report data available. Generate and resolve some signals first.</div>;
+  if (!report) return <div className="text-[var(--color-muted)]">No report data available. Execute some signals first.</div>;
 
   const sim = report.simulation;
 

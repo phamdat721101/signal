@@ -22,11 +22,6 @@ async function fetchPriceHistory(symbol: string) {
   return resp.json();
 }
 
-async function fetchLeaderboard() {
-  const resp = await fetch(`${config.backendUrl}/api/leaderboard`);
-  if (!resp.ok) throw new Error(await parseError(resp, `Leaderboard: HTTP ${resp.status}`));
-  return resp.json();
-}
 
 export function usePrices() {
   return useQuery({
@@ -44,24 +39,20 @@ export function usePriceHistory(symbol: string) {
   });
 }
 
-export function useLeaderboard() {
-  return useQuery({
-    queryKey: ['leaderboard'],
-    queryFn: fetchLeaderboard,
-    staleTime: 60_000,
-  });
-}
 
-async function fetchReport() {
-  const resp = await fetch(`${config.backendUrl}/api/report`);
+async function fetchReport(address?: string) {
+  const url = address
+    ? `${config.backendUrl}/api/report?address=${address}`
+    : `${config.backendUrl}/api/report`;
+  const resp = await fetch(url);
   if (!resp.ok) throw new Error(await parseError(resp, `Report: HTTP ${resp.status}`));
   return resp.json();
 }
 
-export function useReport() {
+export function useReport(address?: string) {
   return useQuery({
-    queryKey: ['report'],
-    queryFn: fetchReport,
+    queryKey: ['report', address],
+    queryFn: () => fetchReport(address),
     staleTime: 60_000,
   });
 }

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 SERVICE_PRICING = {
     "signal-basic": {"price_wei": int(0.001 * 1e18), "description": "Latest 10 signals"},
-    "signal-premium": {"price_wei": int(0.01 * 1e18), "description": "All signals + analytics + leaderboard"},
+    "signal-premium": {"price_wei": int(0.01 * 1e18), "description": "All signals + analytics + reports"},
     "signal-single": {"price_wei": int(0.002 * 1e18), "description": "Individual signal detail"},
 }
 

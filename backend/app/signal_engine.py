@@ -11,17 +11,85 @@ price_history: dict[str, list[tuple[float, float]]] = defaultdict(list)
 signal_metadata: dict[int, dict] = {}
 MAX_HISTORY = 100
 
-TRACKED_ASSETS = {
+# Dynamic asset registry: address → symbol
+# Users can add custom pairs via API. Address is deterministic from symbol.
+TRACKED_ASSETS: dict[str, str] = {
     "0x0000000000000000000000000000000000000001": "BTC/USD",
     "0x0000000000000000000000000000000000000002": "ETH/USD",
     "0x0000000000000000000000000000000000000003": "INIT/USD",
 }
 
-ORACLE_PAIRS = {
-    "BTC/USD": "BTC/USD",
-    "ETH/USD": "ETH/USD",
-    "INIT/USD": "INIT/USD",
+# CoinGecko ID mapping for price fetching. Extensible.
+COINGECKO_IDS: dict[str, str] = {
+    "BTC/USD": "bitcoin",
+    "ETH/USD": "ethereum",
+    "INIT/USD": "initia",
+    "SOL/USD": "solana",
+    "AVAX/USD": "avalanche-2",
+    "DOGE/USD": "dogecoin",
+    "LINK/USD": "chainlink",
+    "MATIC/USD": "matic-network",
+    "DOT/USD": "polkadot",
+    "ATOM/USD": "cosmos",
+    "TIA/USD": "celestia",
+    "SEI/USD": "sei-network",
+    "SUI/USD": "sui",
+    "APT/USD": "aptos",
+    "ARB/USD": "arbitrum",
+    "OP/USD": "optimism",
+    "INJ/USD": "injective-protocol",
 }
+
+ORACLE_PAIRS: dict[str, str] = {sym: sym for sym in COINGECKO_IDS}
+
+
+def _symbol_to_address(symbol: str) -> str:
+    """Deterministic address from symbol string (hash-based)."""
+    import hashlib
+    h = hashlib.sha256(symbol.encode()).hexdigest()[:40]
+    return f"0x{h}"
+
+
+def add_tracked_asset(symbol: str) -> str:
+    """Register a new token pair. Returns its address."""
+    symbol = symbol.upper()
+    if not symbol.endswith("/USD"):
+        symbol = f"{symbol}/USD"
+    # Check if already tracked
+    for addr, sym in TRACKED_ASSETS.items():
+        if sym == symbol:
+            return addr
+    addr = _symbol_to_address(symbol)
+    TRACKED_ASSETS[addr] = symbol
+    ORACLE_PAIRS[symbol] = symbol
+    logger.info(f"Added tracked asset: {symbol} → {addr}")
+    return addr
+
+
+def remove_tracked_asset(symbol: str) -> bool:
+    """Remove a token pair from tracking."""
+    symbol = symbol.upper()
+    if not symbol.endswith("/USD"):
+        symbol = f"{symbol}/USD"
+    for addr, sym in list(TRACKED_ASSETS.items()):
+        if sym == symbol:
+            del TRACKED_ASSETS[addr]
+            ORACLE_PAIRS.pop(symbol, None)
+            price_history.pop(symbol, None)
+            logger.info(f"Removed tracked asset: {symbol}")
+            return True
+    return False
+
+# Timeframe → CoinGecko OHLC days param + display label
+TIMEFRAMES = {
+    "15m": {"days": "1", "label": "15m candles / 24h horizon"},
+    "30m": {"days": "1", "label": "30m candles / 24h horizon"},
+    "1h":  {"days": "7", "label": "1h candles / 7d horizon"},
+    "4h":  {"days": "30", "label": "4h candles / 30d horizon"},
+    "1d":  {"days": "90", "label": "1d candles / 90d horizon"},
+}
+DEFAULT_TIMEFRAME = "30m"
+DEFAULT_TARGET_PCT = 0.015
 
 
 def fetch_oracle_prices() -> dict[str, float]:
@@ -46,23 +114,28 @@ def fetch_oracle_prices() -> dict[str, float]:
 
 
 def fetch_coingecko_fallback() -> dict[str, float]:
+    # Build ids list from tracked assets
+    pairs_to_fetch = {sym: COINGECKO_IDS[sym] for sym in
+                      set(TRACKED_ASSETS.values()) if sym in COINGECKO_IDS}
+    if not pairs_to_fetch:
+        return {}
+    ids_str = ",".join(set(pairs_to_fetch.values()))
     try:
         resp = httpx.get(
             "https://api.coingecko.com/api/v3/simple/price",
-            params={"ids": "bitcoin,ethereum,initia", "vs_currencies": "usd"},
+            params={"ids": ids_str, "vs_currencies": "usd"},
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
+        # Reverse lookup: coingecko_id → symbol
+        id_to_sym = {cg_id: sym for sym, cg_id in pairs_to_fetch.items()}
         prices = {}
-        if "bitcoin" in data:
-            prices["BTC/USD"] = data["bitcoin"]["usd"]
-        if "ethereum" in data:
-            prices["ETH/USD"] = data["ethereum"]["usd"]
-        if "initia" in data:
-            prices["INIT/USD"] = data["initia"]["usd"]
+        for cg_id, vals in data.items():
+            if cg_id in id_to_sym and "usd" in vals:
+                prices[id_to_sym[cg_id]] = vals["usd"]
         if prices:
-            logger.info(f"CoinGecko: {prices}")
+            logger.info(f"CoinGecko: {len(prices)} pairs")
         return prices
     except Exception as e:
         logger.warning(f"CoinGecko failed: {e}")
@@ -122,7 +195,7 @@ def _classify_pattern(crossover_bull: bool, crossover_bear: bool, is_bull: bool)
     return "Bullish Momentum" if is_bull else "Bearish Momentum"
 
 
-def _build_analysis(symbol: str, pattern: str, rsi_val: float, curr_diff: float, current_price: float, is_bull: bool, confidence: int, target_price: float, stop_loss: float) -> str:
+def _build_analysis(symbol: str, pattern: str, rsi_val: float, curr_diff: float, current_price: float, is_bull: bool, confidence: int, target_price: float, stop_loss: float, timeframe_label: str = "30m candles / 24h horizon") -> str:
     direction = "bullish" if is_bull else "bearish"
     action = "BUY" if is_bull else "SELL"
     ema_pct = abs(curr_diff / current_price) * 100 if current_price else 0
@@ -150,18 +223,20 @@ def _build_analysis(symbol: str, pattern: str, rsi_val: float, curr_diff: float,
     return (
         f"{action} {symbol} | {trigger}. "
         f"{rsi_reading}. "
-        f"Chart: 30-min candles over 24h. "
+        f"Chart: {timeframe_label}. "
         f"Entry ${current_price:,.2f} → Target ${target_price:,.2f} / Stop ${stop_loss:,.2f} (1:1 R:R). "
         f"Confidence {confidence}% based on EMA divergence strength + RSI distance from equilibrium. "
         f"Auto-resolves in 24h with market price."
     )
 
 
-def generate_signals(prices: dict[str, float], assets: list[str] | None = None) -> list[dict]:
+def generate_signals(prices: dict[str, float], assets: list[str] | None = None,
+                     target_pct: float = DEFAULT_TARGET_PCT, timeframe: str = DEFAULT_TIMEFRAME) -> list[dict]:
     """
     Signal generation using EMA crossover + RSI confirmation.
-    Optional `assets` filter: list of symbols like ["BTC/USD", "ETH/USD"].
+    Optional filters: assets, target_pct (P/L %), timeframe.
     """
+    tf_label = TIMEFRAMES.get(timeframe, TIMEFRAMES[DEFAULT_TIMEFRAME])["label"]
     signals = []
     for asset_addr, symbol in TRACKED_ASSETS.items():
         if assets and symbol not in assets:
@@ -206,7 +281,7 @@ def generate_signals(prices: dict[str, float], assets: list[str] | None = None) 
         rsi_score = abs(rsi_val - 50) / 50 * 30
         confidence = int(min(95, max(50, 25 + ema_strength + rsi_score)))
 
-        target_pct = 0.015
+        # target_pct from user input (default 1.5%)
         target_price = current_price * (1 + target_pct) if is_bull else current_price * (1 - target_pct)
         stop_loss = current_price * (1 - target_pct) if is_bull else current_price * (1 + target_pct)
 
@@ -214,7 +289,7 @@ def generate_signals(prices: dict[str, float], assets: list[str] | None = None) 
         target_wei = int(target_price * 1e18)
 
         pattern = _classify_pattern(crossover_bull, crossover_bear, is_bull)
-        analysis = _build_analysis(symbol, pattern, rsi_val, curr_diff, current_price, is_bull, confidence, target_price, stop_loss)
+        analysis = _build_analysis(symbol, pattern, rsi_val, curr_diff, current_price, is_bull, confidence, target_price, stop_loss, tf_label)
 
         signals.append({
             "asset": asset_addr,
@@ -226,7 +301,7 @@ def generate_signals(prices: dict[str, float], assets: list[str] | None = None) 
             "currentPrice": current_price,
             "pattern": pattern,
             "analysis": analysis,
-            "timeframe": "30m candles / 24h horizon",
+            "timeframe": tf_label,
             "stopLoss": int(stop_loss * 1e18),
         })
         direction = "BULL" if is_bull else "BEAR"
@@ -333,15 +408,18 @@ def auto_resolve_old_signals() -> list[str]:
     return errors
 
 
-def bootstrap_price_history():
+def bootstrap_price_history(timeframe: str = DEFAULT_TIMEFRAME):
     """Fetch real prices to bootstrap history. No fake data."""
-    logger.info("Bootstrapping price history from CoinGecko OHLC...")
+    days = TIMEFRAMES.get(timeframe, TIMEFRAMES[DEFAULT_TIMEFRAME])["days"]
+    logger.info(f"Bootstrapping price history from CoinGecko OHLC (days={days})...")
     try:
-        for coin_id, pair in [("bitcoin", "BTC/USD"), ("ethereum", "ETH/USD"), ("initia", "INIT/USD")]:
+        pairs_to_fetch = [(COINGECKO_IDS[sym], sym) for sym in
+                          set(TRACKED_ASSETS.values()) if sym in COINGECKO_IDS]
+        for coin_id, pair in pairs_to_fetch:
             try:
                 resp = httpx.get(
                     f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc",
-                    params={"vs_currency": "usd", "days": "1"},
+                    params={"vs_currency": "usd", "days": days},
                     timeout=15,
                 )
                 if resp.status_code == 200:
@@ -369,8 +447,9 @@ def bootstrap_price_history():
             update_price_history(prices)
 
 
-def run_signal_cycle(assets: list[str] | None = None) -> dict:
-    logger.info(f"Running signal cycle...{f' assets={assets}' if assets else ''}")
+def run_signal_cycle(assets: list[str] | None = None, target_pct: float = DEFAULT_TARGET_PCT,
+                    timeframe: str = DEFAULT_TIMEFRAME) -> dict:
+    logger.info(f"Running signal cycle...{f' assets={assets}' if assets else ''} tf={timeframe} target={target_pct}")
     result = {"success": False, "signals_created": 0, "errors": []}
     try:
         prices = fetch_prices()
@@ -380,7 +459,7 @@ def run_signal_cycle(assets: list[str] | None = None) -> dict:
             return result
 
         update_price_history(prices)
-        signals = generate_signals(prices, assets)
+        signals = generate_signals(prices, assets, target_pct, timeframe)
         if signals:
             submit_errors = submit_signals(signals)
             result["signals_created"] = len(signals) - len(submit_errors)

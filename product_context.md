@@ -26,7 +26,7 @@ Built with Foundry (`--via-ir` required) + OpenZeppelin. Deployed via `minitiad 
 |----------|---------|
 | `SignalRegistry.sol` | Core data layer. Append-only `Signal[]` array with `createSignal()` (anyone) and `resolveSignal()` (owner only). Events: `SignalCreated`, `SignalResolved`. |
 | `SessionVault.sol` | MPP payment channels. Users deposit iUSD → open time-limited sessions → sign off-chain vouchers → backend redeems in batches. Supports `createSession`, `topUpSession`, `closeSession`, `redeemVoucher`, `redeemBatch`, `settle`. |
-| `MockIUSD.sol` | ERC20 test token with `faucet()` (1000 iUSD, 1h cooldown) and owner `mint`/`batchMint`. |
+| `MockIUSD.sol` | ERC20 test token with `faucet()` (1000 iUSD, 1h cooldown) and owner `mint`/`batchMint`. Integrates with Initia's ERC20Registry precompile (`0xF2`) — calls `register_erc20()` in constructor and `register_erc20_store(to)` on every mint/transfer via `_update` hook, making the token visible in Initia explorer and Cosmos bank module. |
 | `SignalPaymentGateway.sol` | Access record logging. Tracks which agents accessed which signals and how much they paid. Service tier pricing. |
 
 Signal struct: `{asset, isBull, confidence(0-100), targetPrice, entryPrice, exitPrice, timestamp, resolved, creator}` — all prices in 18-decimal wei.
@@ -77,6 +77,7 @@ Hooks:
 - `usePrices.ts` — fetches from backend REST API
 - `useSignalActions.ts` — executes `createSignal` via InterwovenKit `requestTxBlock` with `/minievm.evm.v1.MsgCall`
 - `useSession.ts` — MPP flow: faucet claim → approve iUSD → deposit to SessionVault. Multi-step TX progress UI.
+- `useIUSDBalance.ts` — Reads wallet iUSD balance (`balanceOf`) + active session remaining balance from SessionVault. Auto-refreshes 15s. Used in Layout header and Dashboard MPP section.
 
 Config (`config/index.ts`): viem chain definitions (local chain ID 1, testnet 7891), InterwovenKit `customChain`, asset metadata for 3 tracked assets, price formatting, explorer URL builders.
 

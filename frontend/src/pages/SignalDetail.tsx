@@ -2,7 +2,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useSignal } from '../hooks/useSignals';
 import { usePriceHistory } from '../hooks/usePrices';
 import { useSignalActions } from '../hooks/useSignalActions';
-import { getAssetInfo, formatPrice, formatPnl, truncateAddress, explorerTxUrl, explorerAccountUrl } from '../config';
+import { getAssetInfo, getAssetIcon, formatPrice, formatPnl, truncateAddress, explorerTxUrl, explorerAccountUrl } from '../config';
 import ConfidenceBadge from '../components/ConfidenceBadge';
 import PriceChart from '../components/PriceChart';
 
@@ -12,7 +12,9 @@ export default function SignalDetail() {
   const { data: signal, isLoading } = useSignal(signalId);
   const { executeSignal, status: txStatus, txHash, error: txError, reset } = useSignalActions();
 
-  const asset = signal ? getAssetInfo(signal.asset) : null;
+  const staticAsset = signal ? getAssetInfo(signal.asset) : null;
+  const dynamicInfo = signal?.symbol ? getAssetIcon(signal.symbol) : null;
+  const asset = dynamicInfo && signal ? { symbol: signal.symbol.replace('/USD', ''), ...dynamicInfo } : staticAsset;
   const { data: priceData } = usePriceHistory(asset?.symbol ? `${asset.symbol}/USD` : '');
   const pnl = signal?.resolved ? formatPnl(signal.entryPrice, signal.exitPrice, signal.isBull) : null;
 

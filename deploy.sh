@@ -27,9 +27,9 @@ deploy_contract() {
   if [ "$BIN_SIZE" -lt 100 ]; then
     err "$NAME: bin file too small ($BIN_SIZE bytes) — build likely failed"
   fi
-  info "$NAME: bytecode size = $BIN_SIZE bytes"
+  info "$NAME: bytecode size = $BIN_SIZE bytes" >&2
 
-  info "Deploying $NAME..."
+  info "Deploying $NAME..." >&2
   local TX_OUT
   TX_OUT=$(minitiad tx evm create "$BIN_FILE" \
     --from "$KEY_NAME" --keyring-backend "$KEYRING" --chain-id "$CHAIN_ID" \
@@ -39,11 +39,11 @@ deploy_contract() {
   }
   echo "$TX_OUT" >> "$LOG_FILE"
 
-  local TX_HASH=$(echo "$TX_OUT" | jq -r '.txhash // empty' 2>/dev/null)
+  local TX_HASH=$(echo "$TX_OUT" | grep -o '{.*}' | jq -r '.txhash // empty' 2>/dev/null)
   if [ -z "$TX_HASH" ]; then
     err "$NAME: no txhash in response. Output: $(echo "$TX_OUT" | head -c 200)"
   fi
-  info "$NAME TX: $TX_HASH"
+  info "$NAME TX: $TX_HASH" >&2
 
   sleep 6
 
@@ -55,13 +55,13 @@ deploy_contract() {
 
   local ADDR=$(echo "$TX_RESULT" | jq -r '.events[] | select(.type=="contract_created") | .attributes[] | select(.key=="contract") | .value' 2>/dev/null)
   if [ -z "$ADDR" ]; then
-    warn "$NAME: no contract_created event. Checking logs..."
+    warn "$NAME: no contract_created event. Checking logs..." >&2
     local CODE=$(echo "$TX_RESULT" | jq -r '.code // 0' 2>/dev/null)
     local RAW_LOG=$(echo "$TX_RESULT" | jq -r '.raw_log // "none"' 2>/dev/null | head -c 300)
     err "$NAME: deploy tx failed. code=$CODE raw_log=$RAW_LOG"
   fi
 
-  ok "$NAME deployed at: $ADDR"
+  ok "$NAME deployed at: $ADDR" >&2
   rm -f "$BIN_FILE"
   echo "$ADDR"
 }
@@ -122,8 +122,10 @@ IUSD_ADDR=$(deploy_contract "MockIUSD" "MockIUSD.bin")
 
 # --- 3. Deploy SessionVault ---
 extract_bytecode "SessionVault" "out/SessionVault.sol/SessionVault.json" "SessionVault.bin"
-info "Encoding SessionVault constructor args (iUSD=$IUSD_ADDR, treasury=$SENDER)..."
-CONSTRUCTOR_ARGS=$(cast abi-encode "constructor(address,address)" "$IUSD_ADDR" "$SENDER" 2>&1) || {
+SENDER_HEX=$(minitiad debug addr "$SENDER" 2>/dev/null | grep -i 'hex' | awk '{print $NF}')
+SENDER_HEX="0x${SENDER_HEX}"
+info "Encoding SessionVault constructor args (iUSD=$IUSD_ADDR, treasury=$SENDER_HEX)..."
+CONSTRUCTOR_ARGS=$(cast abi-encode "constructor(address,address)" "$IUSD_ADDR" "$SENDER_HEX" 2>&1) || {
   err "cast abi-encode failed: $CONSTRUCTOR_ARGS"
 }
 echo -n "$(echo "$CONSTRUCTOR_ARGS" | sed 's/^0x//')" >> SessionVault.bin
@@ -135,7 +137,7 @@ GW_ADDR=$(deploy_contract "SignalPaymentGateway" "SignalPaymentGateway.bin")
 
 # --- 5. Authorize backend as vault operator ---
 info "Authorizing backend as SessionVault operator..."
-AUTH_CALLDATA=$(cast calldata "setAuthorizedOperator(address,bool)" "$SENDER" true)
+AUTH_CALLDATA=$(cast calldata "setAuthorizedOperator(address,bool)" "$SENDER_HEX" true)
 AUTH_OUT=$(minitiad tx evm call "$VAULT_ADDR" "$AUTH_CALLDATA" \
   --from "$KEY_NAME" --keyring-backend "$KEYRING" --chain-id "$CHAIN_ID" \
   --gas auto --gas-adjustment 1.4 --output json --yes 2>&1) || {

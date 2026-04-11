@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useSignals, useSignalCount } from '../hooks/useSignals';
 import { useSession, type TxStep } from '../hooks/useSession';
-import { config, explorerTxUrl, truncateAddress } from '../config';
+import { config, explorerTxUrl, truncateAddress, getAssetIcon } from '../config';
 import StatCard from '../components/StatCard';
 import SignalCard from '../components/SignalCard';
+import { useIUSDBalance } from '../hooks/useIUSDBalance';
 
 function TxStepRow({ step }: { step: TxStep }) {
   const icon = step.status === 'success' ? '✓' : step.status === 'error' ? '✗' : step.status === 'pending' ? '⏳' : '○';
@@ -33,8 +34,55 @@ export default function Dashboard() {
   const { data: total = 0 } = useSignalCount();
   const { data: signals = [], isLoading } = useSignals(0, 100);
   const { claimFaucet, approveAndDeposit, clearSteps, findActiveSession, payForService, loading: sessionLoading, steps, connected } = useSession();
+  const { walletFormatted, sessionFormatted, sessionBalance } = useIUSDBalance();
   const [genLoading, setGenLoading] = useState(false);
   const [genResult, setGenResult] = useState<any>(null);
+  const [selectedAssets, setSelectedAssets] = useState<string[]>([]);
+  const [timeframe, setTimeframe] = useState('30m');
+  const [targetPct, setTargetPct] = useState('1.5');
+  const [trackedPairs, setTrackedPairs] = useState<{address: string; symbol: string}[]>([]);
+  const [availablePairs, setAvailablePairs] = useState<string[]>([]);
+  const [customPair, setCustomPair] = useState('');
+  const [addingPair, setAddingPair] = useState(false);
+
+  useEffect(() => {
+    fetch(`${config.backendUrl}/api/signal-options`)
+      .then(r => r.json())
+      .then(d => {
+        setTrackedPairs(d.assets || []);
+        setAvailablePairs(d.availablePairs || []);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleAddPair = async () => {
+    if (!customPair.trim()) return;
+    setAddingPair(true);
+    try {
+      const resp = await fetch(`${config.backendUrl}/api/assets?symbol=${encodeURIComponent(customPair.trim())}`, { method: 'POST' });
+      const data = await resp.json();
+      if (resp.ok) {
+        setTrackedPairs(prev => [...prev, { address: data.address, symbol: data.symbol }]);
+        setCustomPair('');
+      } else {
+        setGenResult({ error: data?.detail || 'Failed to add pair' });
+      }
+    } catch (e: any) {
+      setGenResult({ error: e.message });
+    } finally {
+      setAddingPair(false);
+    }
+  };
+
+  const handleRemovePair = async (symbol: string) => {
+    try {
+      const resp = await fetch(`${config.backendUrl}/api/assets?symbol=${encodeURIComponent(symbol)}`, { method: 'DELETE' });
+      if (resp.ok) {
+        setTrackedPairs(prev => prev.filter(p => p.symbol !== symbol));
+        setSelectedAssets(prev => prev.filter(a => a !== symbol));
+      }
+    } catch {}
+  };
 
   const resolved = signals.filter((s) => s.resolved);
   const wins = resolved.filter((s) => {
@@ -79,8 +127,12 @@ export default function Dashboard() {
         headers['X-PAYMENT-TX'] = txHash;
       }
 
-      // 4. Call backend
-      const resp = await fetch(`${config.backendUrl}/api/signals/generate`, {
+      // 4. Call backend with user params
+      const params = new URLSearchParams();
+      if (selectedAssets.length > 0) params.set('assets', selectedAssets.join(','));
+      params.set('timeframe', timeframe);
+      params.set('target_pct', targetPct);
+      const resp = await fetch(`${config.backendUrl}/api/signals/generate?${params}`, {
         method: 'POST',
         headers,
       });
@@ -128,6 +180,22 @@ export default function Dashboard() {
             )}
           </div>
 
+          {/* Balances */}
+          {connected && (
+            <div className="flex items-center gap-4 mb-4 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)]">
+              <div className="text-xs">
+                <span className="text-[var(--color-muted)]">Wallet: </span>
+                <span className="text-amber-400 font-mono">{Number(walletFormatted).toFixed(2)} iUSD</span>
+              </div>
+              <div className="text-xs">
+                <span className="text-[var(--color-muted)]">Session: </span>
+                <span className="text-purple-400 font-mono">
+                  {sessionBalance > 0n ? `${Number(sessionFormatted).toFixed(2)} iUSD` : 'No active session'}
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Flow */}
           <div className="flex items-center gap-1 text-xs overflow-x-auto pb-3 mb-4 border-b border-[var(--color-border)]">
             {['🪙 Faucet', '✅ Approve', '🔐 Deposit', '📋 Session', '🎫 Voucher', '📊 Signal'].map((label, i, arr) => (
@@ -166,19 +234,90 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Quick Actions */}
-      <div className="flex flex-wrap gap-3 mb-4">
-        <Link to="/signals" className="px-4 py-2 bg-[var(--color-accent)] text-white rounded-lg text-sm hover:opacity-90 transition-opacity">
-          View All Signals
-        </Link>
-        <button onClick={handleGenerate} disabled={genLoading}
-          className="px-4 py-2 bg-[var(--color-surface)] border border-[var(--color-border)] text-white rounded-lg text-sm hover:border-[var(--color-accent)] transition-colors disabled:opacity-50">
-          {genLoading ? '⏳ Generating...' : '⚡ Generate Signal'}
-        </button>
-        <a href="https://bridge.initia.xyz" target="_blank" rel="noopener noreferrer"
-          className="px-4 py-2 bg-green-500/10 border border-green-500/30 text-green-400 rounded-lg text-sm hover:bg-green-500/20 transition-colors">
-          Bridge Funds
-        </a>
+      {/* Signal Configuration */}
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-5 mb-6">
+        <div className="text-sm font-semibold text-white mb-4">⚙️ Signal Configuration</div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          {/* Token Pairs */}
+          <div className="md:col-span-3">
+            <label className="text-xs text-[var(--color-muted)] mb-1 block">Token Pairs (click to select, right-click to remove custom)</label>
+            <div className="flex flex-wrap gap-2 mb-2">
+              {trackedPairs.map(({symbol}) => {
+                const info = getAssetIcon(symbol);
+                return (
+                  <button key={symbol}
+                    onClick={() => setSelectedAssets(prev =>
+                      prev.includes(symbol) ? prev.filter(a => a !== symbol) : [...prev, symbol]
+                    )}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      if (!['BTC/USD','ETH/USD','INIT/USD'].includes(symbol)) handleRemovePair(symbol);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                      selectedAssets.length === 0 || selectedAssets.includes(symbol)
+                        ? 'bg-[var(--color-accent)]/20 border border-[var(--color-accent)] text-white'
+                        : 'bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-muted)]'
+                    }`}>
+                    {info.icon} {symbol.replace('/USD', '')}
+                  </button>
+                );
+              })}
+              {/* Add custom pair */}
+              <div className="flex items-center gap-1">
+                <select value={customPair} onChange={e => setCustomPair(e.target.value)}
+                  className="px-2 py-1.5 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-white text-sm">
+                  <option value="">+ Add pair...</option>
+                  {availablePairs.filter(p => !trackedPairs.some(t => t.symbol === p)).map(p => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+                {customPair && (
+                  <button onClick={handleAddPair} disabled={addingPair}
+                    className="px-2 py-1.5 rounded-lg bg-green-500/20 border border-green-500/30 text-green-400 text-sm disabled:opacity-50">
+                    {addingPair ? '...' : '✓'}
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="text-xs text-[var(--color-muted)]">{selectedAssets.length === 0 ? 'All pairs selected' : selectedAssets.join(', ')}</div>
+          </div>
+          {/* Timeframe */}
+          <div>
+            <label className="text-xs text-[var(--color-muted)] mb-1 block">Chart Timeframe</label>
+            <select value={timeframe} onChange={e => setTimeframe(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-white text-sm">
+              <option value="15m">15m candles / 24h</option>
+              <option value="30m">30m candles / 24h</option>
+              <option value="1h">1h candles / 7 days</option>
+              <option value="4h">4h candles / 30 days</option>
+              <option value="1d">1d candles / 90 days</option>
+            </select>
+          </div>
+          {/* Target P/L */}
+          <div>
+            <label className="text-xs text-[var(--color-muted)] mb-1 block">Target P/L %</label>
+            <div className="flex items-center gap-2">
+              <input type="number" value={targetPct} onChange={e => setTargetPct(e.target.value)}
+                min="0.1" max="20" step="0.1"
+                className="w-full px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-white text-sm font-mono" />
+              <span className="text-sm text-[var(--color-muted)]">%</span>
+            </div>
+            <div className="text-xs text-[var(--color-muted)] mt-1">TP: +{targetPct}% / SL: -{targetPct}%</div>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <button onClick={handleGenerate} disabled={genLoading}
+            className="px-4 py-2 bg-[var(--color-accent)] text-white rounded-lg text-sm hover:opacity-90 transition-opacity disabled:opacity-50">
+            {genLoading ? '⏳ Generating...' : '⚡ Generate Signal'}
+          </button>
+          <Link to="/signals" className="px-4 py-2 bg-[var(--color-surface)] border border-[var(--color-border)] text-white rounded-lg text-sm hover:border-[var(--color-accent)] transition-colors">
+            View All Signals
+          </Link>
+          <a href="https://bridge.initia.xyz" target="_blank" rel="noopener noreferrer"
+            className="px-4 py-2 bg-green-500/10 border border-green-500/30 text-green-400 rounded-lg text-sm hover:bg-green-500/20 transition-colors">
+            Bridge Funds
+          </a>
+        </div>
       </div>
 
       {/* Generate Result */}

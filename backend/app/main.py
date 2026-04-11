@@ -83,7 +83,8 @@ def _fallback_metadata(signal: dict) -> dict:
         pattern = "Death Cross" if target_price < price else "Bearish Momentum"
 
     from app.signal_engine import TRACKED_ASSETS
-    symbol = TRACKED_ASSETS.get(signal.get("asset", "").lower(), "UNKNOWN")
+    asset_addr = signal.get("asset", "").lower()
+    symbol = TRACKED_ASSETS.get(asset_addr, TRACKED_ASSETS.get(asset_addr.lower(), "UNKNOWN"))
     direction = "bullish" if is_bull else "bearish"
     action = "BUY" if is_bull else "SELL"
 
@@ -144,13 +145,14 @@ async def get_signals(offset: int = 0, limit: int = Query(default=100, le=100)):
         chain = get_chain()
         total = chain.get_signal_count()
         signals = chain.get_signals(offset, limit) if total > 0 else []
-        from app.signal_engine import signal_metadata
+        from app.signal_engine import signal_metadata, TRACKED_ASSETS
         for s in signals:
             meta = signal_metadata.get(s["id"])
             if meta:
                 s.update(meta)
             elif not s.get("pattern"):
                 s.update(_fallback_metadata(s))
+            s.setdefault("symbol", TRACKED_ASSETS.get(s["asset"].lower(), ""))
         result = {"signals": signals, "total": total}
         set_cache(cache_key, result)
         return result
@@ -164,12 +166,14 @@ async def get_signal(signal_id: int):
     try:
         chain = get_chain()
         signal = chain.get_signal(signal_id)
-        from app.signal_engine import signal_metadata
+        from app.signal_engine import signal_metadata, TRACKED_ASSETS
         meta = signal_metadata.get(signal_id)
         if meta:
             signal.update(meta)
         elif not signal.get("pattern"):
             signal.update(_fallback_metadata(signal))
+        # Always include symbol for frontend display
+        signal.setdefault("symbol", TRACKED_ASSETS.get(signal["asset"].lower(), ""))
         return signal
     except Exception as e:
         error_tracker.track("SIGNAL_FETCH_ERROR", str(e), {"signal_id": signal_id})
@@ -198,68 +202,20 @@ async def get_price_history(symbol: str):
     return {"symbol": symbol, "history": history}
 
 
-@app.get("/api/leaderboard")
-async def get_leaderboard():
-    data = cached("leaderboard", ttl=60)
-    if data:
-        return data
-    try:
-        chain = get_chain()
-        total = chain.get_signal_count()
-        if total == 0:
-            return {"leaderboard": []}
-
-        signals = chain.get_signals(0, min(total, 500))
-
-        # Group by creator
-        creators: dict[str, dict] = {}
-        for s in signals:
-            addr = s["creator"]
-            if addr not in creators:
-                creators[addr] = {"address": addr, "total": 0, "wins": 0, "pnl": 0}
-            creators[addr]["total"] += 1
-            if s["resolved"]:
-                entry = int(s["entryPrice"])
-                exit_ = int(s["exitPrice"])
-                if entry > 0:
-                    pnl_pct = ((exit_ - entry) / entry) * 100
-                    if not s["isBull"]:
-                        pnl_pct = -pnl_pct
-                    creators[addr]["pnl"] += pnl_pct
-                    if pnl_pct > 0:
-                        creators[addr]["wins"] += 1
-
-        # Build leaderboard
-        board = []
-        for addr, stats in creators.items():
-            resolved = sum(1 for s in signals if s["creator"] == addr and s["resolved"])
-            win_rate = (stats["wins"] / resolved * 100) if resolved > 0 else 0
-            board.append({
-                "address": addr,
-                "totalSignals": stats["total"],
-                "resolvedSignals": resolved,
-                "wins": stats["wins"],
-                "winRate": round(win_rate, 1),
-                "totalPnl": round(stats["pnl"], 2),
-            })
-
-        board.sort(key=lambda x: x["totalPnl"], reverse=True)
-        for i, entry in enumerate(board):
-            entry["rank"] = i + 1
-
-        result = {"leaderboard": board}
-        set_cache("leaderboard", result)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/signals/generate")
-async def trigger_signal_generation(request: Request, assets: str | None = Query(default=None)):
-    """Generate signals. Optional ?assets=BTC/USD,ETH/USD to filter token pairs."""
+async def trigger_signal_generation(
+    request: Request,
+    assets: str | None = Query(default=None),
+    timeframe: str = Query(default="30m"),
+    target_pct: float = Query(default=1.5, ge=0.1, le=20.0),
+):
+    """Generate signals. Params: ?assets=BTC/USD&timeframe=30m&target_pct=1.5"""
     settings = get_settings()
     payment_info = None
     asset_list = [a.strip() for a in assets.split(",") if a.strip()] if assets else None
+    target_decimal = target_pct / 100.0  # convert 1.5 → 0.015
 
     if settings.enable_payment_gating and settings.session_vault_address:
         tx_hash = request.headers.get("X-PAYMENT-TX")
@@ -280,7 +236,7 @@ async def trigger_signal_generation(request: Request, assets: str | None = Query
     from app.signal_engine import run_signal_cycle, price_history, recent_signal_txs
     try:
         before = len(recent_signal_txs)
-        cycle_result = run_signal_cycle(asset_list)
+        cycle_result = run_signal_cycle(asset_list, target_decimal, timeframe)
         after = len(recent_signal_txs)
         new_signals = after - before
         history_depth = {k: len(v) for k, v in price_history.items()}
@@ -302,14 +258,54 @@ async def trigger_signal_generation(request: Request, assets: str | None = Query
 
 
 
+@app.get("/api/signal-options")
+async def get_signal_options():
+    """Available token pairs, timeframes, and default target %."""
+    from app.signal_engine import TRACKED_ASSETS, TIMEFRAMES, DEFAULT_TIMEFRAME, DEFAULT_TARGET_PCT, COINGECKO_IDS
+    return {
+        "assets": [{"address": addr, "symbol": sym} for addr, sym in TRACKED_ASSETS.items()],
+        "availablePairs": sorted(COINGECKO_IDS.keys()),
+        "timeframes": [{"value": k, "label": v["label"]} for k, v in TIMEFRAMES.items()],
+        "defaults": {
+            "timeframe": DEFAULT_TIMEFRAME,
+            "targetPct": DEFAULT_TARGET_PCT * 100,
+        },
+    }
+
+
+@app.post("/api/assets")
+async def add_asset(symbol: str = Query(...)):
+    """Add a custom token pair. Example: ?symbol=SOL/USD or ?symbol=SOL"""
+    from app.signal_engine import add_tracked_asset, COINGECKO_IDS, bootstrap_price_history
+    sym = symbol.upper()
+    if not sym.endswith("/USD"):
+        sym = f"{sym}/USD"
+    if sym not in COINGECKO_IDS:
+        raise HTTPException(status_code=400, detail=f"Unknown pair: {sym}. Available: {sorted(COINGECKO_IDS.keys())}")
+    addr = add_tracked_asset(sym)
+    bootstrap_price_history()
+    _cache.clear()
+    return {"status": "ok", "symbol": sym, "address": addr}
+
+
+@app.delete("/api/assets")
+async def delete_asset(symbol: str = Query(...)):
+    """Remove a token pair from tracking."""
+    from app.signal_engine import remove_tracked_asset
+    if not remove_tracked_asset(symbol):
+        raise HTTPException(status_code=404, detail=f"Asset not found: {symbol}")
+    _cache.clear()
+    return {"status": "ok", "removed": symbol}
+
+
 @app.get("/api/report")
-async def get_report():
-    """Performance report: ROI, win/loss, simulated balance."""
+async def get_report(address: str | None = Query(default=None)):
+    """Performance report. Pass ?address=0x... to filter by user's executed signals."""
     try:
         from app.report import generate_report
         chain = get_chain()
         from app.signal_engine import signal_metadata
-        report = generate_report(chain, signal_metadata)
+        report = generate_report(chain, signal_metadata, creator=address)
         return report
     except Exception as e:
         error_tracker.track("REPORT_ERROR", str(e))

@@ -1,18 +1,20 @@
 import { NavLink } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { useInterwovenKit } from '@initia/interwovenkit-react';
-import { truncateAddress } from '../config';
+import { truncateAddress, config } from '../config';
+
+import { useIUSDBalance } from '../hooks/useIUSDBalance';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: 'H' },
   { to: '/signals', label: 'Signals', icon: 'S' },
   { to: '/portfolio', label: 'Portfolio', icon: 'P' },
-  { to: '/leaderboard', label: 'Leaderboard', icon: 'L' },
   { to: '/report', label: 'Report', icon: 'R' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
   const { initiaAddress, openConnect, openWallet, openBridge } = useInterwovenKit();
+  const { walletFormatted } = useIUSDBalance();
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -48,12 +50,19 @@ export default function Layout({ children }: { children: ReactNode }) {
             Bridge
           </button>
           {initiaAddress ? (
-            <button
-              onClick={openWallet}
-              className="px-3 py-1.5 text-xs bg-[var(--color-surface)] border border-[var(--color-border)] text-white rounded-lg font-mono"
-            >
-              {truncateAddress(initiaAddress)}
-            </button>
+            <>
+              {config.paymentEnabled && (
+                <span className="text-xs text-amber-400 font-mono">
+                  💰 {Number(walletFormatted).toFixed(2)} iUSD
+                </span>
+              )}
+              <button
+                onClick={openWallet}
+                className="px-3 py-1.5 text-xs bg-[var(--color-surface)] border border-[var(--color-border)] text-white rounded-lg font-mono"
+              >
+                {truncateAddress(initiaAddress)}
+              </button>
+            </>
           ) : (
             <button
               onClick={openConnect}

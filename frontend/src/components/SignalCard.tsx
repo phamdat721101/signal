@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { getAssetInfo, formatPrice, formatPnl, truncateAddress, explorerAccountUrl } from '../config';
+import { getAssetInfo, getAssetIcon, formatPrice, formatPnl, truncateAddress, explorerAccountUrl } from '../config';
 import ConfidenceBadge from './ConfidenceBadge';
 
 export interface Signal {
@@ -17,10 +17,13 @@ export interface Signal {
   analysis?: string;
   timeframe?: string;
   stopLoss?: string;
+  symbol?: string;
 }
 
 export default function SignalCard({ signal }: { signal: Signal }) {
-  const asset = getAssetInfo(signal.asset);
+  const staticAsset = getAssetInfo(signal.asset);
+  const dynamicInfo = signal.symbol ? getAssetIcon(signal.symbol) : null;
+  const asset = dynamicInfo ? { symbol: signal.symbol.replace('/USD', ''), ...dynamicInfo } : staticAsset;
   const pnl = signal.resolved ? formatPnl(signal.entryPrice, signal.exitPrice, signal.isBull) : null;
 
   return (

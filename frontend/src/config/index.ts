@@ -62,7 +62,28 @@ export const customChain = {
   metadata: { is_l1: false, minitia: { type: 'minievm' } },
 };
 
-// Asset metadata
+// Known asset icons (extensible)
+const ASSET_ICONS: Record<string, { name: string; icon: string }> = {
+  BTC: { name: 'Bitcoin', icon: '₿' },
+  ETH: { name: 'Ethereum', icon: 'Ξ' },
+  INIT: { name: 'Initia', icon: 'I' },
+  SOL: { name: 'Solana', icon: 'S' },
+  AVAX: { name: 'Avalanche', icon: 'A' },
+  DOGE: { name: 'Dogecoin', icon: 'D' },
+  LINK: { name: 'Chainlink', icon: 'L' },
+  DOT: { name: 'Polkadot', icon: 'D' },
+  ATOM: { name: 'Cosmos', icon: 'A' },
+  TIA: { name: 'Celestia', icon: 'T' },
+  SEI: { name: 'Sei', icon: 'S' },
+  SUI: { name: 'Sui', icon: 'S' },
+  APT: { name: 'Aptos', icon: 'A' },
+  ARB: { name: 'Arbitrum', icon: 'A' },
+  OP: { name: 'Optimism', icon: 'O' },
+  INJ: { name: 'Injective', icon: 'I' },
+  MATIC: { name: 'Polygon', icon: 'M' },
+};
+
+// Static fallback for known addresses
 export const ASSETS: Record<string, { symbol: string; name: string; icon: string }> = {
   '0x0000000000000000000000000000000000000001': { symbol: 'BTC', name: 'Bitcoin', icon: '₿' },
   '0x0000000000000000000000000000000000000002': { symbol: 'ETH', name: 'Ethereum', icon: 'Ξ' },
@@ -70,7 +91,15 @@ export const ASSETS: Record<string, { symbol: string; name: string; icon: string
 };
 
 export function getAssetInfo(address: string) {
-  return ASSETS[address.toLowerCase()] || { symbol: '???', name: 'Unknown', icon: '?' };
+  const known = ASSETS[address.toLowerCase()];
+  if (known) return known;
+  // Try to extract symbol from address pattern (custom assets use hash-based addresses)
+  return { symbol: '???', name: 'Custom', icon: '•' };
+}
+
+export function getAssetIcon(symbol: string): { name: string; icon: string } {
+  const base = symbol.replace('/USD', '').toUpperCase();
+  return ASSET_ICONS[base] || { name: base, icon: base.charAt(0) };
 }
 
 export function formatPrice(weiStr: string): string {

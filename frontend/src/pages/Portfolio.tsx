@@ -1,15 +1,39 @@
 import { useState } from 'react';
-import { useSignals } from '../hooks/useSignals';
+import { useUserSignals } from '../hooks/useSignals';
+import { useInterwovenKit } from '@initia/interwovenkit-react';
 import { getAssetInfo, formatPrice, formatPnl } from '../config';
 import StatCard from '../components/StatCard';
+
+function bech32ToHex(addr: string): `0x${string}` {
+  const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+  const data = addr.slice(addr.lastIndexOf('1') + 1);
+  const words = [...data].map(c => CHARSET.indexOf(c)).slice(0, -6);
+  let bits = 0, value = 0;
+  const bytes: number[] = [];
+  for (const w of words) { value = (value << 5) | w; bits += 5; while (bits >= 8) { bits -= 8; bytes.push((value >> bits) & 0xff); } }
+  return `0x${bytes.map(b => b.toString(16).padStart(2, '0')).join('')}` as `0x${string}`;
+}
 
 type Tab = 'active' | 'history';
 
 export default function Portfolio() {
-  const { data: signals = [], isLoading } = useSignals(0, 100);
+  const { initiaAddress } = useInterwovenKit();
+  const evmAddress = initiaAddress ? bech32ToHex(initiaAddress) : undefined;
+  const { data: signals = [], isLoading } = useUserSignals(evmAddress);
   const [tab, setTab] = useState<Tab>('active');
 
-  // For now show all signals (in production, filter by connected wallet)
+  if (!initiaAddress) {
+    return (
+      <div>
+        <h1 className="text-3xl font-bold text-white mb-6">Portfolio</h1>
+        <div className="text-center py-12 text-[var(--color-muted)]">
+          <p className="text-lg mb-2">Connect your wallet</p>
+          <p className="text-sm">Your portfolio tracks signals you've executed on-chain.</p>
+        </div>
+      </div>
+    );
+  }
+
   const resolved = signals.filter((s) => s.resolved);
   const active = signals.filter((s) => !s.resolved);
   const displayed = tab === 'active' ? active : resolved;
@@ -65,7 +89,7 @@ export default function Portfolio() {
         <div className="text-[var(--color-muted)]">Loading...</div>
       ) : displayed.length === 0 ? (
         <div className="text-center py-12 text-[var(--color-muted)]">
-          {tab === 'active' ? 'No active signals' : 'No trade history yet'}
+          {tab === 'active' ? 'No active signals — execute a signal to start tracking' : 'No trade history yet'}
         </div>
       ) : (
         <div className="overflow-x-auto">
