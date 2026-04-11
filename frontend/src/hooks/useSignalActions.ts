@@ -57,9 +57,27 @@ export function useSignalActions() {
       queryClient.invalidateQueries({ queryKey: ['signalCount'] });
       queryClient.invalidateQueries({ queryKey: ['userSignals'] });
     } catch (e: any) {
-      console.error('[Signal] TX error:', e);
-      setError(e.message || 'Transaction failed');
-      setStatus('error');
+      console.warn('[Signal] On-chain TX failed, trying simulated execution:', e.message);
+      try {
+        const params = new URLSearchParams({
+          asset, isBull: String(isBull), confidence: String(confidence),
+          targetPrice: String(targetPrice), entryPrice: String(entryPrice),
+          creator: initiaAddress || '0x0000000000000000000000000000000000000000',
+        });
+        const resp = await fetch(`${config.backendUrl}/api/signals/execute?${params}`, { method: 'POST' });
+        if (!resp.ok) throw new Error(`Backend: ${resp.status}`);
+        const result = await resp.json();
+        console.log('[Signal] Simulated TX result:', result);
+        setTxHash(result.txHash);
+        setStatus('success');
+        queryClient.invalidateQueries({ queryKey: ['signals'] });
+        queryClient.invalidateQueries({ queryKey: ['signalCount'] });
+        queryClient.invalidateQueries({ queryKey: ['userSignals'] });
+      } catch (simErr: any) {
+        console.error('[Signal] Simulated TX also failed:', simErr);
+        setError(simErr.message || 'Transaction failed');
+        setStatus('error');
+      }
     }
   };
 

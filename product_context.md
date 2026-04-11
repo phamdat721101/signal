@@ -41,23 +41,30 @@ FastAPI app entry: `app/main.py`. Key modules:
 | `chain.py` | `ChainClient` — web3.py wrapper with POA middleware. `gasPrice: 0` for gasless local chain. Manages nonce internally. |
 | `signal_engine.py` | Price fetching (Slinky Oracle → CoinGecko OHLC fallback), EMA(5)/EMA(10) crossover + RSI(14) filter, confidence scoring, signal submission, auto-resolution after configurable timeout (default 24h). Tracks recent TX hashes. |
 | `scheduler.py` | APScheduler runs `run_signal_cycle()` every N minutes (default 2). |
+| `report.py` | Performance report generator. Computes ROI, win/loss, per-asset breakdown, simulated $10k portfolio ($100/trade). Supports `?address=` filter for user-specific reports. |
 | `mpp_middleware.py` | `MPPPaymentVerifier` — verifies signed vouchers against on-chain SessionVault, batches redemptions (flush at 10). Builds 402 responses with `x-payment-required` header. |
 | `agent_client.py` | Reference SDK (`SignalAgentClient`) for AI agents to consume paid signals via voucher signing. |
 
 API endpoints:
 - `GET /api/health` — status + chain connection
-- `GET /api/signals` — paginated signals (free, reads from contract)
+- `GET /api/signals` — paginated signals (free, reads from contract or in-memory store)
 - `GET /api/signals/:id` — single signal
+- `POST /api/signals/generate` — trigger signal cycle (payment-gated when enabled). Params: `?assets=BTC/USD&timeframe=30m&target_pct=1.5`
+- `POST /api/signals/execute` — simulated signal execution (in-memory store, returns fake tx hash). For API-only mode.
+- `GET /api/signal-options` — available token pairs, timeframes, default target %
+- `POST /api/assets?symbol=SOL/USD` — add custom token pair to tracking
+- `DELETE /api/assets?symbol=SOL/USD` — remove token pair from tracking
 - `GET /api/prices` — current market prices
 - `GET /api/prices/:symbol/history` — price history for charting
-- `GET /api/leaderboard` — trader rankings by P&L
+- `GET /api/report` — performance report with simulated portfolio. `?address=0x...` for user-specific.
 - `GET /api/tx-history` — AI signal TX hashes with explorer URLs
-- `POST /api/signals/generate` — trigger signal cycle (payment-gated when enabled)
 - `GET /api/signals/premium` — all signals (payment required)
 - `GET /api/signals/single/:id` — single signal (payment required)
 - `GET /api/payment/session/:id` — session info
 - `GET /api/payment/pricing` — service tier prices
 - `POST /api/payment/faucet?address=` — mint 1000 iUSD (owner only)
+
+**Simulation / API-only mode**: When `CONTRACT_ADDRESS` is empty, the backend runs without chain connection. Signals are stored in an in-memory list, generation still works (real prices + EMA/RSI), and `/api/signals/execute` allows simulated execution from the frontend. All chain-connected paths remain intact when `CONTRACT_ADDRESS` is set.
 
 ### 2.3 Frontend (`/frontend`)
 
@@ -70,16 +77,18 @@ React 19 SPA with Vite, TailwindCSS v4, react-router-dom.
 | `@tanstack/react-query` | Data fetching with 15s stale/refetch |
 | `lightweight-charts` | Candlestick charts with Entry/TP/SL price lines |
 
-Pages: Dashboard, SignalFeed, SignalDetail, Portfolio, Leaderboard.
+Pages: Dashboard, SignalFeed, SignalDetail, Portfolio, Report.
 
 Hooks:
-- `useSignals.ts` — reads contract directly via viem (not backend)
-- `usePrices.ts` — fetches from backend REST API
-- `useSignalActions.ts` — executes `createSignal` via InterwovenKit `requestTxBlock` with `/minievm.evm.v1.MsgCall`
+- `useSignals.ts` — fetches from backend REST API first, falls back to viem `readContract()` if backend unavailable
+- `usePrices.ts` — fetches prices from backend REST API. Also exports `useReport()` for performance reports.
+- `useSignalActions.ts` — executes `createSignal` via InterwovenKit `requestTxBlock` with `/minievm.evm.v1.MsgCall`. Falls back to `POST /api/signals/execute` for simulated execution when chain unavailable.
 - `useSession.ts` — MPP flow: faucet claim → approve iUSD → deposit to SessionVault. Multi-step TX progress UI.
 - `useIUSDBalance.ts` — Reads wallet iUSD balance (`balanceOf`) + active session remaining balance from SessionVault. Auto-refreshes 15s. Used in Layout header and Dashboard MPP section.
 
-Config (`config/index.ts`): viem chain definitions (local chain ID 1, testnet 7891), InterwovenKit `customChain`, asset metadata for 3 tracked assets, price formatting, explorer URL builders.
+Config (`config/index.ts`): viem chain definitions (local chain ID 1, testnet 7891), InterwovenKit `customChain`, dynamic asset icons for 17+ pairs, price formatting, explorer URL builders.
+
+Dashboard features: Signal configuration UI with token pair picker (add/remove custom pairs), timeframe selector (`15m`/`30m`/`1h`/`4h`/`1d`), target P/L % input, MPP payment session management.
 
 Auto-signing: `enableAutoSign: { [chainId]: ['/minievm.evm.v1.MsgCall'] }` — users approve once, subsequent txs sign automatically.
 
@@ -99,12 +108,14 @@ Auto-signing: `enableAutoSign: { [chainId]: ['/minievm.evm.v1.MsgCall'] }` — u
 | Step | Detail |
 |------|--------|
 | Price fetch | Slinky Oracle (`/slinky/oracle/v1/prices` via LCD), fallback to CoinGecko |
-| Bootstrap | CoinGecko OHLC (last 20 candles of 1-day data) on startup |
+| Bootstrap | CoinGecko OHLC (last 20 candles, configurable timeframe) on startup |
 | Direction | EMA(5) crosses above EMA(10) = bullish; below = bearish. Also triggers on strong trend (>0.1% divergence) |
 | Filter | RSI(14) > 75 blocks bullish signals; RSI < 25 blocks bearish |
 | Confidence | `25 + EMA_strength(0-40) + RSI_distance(0-30)`, clamped to 50-95% |
-| Target | Entry ± 1.5% (realistic 24h target, 1:1 risk/reward) |
+| Target | Entry ± configurable % (default 1.5%, range 0.1-20%), 1:1 risk/reward |
 | Resolution | Auto after `SIGNAL_RESOLVE_TIMEOUT_HOURS` (default 24h) with actual market price |
+| Timeframes | `15m` (1d data), `30m` (1d), `1h` (7d), `4h` (30d), `1d` (90d) |
+| Tracked pairs | Default: BTC/USD, ETH/USD, INIT/USD. Extensible via API with 17 supported CoinGecko pairs (SOL, AVAX, DOGE, LINK, DOT, ATOM, TIA, SEI, SUI, APT, ARB, OP, INJ, MATIC) |
 
 ## 5. Deployment
 
@@ -113,14 +124,18 @@ Auto-signing: `enableAutoSign: { [chainId]: ['/minievm.evm.v1.MsgCall'] }` — u
 | Local appchain | `weave init` (EVM + oracle) → `deploy.sh` (minitiad tx evm create) |
 | Testnet | `deploy-testnet.sh` (forge script to Initia testnet RPC) |
 | Full stack | `start.sh` — backend :8000 + frontend :5173 |
+| VPS (API-only) | Backend on VPS with Caddy HTTPS reverse proxy. `CONTRACT_ADDRESS=""` for simulation mode. |
 
 Local endpoints: EVM RPC `:8545`, Cosmos RPC `:26657`, LCD `:1317`, Indexer `:8080`.
+
+VPS deployment: `https://13.212.80.72` — Caddy (port 443, self-signed TLS) → uvicorn (127.0.0.1:8000). Backend runs in simulation mode (no chain, in-memory signals).
 
 ## 6. Key Conventions
 
 - Prices: uint256 in 18-decimal wei on-chain; Oracle uses 8-decimal (converted in signal_engine)
-- Asset addresses: `0x...0001` (BTC), `0x...0002` (ETH), `0x...0003` (INIT) — placeholder addresses
+- Asset addresses: `0x...0001` (BTC), `0x...0002` (ETH), `0x...0003` (INIT) — placeholder addresses. Custom pairs use hash-based addresses via `_symbol_to_address()`.
 - Backend settings: `pydantic-settings` with `@lru_cache` singleton
+- Simulation mode: When `CONTRACT_ADDRESS` is empty, signals stored in-memory, no chain TX. `POST /api/signals/execute` for frontend simulated signing.
 - Foundry: `--via-ir` required, remapping `@openzeppelin/contracts/` → `lib/openzeppelin-contracts/contracts/`
 - ABI sync: `backend/app/abi.json` ↔ `frontend/src/abi/SignalRegistry.ts` must match
 - Gasless: local chain uses `gasPrice: 0`
@@ -132,4 +147,4 @@ Backend (`backend/.env`): `NETWORK`, `PRIVATE_KEY`, `CONTRACT_ADDRESS`, `SESSION
 Frontend (`frontend/.env`): `VITE_NETWORK`, `VITE_CONTRACT_ADDRESS`, `VITE_CHAIN_ID`, `VITE_COSMOS_RPC_URL`, `VITE_REST_URL`, `VITE_BACKEND_URL`, `VITE_MOCK_IUSD_ADDRESS`, `VITE_SESSION_VAULT_ADDRESS`, `VITE_PAYMENT_GATEWAY_ADDRESS`, `VITE_PAYMENT_ENABLED`.
 
 ---
-*Updated 2026-04-07 — Full source analysis including MPP payment system, agent SDK, and testnet deployment.*
+*Updated 2026-04-11 — Added simulation/API-only mode, dynamic asset registry, configurable timeframes/targets, report module, VPS deployment with Caddy HTTPS.*

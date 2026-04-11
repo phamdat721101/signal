@@ -41,18 +41,18 @@ def set_cache(key: str, value):
 async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info(f"Starting Initia Signal backend | network={settings.network}")
+    from app.signal_engine import bootstrap_price_history
+    from app.scheduler import start_scheduler
     if settings.contract_address:
         try:
             get_chain()
             logger.info("Chain client connected")
-            from app.scheduler import start_scheduler
-            from app.signal_engine import bootstrap_price_history
-            bootstrap_price_history()
-            start_scheduler()
         except Exception as e:
             logger.warning(f"Chain client init failed: {e}")
     else:
-        logger.warning("CONTRACT_ADDRESS not set — running in API-only mode")
+        logger.info("No CONTRACT_ADDRESS — running in simulation mode (in-memory signals)")
+    bootstrap_price_history()
+    start_scheduler()
     yield
     from app.scheduler import stop_scheduler
     stop_scheduler()
@@ -116,17 +116,20 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def health():
     settings = get_settings()
     connected = False
-    try:
-        chain = get_chain()
-        connected = chain.w3.is_connected()
-    except Exception:
-        pass
+    simulation = not bool(settings.contract_address)
+    if not simulation:
+        try:
+            chain = get_chain()
+            connected = chain.w3.is_connected()
+        except Exception:
+            pass
     return {
         "status": "ok",
         "network": settings.network,
-        "rpc_url": settings.json_rpc_url,
-        "contract": settings.contract_address,
+        "rpc_url": settings.json_rpc_url if not simulation else None,
+        "contract": settings.contract_address or None,
         "chain_connected": connected,
+        "simulation_mode": simulation,
     }
 
 
@@ -141,6 +144,17 @@ async def get_signals(offset: int = 0, limit: int = Query(default=100, le=100)):
     data = cached(cache_key)
     if data:
         return data
+    settings = get_settings()
+
+    # Simulation mode
+    if not settings.contract_address:
+        from app.signal_engine import sim_signals, TRACKED_ASSETS
+        total = len(sim_signals)
+        signals = sim_signals[offset:offset + limit]
+        result = {"signals": signals, "total": total}
+        set_cache(cache_key, result)
+        return result
+
     try:
         chain = get_chain()
         total = chain.get_signal_count()
@@ -163,6 +177,15 @@ async def get_signals(offset: int = 0, limit: int = Query(default=100, le=100)):
 
 @app.get("/api/signals/{signal_id}")
 async def get_signal(signal_id: int):
+    settings = get_settings()
+
+    # Simulation mode
+    if not settings.contract_address:
+        from app.signal_engine import sim_signals
+        if signal_id < 0 or signal_id >= len(sim_signals):
+            raise HTTPException(status_code=404, detail="Signal not found")
+        return sim_signals[signal_id]
+
     try:
         chain = get_chain()
         signal = chain.get_signal(signal_id)
@@ -301,15 +324,96 @@ async def delete_asset(symbol: str = Query(...)):
 @app.get("/api/report")
 async def get_report(address: str | None = Query(default=None)):
     """Performance report. Pass ?address=0x... to filter by user's executed signals."""
+    settings = get_settings()
+    from app.signal_engine import signal_metadata
+
+    # Simulation mode — build report from in-memory signals
+    if not settings.contract_address:
+        from app.signal_engine import sim_signals, TRACKED_ASSETS
+        import time as _time
+        signals = [s for s in sim_signals if not address or s.get("creator", "").lower() == address.lower()]
+        resolved = [s for s in signals if s["resolved"]]
+        wins, losses = [], []
+        per_asset: dict[str, dict] = {}
+        balance = 10_000.0
+        balance_history = [{"trade": 0, "balance": balance}]
+        for s in resolved:
+            entry = int(s["entryPrice"])
+            exit_ = int(s["exitPrice"])
+            pct = ((exit_ - entry) / entry * 100) if entry else 0
+            if not s["isBull"]:
+                pct = -pct
+            profit = 100.0 * (pct / 100)
+            balance += profit
+            balance_history.append({"trade": len(balance_history), "balance": round(balance, 2)})
+            (wins if pct > 0 else losses).append({"id": s["id"], "pct": round(pct, 4)})
+            ak = TRACKED_ASSETS.get(s["asset"].lower(), "OTHER").replace("/USD", "")
+            if ak not in per_asset:
+                per_asset[ak] = {"total": 0, "wins": 0, "losses": 0, "totalPnl": 0.0}
+            pa = per_asset[ak]
+            pa["total"] += 1
+            pa["wins" if pct > 0 else "losses"] += 1
+            pa["totalPnl"] = round(pa["totalPnl"] + pct, 4)
+        for pa in per_asset.values():
+            pa["winRate"] = round((pa["wins"] / pa["total"]) * 100, 1) if pa["total"] > 0 else 0
+        all_pcts = [w["pct"] for w in wins] + [l["pct"] for l in losses]
+        return {
+            "generatedAt": _time.time(), "totalSignals": len(signals), "resolvedSignals": len(resolved),
+            "activeSignals": len(signals) - len(resolved), "wins": len(wins), "losses": len(losses),
+            "winRate": round((len(wins) / len(resolved)) * 100, 1) if resolved else 0,
+            "averageRoi": round(sum(all_pcts) / len(all_pcts), 4) if all_pcts else 0,
+            "bestTrade": max(all_pcts) if all_pcts else 0, "worstTrade": min(all_pcts) if all_pcts else 0,
+            "perAsset": per_asset, "creator": address,
+            "simulation": {"startingBalance": 10000, "tradeSize": 100, "finalBalance": round(balance, 2),
+                           "totalReturn": round(balance - 10000, 2),
+                           "totalReturnPct": round(((balance - 10000) / 10000) * 100, 2),
+                           "balanceHistory": balance_history},
+        }
+
     try:
         from app.report import generate_report
         chain = get_chain()
-        from app.signal_engine import signal_metadata
         report = generate_report(chain, signal_metadata, creator=address)
         return report
     except Exception as e:
         error_tracker.track("REPORT_ERROR", str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/signals/execute")
+async def execute_signal_simulated(
+    asset: str = Query(...),
+    isBull: bool = Query(...),
+    confidence: int = Query(...),
+    targetPrice: str = Query(...),
+    entryPrice: str = Query(...),
+    creator: str = Query(default="0x0000000000000000000000000000000000000000"),
+):
+    """Simulated signal execution — stores in memory, returns fake tx hash."""
+    import os
+    from app.signal_engine import sim_signals, signal_metadata, recent_signal_txs, MAX_RECENT_TXS, TRACKED_ASSETS
+    signal_id = len(sim_signals)
+    tx_hash = f"0x{os.urandom(32).hex()}"
+    entry_val = int(entryPrice)
+    target_val = int(targetPrice)
+    price = entry_val / 1e18
+    is_bull = isBull
+    target_price = target_val / 1e18
+    stop_loss = price * 0.985 if is_bull else price * 1.015
+    symbol = TRACKED_ASSETS.get(asset.lower(), "UNKNOWN")
+    sim_signals.append({
+        "id": signal_id, "asset": asset, "isBull": is_bull, "confidence": confidence,
+        "targetPrice": targetPrice, "entryPrice": entryPrice, "exitPrice": "0",
+        "timestamp": int(time.time()), "resolved": False, "creator": creator, "symbol": symbol,
+    })
+    recent_signal_txs.append({
+        "signalId": signal_id, "txHash": tx_hash, "symbol": symbol,
+        "isBull": is_bull, "confidence": confidence, "price": price, "timestamp": time.time(),
+    })
+    if len(recent_signal_txs) > MAX_RECENT_TXS:
+        recent_signal_txs.pop(0)
+    _cache.clear()
+    return {"status": "ok", "signalId": signal_id, "txHash": tx_hash}
 
 
 @app.get("/api/tx-history")

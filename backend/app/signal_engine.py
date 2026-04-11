@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from collections import defaultdict
 import httpx
@@ -319,10 +320,56 @@ def generate_signals(prices: dict[str, float], assets: list[str] | None = None,
 recent_signal_txs: list[dict] = []
 MAX_RECENT_TXS = 100
 
+# In-memory signal store for simulation mode (no chain)
+sim_signals: list[dict] = []
+
 
 def submit_signals(signals: list[dict]) -> list[str]:
-    from app.main import get_chain
+    from app.config import get_settings
     errors = []
+    settings = get_settings()
+
+    # Simulation mode: store in memory when no chain
+    if not settings.contract_address:
+        for s in signals:
+            signal_id = len(sim_signals)
+            tx_hash = f"0x{os.urandom(32).hex()}"
+            sim_signals.append({
+                "id": signal_id,
+                "asset": s["asset"],
+                "isBull": s["isBull"],
+                "confidence": s["confidence"],
+                "targetPrice": str(s["targetPrice"]),
+                "entryPrice": str(s["entryPrice"]),
+                "exitPrice": "0",
+                "timestamp": int(time.time()),
+                "resolved": False,
+                "creator": "0x0000000000000000000000000000000000000000",
+                "symbol": s.get("symbol", ""),
+                "pattern": s.get("pattern", ""),
+                "analysis": s.get("analysis", ""),
+                "timeframe": s.get("timeframe", ""),
+                "stopLoss": str(s.get("stopLoss", 0)),
+            })
+            signal_metadata[signal_id] = {
+                "pattern": s.get("pattern", ""),
+                "analysis": s.get("analysis", ""),
+                "timeframe": s.get("timeframe", ""),
+                "stopLoss": str(s.get("stopLoss", 0)),
+            }
+            recent_signal_txs.append({
+                "signalId": signal_id, "txHash": tx_hash,
+                "symbol": s["symbol"], "isBull": s["isBull"],
+                "confidence": s["confidence"],
+                "price": s["currentPrice"],
+                "timestamp": time.time(),
+            })
+            if len(recent_signal_txs) > MAX_RECENT_TXS:
+                recent_signal_txs.pop(0)
+            logger.info(f"Sim: {s['symbol']} #{signal_id} tx={tx_hash[:16]}...")
+        return errors
+
+    from app.main import get_chain
     try:
         chain = get_chain()
         for s in signals:
@@ -361,6 +408,26 @@ def submit_signals(signals: list[dict]) -> list[str]:
 
 
 def auto_resolve_old_signals() -> list[str]:
+    settings = get_settings()
+    errors = []
+    timeout = settings.signal_resolve_timeout_hours * 3600
+    now = time.time()
+
+    # Simulation mode
+    if not settings.contract_address:
+        prices = fetch_prices()
+        for s in sim_signals:
+            if s["resolved"] or now - s["timestamp"] < timeout:
+                continue
+            symbol = s.get("symbol", TRACKED_ASSETS.get(s["asset"].lower(), ""))
+            current = prices.get(ORACLE_PAIRS.get(symbol, symbol))
+            if current is None:
+                continue
+            s["exitPrice"] = str(int(current * 1e18))
+            s["resolved"] = True
+            logger.info(f"Sim resolved #{s['id']} at ${current:,.2f}")
+        return errors
+
     from app.main import get_chain
     settings = get_settings()
     errors = []
