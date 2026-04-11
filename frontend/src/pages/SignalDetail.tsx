@@ -14,7 +14,7 @@ export default function SignalDetail() {
 
   const staticAsset = signal ? getAssetInfo(signal.asset) : null;
   const dynamicInfo = signal?.symbol ? getAssetIcon(signal.symbol) : null;
-  const asset = dynamicInfo && signal ? { symbol: signal.symbol.replace('/USD', ''), ...dynamicInfo } : staticAsset;
+  const asset = dynamicInfo && signal?.symbol ? { symbol: signal.symbol.replace('/USD', ''), ...dynamicInfo } : staticAsset;
   const { data: priceData } = usePriceHistory(asset?.symbol ? `${asset.symbol}/USD` : '');
   const pnl = signal?.resolved ? formatPnl(signal.entryPrice, signal.exitPrice, signal.isBull) : null;
 

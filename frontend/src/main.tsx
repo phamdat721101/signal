@@ -13,7 +13,7 @@ injectStyles(InterwovenKitStyles);
 
 const wagmiConfig = createConfig({
   chains: [appConfig.chain],
-  transports: { [appConfig.chain.id]: http() },
+  transports: { [appConfig.chain.id]: http() } as any,
   ssr: false,
 });
 

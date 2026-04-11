@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { createChart, type IChartApi, ColorType, CandlestickSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts';
+import { createChart, type IChartApi, ColorType, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts';
 
 interface PricePoint {
   timestamp: number;
