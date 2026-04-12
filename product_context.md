@@ -44,6 +44,7 @@ FastAPI app entry: `app/main.py`. Key modules:
 | `report.py` | Performance report generator. Computes ROI, win/loss, per-asset breakdown, simulated $10k portfolio ($100/trade). Supports `?address=` filter for user-specific reports. |
 | `mpp_middleware.py` | `MPPPaymentVerifier` — verifies signed vouchers against on-chain SessionVault, batches redemptions (flush at 10). Builds 402 responses with `x-payment-required` header. |
 | `agent_client.py` | Reference SDK (`SignalAgentClient`) for AI agents to consume paid signals via voucher signing. |
+| `db.py` | Supabase/Postgres signal storage. Manages `signals` table with CRUD operations. **All signals** (AI-engine generated + external provider) are stored here via dual-write. Primary read source for `/api/signals`. Auto-creates table on startup. |
 
 API endpoints:
 - `GET /api/health` — status + chain connection
@@ -63,6 +64,10 @@ API endpoints:
 - `GET /api/payment/session/:id` — session info
 - `GET /api/payment/pricing` — service tier prices
 - `POST /api/payment/faucet?address=` — mint 1000 iUSD (owner only)
+- `POST /api/provider/signals` — external provider submits a single signal (stored in Supabase)
+- `POST /api/provider/signals/batch` — batch submit signals from provider
+- `GET /api/provider/signals?provider=X` — get signals from a specific provider
+- `GET /api/signals?provider=X` — filter all signals by provider
 
 **Simulation / API-only mode**: When `CONTRACT_ADDRESS` is empty, the backend runs without chain connection. Signals are stored in an in-memory list, generation still works (real prices + EMA/RSI), and `/api/signals/execute` allows simulated execution from the frontend. All chain-connected paths remain intact when `CONTRACT_ADDRESS` is set.
 
@@ -142,9 +147,9 @@ VPS deployment: `https://13.212.80.72` — Caddy (port 443, self-signed TLS) →
 
 ## 7. Environment Variables
 
-Backend (`backend/.env`): `NETWORK`, `PRIVATE_KEY`, `CONTRACT_ADDRESS`, `SESSION_VAULT_ADDRESS`, `MOCK_IUSD_ADDRESS`, `PAYMENT_GATEWAY_ADDRESS`, `ENABLE_PAYMENT_GATING`, `SIGNAL_INTERVAL_MINUTES`, `SIGNAL_RESOLVE_TIMEOUT_HOURS`.
+Backend (`backend/.env`): `NETWORK`, `PRIVATE_KEY`, `CONTRACT_ADDRESS`, `DATABASE_URL`, `SESSION_VAULT_ADDRESS`, `MOCK_IUSD_ADDRESS`, `PAYMENT_GATEWAY_ADDRESS`, `ENABLE_PAYMENT_GATING`, `SIGNAL_INTERVAL_MINUTES`, `SIGNAL_RESOLVE_TIMEOUT_HOURS`.
 
 Frontend (`frontend/.env`): `VITE_NETWORK`, `VITE_CONTRACT_ADDRESS`, `VITE_CHAIN_ID`, `VITE_COSMOS_RPC_URL`, `VITE_REST_URL`, `VITE_BACKEND_URL`, `VITE_MOCK_IUSD_ADDRESS`, `VITE_SESSION_VAULT_ADDRESS`, `VITE_PAYMENT_GATEWAY_ADDRESS`, `VITE_PAYMENT_ENABLED`.
 
 ---
-*Updated 2026-04-11 — Added simulation/API-only mode, dynamic asset registry, configurable timeframes/targets, report module, VPS deployment with Caddy HTTPS.*
+*Updated 2026-04-11 — Added simulation/API-only mode, dynamic asset registry, configurable timeframes/targets, report module, VPS deployment with Caddy HTTPS, external provider API with Supabase storage.*

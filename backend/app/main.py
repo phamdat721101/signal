@@ -51,6 +51,13 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Chain client init failed: {e}")
     else:
         logger.info("No CONTRACT_ADDRESS — running in simulation mode (in-memory signals)")
+    # Init Supabase DB
+    if settings.database_url:
+        from app.db import init_db
+        try:
+            init_db()
+        except Exception as e:
+            logger.warning(f"DB init failed: {e}")
     bootstrap_price_history()
     start_scheduler()
     yield
@@ -139,22 +146,30 @@ async def get_errors():
 
 
 @app.get("/api/signals")
-async def get_signals(offset: int = 0, limit: int = Query(default=100, le=100)):
-    cache_key = f"signals:{offset}:{limit}"
+async def get_signals(offset: int = 0, limit: int = Query(default=100, le=100), provider: str | None = Query(default=None)):
+    cache_key = f"signals:{offset}:{limit}:{provider}"
     data = cached(cache_key)
     if data:
         return data
     settings = get_settings()
 
-    # Simulation mode
+    # Primary: read from Supabase
+    if settings.database_url:
+        from app.db import get_signals as db_get_signals
+        db_signals, db_total = db_get_signals(offset, limit, provider)
+        if db_total > 0 or provider:
+            result = {"signals": db_signals, "total": db_total}
+            set_cache(cache_key, result)
+            return result
+
+    # Fallback: simulation mode
     if not settings.contract_address:
-        from app.signal_engine import sim_signals, TRACKED_ASSETS
-        total = len(sim_signals)
-        signals = sim_signals[offset:offset + limit]
-        result = {"signals": signals, "total": total}
+        from app.signal_engine import sim_signals
+        result = {"signals": sim_signals[offset:offset + limit], "total": len(sim_signals)}
         set_cache(cache_key, result)
         return result
 
+    # Fallback: on-chain
     try:
         chain = get_chain()
         total = chain.get_signal_count()
@@ -176,16 +191,24 @@ async def get_signals(offset: int = 0, limit: int = Query(default=100, le=100)):
 
 
 @app.get("/api/signals/{signal_id}")
-async def get_signal(signal_id: int):
+async def get_signal(signal_id: int, source: str = Query(default="auto")):
     settings = get_settings()
 
-    # Simulation mode
+    # Primary: Supabase
+    if settings.database_url and source in ("db", "auto"):
+        from app.db import get_signal_by_id
+        db_signal = get_signal_by_id(signal_id)
+        if db_signal:
+            return db_signal
+
+    # Fallback: simulation mode
     if not settings.contract_address:
         from app.signal_engine import sim_signals
-        if signal_id < 0 or signal_id >= len(sim_signals):
-            raise HTTPException(status_code=404, detail="Signal not found")
-        return sim_signals[signal_id]
+        if 0 <= signal_id < len(sim_signals):
+            return sim_signals[signal_id]
+        raise HTTPException(status_code=404, detail="Signal not found")
 
+    # Fallback: on-chain
     try:
         chain = get_chain()
         signal = chain.get_signal(signal_id)
@@ -195,7 +218,6 @@ async def get_signal(signal_id: int):
             signal.update(meta)
         elif not signal.get("pattern"):
             signal.update(_fallback_metadata(signal))
-        # Always include symbol for frontend display
         signal.setdefault("symbol", TRACKED_ASSETS.get(signal["asset"].lower(), ""))
         return signal
     except Exception as e:
@@ -414,6 +436,85 @@ async def execute_signal_simulated(
         recent_signal_txs.pop(0)
     _cache.clear()
     return {"status": "ok", "signalId": signal_id, "txHash": tx_hash}
+
+
+# ─── External Provider API ──────────────────────────────────
+
+from pydantic import BaseModel
+
+
+class ProviderSignal(BaseModel):
+    asset: str
+    symbol: str
+    isBull: bool
+    confidence: int
+    targetPrice: str
+    entryPrice: str
+    provider: str
+    pattern: str = ""
+    analysis: str = ""
+    timeframe: str = ""
+    stopLoss: str = "0"
+    creator: str = ""
+
+
+@app.post("/api/provider/signals")
+async def provider_submit_signal(signal: ProviderSignal):
+    """Public API for external providers to submit trading signals. Stored in Supabase."""
+    settings = get_settings()
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="Database not configured")
+    if not signal.provider.strip():
+        raise HTTPException(status_code=400, detail="provider is required")
+    if signal.confidence < 0 or signal.confidence > 100:
+        raise HTTPException(status_code=400, detail="confidence must be 0-100")
+    from app.db import insert_signal
+    row = signal.model_dump()
+    row["timestamp"] = int(time.time())
+    row["resolved"] = False
+    row["exitPrice"] = "0"
+    signal_id = insert_signal(row)
+    if signal_id < 0:
+        raise HTTPException(status_code=500, detail="Failed to store signal")
+    _cache.clear()
+    return {"status": "ok", "signalId": signal_id, "provider": signal.provider}
+
+
+@app.post("/api/provider/signals/batch")
+async def provider_submit_batch(signals: list[ProviderSignal]):
+    """Batch submit signals from external provider."""
+    settings = get_settings()
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="Database not configured")
+    from app.db import insert_signal
+    results = []
+    for s in signals:
+        if not s.provider.strip() or s.confidence < 0 or s.confidence > 100:
+            results.append({"status": "error", "detail": "invalid signal"})
+            continue
+        row = s.model_dump()
+        row["timestamp"] = int(time.time())
+        row["resolved"] = False
+        row["exitPrice"] = "0"
+        sid = insert_signal(row)
+        results.append({"status": "ok", "signalId": sid, "provider": s.provider})
+    _cache.clear()
+    return {"status": "ok", "count": len([r for r in results if r["status"] == "ok"]), "results": results}
+
+
+@app.get("/api/provider/signals")
+async def provider_get_signals(
+    provider: str = Query(...),
+    offset: int = 0,
+    limit: int = Query(default=100, le=100),
+):
+    """Get signals from a specific provider."""
+    settings = get_settings()
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="Database not configured")
+    from app.db import get_signals as db_get_signals
+    signals, total = db_get_signals(offset, limit, provider)
+    return {"signals": signals, "total": total, "provider": provider}
 
 
 @app.get("/api/tx-history")

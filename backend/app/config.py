@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     payment_gateway_address: str = ""
     enable_payment_gating: bool = True
     free_signals_per_day: int = 3
+    # Supabase/Postgres
+    database_url: str = ""
 
     @property
     def json_rpc_url(self) -> str:

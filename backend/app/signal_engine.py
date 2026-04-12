@@ -367,6 +367,12 @@ def submit_signals(signals: list[dict]) -> list[str]:
             if len(recent_signal_txs) > MAX_RECENT_TXS:
                 recent_signal_txs.pop(0)
             logger.info(f"Sim: {s['symbol']} #{signal_id} tx={tx_hash[:16]}...")
+            # Dual-write to Supabase
+            try:
+                from app.db import insert_signal
+                insert_signal({**sim_signals[-1], "provider": "ai-engine"})
+            except Exception as e:
+                logger.warning(f"DB write failed for sim #{signal_id}: {e}")
         return errors
 
     from app.main import get_chain
@@ -394,6 +400,20 @@ def submit_signals(signals: list[dict]) -> list[str]:
                 if len(recent_signal_txs) > MAX_RECENT_TXS:
                     recent_signal_txs.pop(0)
                 logger.info(f"On-chain: {s['symbol']} #{signal_id} tx={tx_hash}")
+                # Dual-write to Supabase
+                try:
+                    from app.db import insert_signal
+                    insert_signal({
+                        "asset": s["asset"], "symbol": s.get("symbol", ""),
+                        "isBull": s["isBull"], "confidence": s["confidence"],
+                        "targetPrice": str(s["targetPrice"]), "entryPrice": str(s["entryPrice"]),
+                        "exitPrice": "0", "timestamp": int(time.time()), "resolved": False,
+                        "creator": chain.account.address, "provider": "ai-engine",
+                        "pattern": s.get("pattern", ""), "analysis": s.get("analysis", ""),
+                        "timeframe": s.get("timeframe", ""), "stopLoss": str(s.get("stopLoss", 0)),
+                    })
+                except Exception as e:
+                    logger.warning(f"DB write failed for on-chain #{signal_id}: {e}")
             except Exception as e:
                 msg = f"Submit {s['symbol']} failed: {e}"
                 logger.error(msg)
@@ -426,6 +446,12 @@ def auto_resolve_old_signals() -> list[str]:
             s["exitPrice"] = str(int(current * 1e18))
             s["resolved"] = True
             logger.info(f"Sim resolved #{s['id']} at ${current:,.2f}")
+            # Resolve in Supabase
+            try:
+                from app.db import resolve_signal as db_resolve, get_unresolved_signals
+                db_resolve(s["id"], s["exitPrice"])
+            except Exception as e:
+                logger.warning(f"DB resolve failed for sim #{s['id']}: {e}")
         return errors
 
     from app.main import get_chain
@@ -462,6 +488,12 @@ def auto_resolve_old_signals() -> list[str]:
                 if len(recent_signal_txs) > MAX_RECENT_TXS:
                     recent_signal_txs.pop(0)
                 logger.info(f"Resolved #{i} at ${current:,.2f} tx={resolve_tx}")
+                # Resolve in Supabase
+                try:
+                    from app.db import resolve_signal as db_resolve
+                    db_resolve(i, str(exit_wei))
+                except Exception as e:
+                    logger.warning(f"DB resolve failed for chain #{i}: {e}")
             except Exception as e:
                 msg = f"Resolve signal #{i} failed: {e}"
                 logger.error(msg)
