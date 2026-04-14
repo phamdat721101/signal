@@ -40,7 +40,7 @@ FastAPI app entry: `app/main.py`. Key modules:
 | `config.py` | Pydantic Settings from `.env`. Switches `local`/`testnet` via `NETWORK`. Properties: `json_rpc_url`, `lcd_url`. |
 | `chain.py` | `ChainClient` — web3.py wrapper with POA middleware. `gasPrice: 0` for gasless local chain. Manages nonce internally. |
 | `signal_engine.py` | Price fetching (Slinky Oracle → CoinGecko OHLC fallback), EMA(5)/EMA(10) crossover + RSI(14) filter, confidence scoring, signal submission, auto-resolution after configurable timeout (default 24h). Tracks recent TX hashes. |
-| `scheduler.py` | APScheduler runs `run_signal_cycle()` every N minutes (default 2). |
+| `scheduler.py` | APScheduler cron-based: `run_signal_cycle()` at 08:00/14:00/20:00 UTC (3 signals/day), `resolve_all_signals()` at 23:55 UTC (EOD performance resolution). |
 | `report.py` | Performance report generator. Computes ROI, win/loss, per-asset breakdown, simulated $10k portfolio ($100/trade). Supports `?address=` filter for user-specific reports. |
 | `mpp_middleware.py` | `MPPPaymentVerifier` — verifies signed vouchers against on-chain SessionVault, batches redemptions (flush at 10). Builds 402 responses with `x-payment-required` header. |
 | `agent_client.py` | Reference SDK (`SignalAgentClient`) for AI agents to consume paid signals via voucher signing. |

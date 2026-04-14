@@ -586,3 +586,59 @@ def get_price_history_for_asset(symbol: str) -> list[dict]:
     oracle_key = ORACLE_PAIRS.get(symbol, symbol)
     history = price_history.get(oracle_key, [])
     return [{"timestamp": h[0], "price": h[1]} for h in history]
+
+
+def resolve_all_signals():
+    """End-of-day: resolve ALL unresolved signals with current market price + log performance."""
+    logger.info("End-of-day resolution started")
+    settings = get_settings()
+    prices = fetch_prices()
+    if not prices:
+        logger.warning("EOD resolve: no prices available")
+        return
+
+    resolved_count = 0
+    wins = 0
+    losses = 0
+
+    # Resolve in Supabase DB
+    if settings.database_url:
+        from app.db import get_unresolved_signals, resolve_signal as db_resolve
+        unresolved = get_unresolved_signals(int(time.time()) + 1)
+        for s in unresolved:
+            symbol = s.get("symbol", TRACKED_ASSETS.get(s["asset"].lower(), ""))
+            oracle_key = ORACLE_PAIRS.get(symbol, symbol)
+            current = prices.get(oracle_key)
+            if current is None:
+                continue
+            exit_wei = str(int(current * 1e18))
+            if db_resolve(s["id"], exit_wei):
+                entry = int(s.get("entryPrice", 0))
+                exit_val = int(current * 1e18)
+                profitable = (exit_val > entry) if s.get("isBull") else (exit_val < entry)
+                wins += 1 if profitable else 0
+                losses += 0 if profitable else 1
+                resolved_count += 1
+
+    # Resolve sim signals
+    if not settings.contract_address:
+        for s in sim_signals:
+            if s["resolved"]:
+                continue
+            symbol = s.get("symbol", TRACKED_ASSETS.get(s["asset"].lower(), ""))
+            oracle_key = ORACLE_PAIRS.get(symbol, symbol)
+            current = prices.get(oracle_key)
+            if current is None:
+                continue
+            s["exitPrice"] = str(int(current * 1e18))
+            s["resolved"] = True
+            entry = int(s["entryPrice"])
+            exit_val = int(current * 1e18)
+            profitable = (exit_val > entry) if s["isBull"] else (exit_val < entry)
+            wins += 1 if profitable else 0
+            losses += 0 if profitable else 1
+            resolved_count += 1
+
+    total = wins + losses
+    win_rate = round((wins / total) * 100, 1) if total > 0 else 0
+    logger.info(f"EOD resolved {resolved_count} signals: {wins}W/{losses}L ({win_rate}% win rate)")
