@@ -538,6 +538,19 @@ async def get_tx_history():
     }
 
 
+@app.post("/api/admin/reset")
+async def admin_reset():
+    """Clear all in-memory signal state."""
+    from app.signal_engine import sim_signals, recent_signal_txs, signal_metadata, price_history
+    sim_signals.clear()
+    recent_signal_txs.clear()
+    signal_metadata.clear()
+    price_history.clear()
+    _cache.clear()
+    logger.info("Admin reset: all in-memory signal data cleared")
+    return {"status": "ok", "message": "All in-memory signal data cleared. Restart recommended."}
+
+
 # ─── Payment-gated endpoints ────────────────────────────────
 
 _payment_verifier = None
