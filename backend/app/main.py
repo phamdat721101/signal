@@ -438,6 +438,170 @@ async def execute_signal_simulated(
     return {"status": "ok", "signalId": signal_id, "txHash": tx_hash}
 
 
+# ─── Card API (Ape or Fade) ──────────────────────────────────
+
+@app.get("/api/cards")
+async def get_cards_feed(offset: int = 0, limit: int = Query(default=20, le=50)):
+    settings = get_settings()
+    if not settings.database_url:
+        return {"cards": [], "total": 0}
+    from app.db import get_cards
+    cards, total = get_cards(offset, limit)
+    return {"cards": cards, "total": total}
+
+
+@app.get("/api/cards/{card_id}")
+async def get_card(card_id: int):
+    settings = get_settings()
+    if not settings.database_url:
+        raise HTTPException(status_code=404, detail="DB not configured")
+    from app.db import get_card_by_id
+    card = get_card_by_id(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    return card
+
+
+@app.post("/api/cards/{card_id}/ape")
+async def ape_card(card_id: int, request: Request):
+    body = await request.json()
+    address = body.get("address", "")
+    from app.db import record_swipe, get_card_by_id
+    card = get_card_by_id(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    swipe_id = record_swipe(card_id, address, "ape")
+    return {"status": "ok", "swipe_id": swipe_id, "action": "ape", "card": card}
+
+
+@app.post("/api/cards/{card_id}/fade")
+async def fade_card(card_id: int, request: Request):
+    body = await request.json()
+    address = body.get("address", "")
+    from app.db import record_swipe
+    swipe_id = record_swipe(card_id, address, "fade")
+    return {"status": "ok", "swipe_id": swipe_id, "action": "fade"}
+
+
+@app.get("/api/cards/user/{address}")
+async def get_user_card_history(address: str, offset: int = 0, limit: int = Query(default=50, le=100)):
+    from app.db import get_user_swipes
+    swipes, total = get_user_swipes(address, offset, limit)
+    return {"swipes": swipes, "total": total}
+
+
+@app.get("/api/leaderboard")
+async def get_leaderboard_data():
+    from app.db import get_leaderboard
+    return {"leaderboard": get_leaderboard()}
+
+
+@app.post("/api/cards/generate")
+async def trigger_card_generation():
+    from app.content_engine import run_card_generation_cycle
+    try:
+        run_card_generation_cycle()
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+# ─── Rewards & Achievements API ──────────────────────────────
+
+@app.get("/api/rewards/{address}")
+async def get_user_rewards(address: str):
+    """Get reward stats for a user from RewardEngine contract."""
+    settings = get_settings()
+    if not settings.reward_engine_address:
+        # Fallback: compute from swipes
+        from app.db import get_user_swipes
+        swipes, total = get_user_swipes(address, 0, 1000)
+        apes = [s for s in swipes if s.get("action") == "ape"]
+        wins = [s for s in apes if (s.get("price_change_24h") or 0) > 0]
+        streak = 0
+        best_streak = 0
+        for s in apes:
+            if (s.get("price_change_24h") or 0) > 0:
+                streak += 1
+                best_streak = max(best_streak, streak)
+            else:
+                streak = 0
+        return {
+            "address": address,
+            "totalTrades": len(apes),
+            "wins": len(wins),
+            "winRate": round(len(wins) / len(apes) * 100, 1) if apes else 0,
+            "currentStreak": streak,
+            "bestStreak": best_streak,
+            "pendingRewards": 0,
+        }
+    try:
+        chain = get_chain()
+        from web3 import Web3
+        import json
+        from pathlib import Path
+        abi = json.loads((Path(__file__).parent / "reward_engine_abi.json").read_text()) if (Path(__file__).parent / "reward_engine_abi.json").exists() else []
+        contract = chain.w3.eth.contract(address=Web3.to_checksum_address(settings.reward_engine_address), abi=abi)
+        stats = contract.functions.getStats(Web3.to_checksum_address(address)).call()
+        return {
+            "address": address, "totalTrades": stats[0], "wins": stats[1],
+            "currentStreak": stats[2], "bestStreak": stats[3], "pendingRewards": str(stats[4]),
+            "winRate": round(stats[1] / stats[0] * 100, 1) if stats[0] > 0 else 0,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/achievements/{address}")
+async def get_user_achievements(address: str):
+    """Get achievement tiers for a user."""
+    from app.db import get_user_swipes
+    swipes, _ = get_user_swipes(address, 0, 1000)
+    apes = [s for s in swipes if s.get("action") == "ape"]
+    wins = [s for s in apes if (s.get("price_change_24h") or 0) > 0]
+    win_count = len(wins)
+    win_rate = round(len(wins) / len(apes) * 10000) if apes else 0  # basis points
+    streak = 0
+    best_streak = 0
+    for s in apes:
+        if (s.get("price_change_24h") or 0) > 0:
+            streak += 1
+            best_streak = max(best_streak, streak)
+        else:
+            streak = 0
+
+    tiers = []
+    if win_count >= 10: tiers.append({"tier": "BRONZE_APE", "emoji": "🥉", "name": "Bronze Ape"})
+    if win_rate >= 5000 and len(apes) >= 50: tiers.append({"tier": "SILVER_APE", "emoji": "🥈", "name": "Silver Ape"})
+    if win_count >= 100: tiers.append({"tier": "GOLD_APE", "emoji": "🥇", "name": "Gold Ape"})
+    if best_streak >= 10: tiers.append({"tier": "DIAMOND_HANDS", "emoji": "💎", "name": "Diamond Hands"})
+    if win_rate >= 8000 and len(apes) >= 100: tiers.append({"tier": "SIGNAL_SAGE", "emoji": "🧠", "name": "Signal Sage"})
+
+    return {
+        "address": address,
+        "stats": {"wins": win_count, "winRate": win_rate, "bestStreak": best_streak, "totalTrades": len(apes)},
+        "earned": tiers,
+        "available": [t for t in ["BRONZE_APE", "SILVER_APE", "GOLD_APE", "DIAMOND_HANDS", "SIGNAL_SAGE"]
+                      if t not in [x["tier"] for x in tiers]],
+    }
+
+
+@app.get("/api/contracts")
+async def get_contract_addresses():
+    """Return all deployed contract addresses."""
+    settings = get_settings()
+    return {
+        "signalRegistry": settings.contract_address or None,
+        "mockIUSD": settings.mock_iusd_address or None,
+        "sessionVault": settings.session_vault_address or None,
+        "paymentGateway": settings.payment_gateway_address or None,
+        "rewardEngine": settings.reward_engine_address or None,
+        "proofOfAlpha": settings.proof_of_alpha_address or None,
+    }
+
+
 # ─── External Provider API ──────────────────────────────────
 
 from pydantic import BaseModel

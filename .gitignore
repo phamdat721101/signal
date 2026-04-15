@@ -9,17 +9,19 @@ bin/
 *.pyo
 *.pyd
 *.egg-info/
+*.so
+*.o
 
-# Foundry build artifacts
+# Foundry
 contracts/out/
 contracts/cache/
 contracts/broadcast/
 
-# Python cache
+# Python
 __pycache__/
 .pytest_cache/
 
-# Frontend build
+# Frontend
 frontend/dist/
 frontend/dist-ssr/
 
@@ -28,18 +30,22 @@ node_modules/
 .venv/
 venv/
 env/
+package-lock.json
 
 # ── Environment & Credentials ──
 .env
 .env.local
 .env.*.local
-*.key
 *.pem
+*.key
 *.p12
 *.pfx
+*.jks
+*.keystore
 credentials.json
+*.secret
 
-# Keep .env.example files
+# Keep examples
 !.env.example
 !backend/.env.example
 !frontend/.env.example
@@ -47,6 +53,7 @@ credentials.json
 
 # ── Logs ──
 *.log
+.logs/
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
@@ -68,13 +75,14 @@ Thumbs.db
 *.sln
 *.local
 
-# ── Tools & Local Configs ──
+# ── Project-specific ──
 tasks/
 .claude/
 coverage/
 .nyc_output/
 /tmp/
-
-# ── Keep submission dir ──
-!.initia/
 backend/reports/
+signal-ui/
+
+# ── Keep submission ──
+!.initia/

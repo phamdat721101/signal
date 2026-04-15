@@ -1,155 +1,222 @@
-# Initia Signal — Product Context & Architecture
+# Ape or Fade — Product Context & Architecture
 
-Primary context document for AI agents and developers working on the `Initia Signal` project.
+Primary context document for AI agents and developers.
 
 ## 1. Product Overview
 
-**Initia Signal** is an AI-powered trading intelligence platform for Initia EVM appchains. It tracks `BTC/USD`, `ETH/USD`, `INIT/USD` prices, generates bullish/bearish signals using EMA crossover + RSI technical analysis, stores them immutably on-chain, and provides a React dashboard for viewing/executing signals with one-click auto-signing.
+**Ape or Fade** (KINETIC) is a mobile-first, TikTok-style token discovery app on Initia EVM appchain. Users swipe through AI-generated token cards — swipe right to **Ape** (buy), swipe left to **Fade** (skip). Cards feature sarcastic/hype summaries from live CoinGecko data, powered by Claude AI (Bedrock) with template fallback.
 
-Every signal is recorded on-chain with entry price, target, confidence, and resolution outcome — solving the "unverifiable trading calls" problem with provable track records. Premium features are token-gated via an MPP (Micropayment Protocol) Session Vault using mock iUSD.
-
----
+Design System: "The Kinetic Terminal" — #0e0e0e void bg, #8eff71 green (Ape), #ff7166 red (Fade), #bf81ff purple (AI). Space Grotesk + Inter fonts.
 
 ## 2. Architecture
 
 ```
-contracts/   → Foundry (Solidity ^0.8.24) — 4 smart contracts
-backend/     → Python 3.11+ FastAPI — AI signal engine + REST API + MPP payment
-frontend/    → Vite + React 19 + TailwindCSS v4 — Trading dashboard
+contracts/   → Foundry Solidity — 4 smart contracts (Initia EVM)
+backend/     → Python FastAPI — AI content engine + signal engine + REST API
+frontend/    → Vite + React 19 + TailwindCSS v4 — Kinetic Terminal UI
+signal-ui/   → 11 HTML mockups — design reference
 ```
 
-### 2.1 Smart Contracts (`/contracts`)
-
-Built with Foundry (`--via-ir` required) + OpenZeppelin. Deployed via `minitiad tx evm create` (local) or `forge script` (testnet).
-
-| Contract | Purpose |
-|----------|---------|
-| `SignalRegistry.sol` | Core data layer. Append-only `Signal[]` array with `createSignal()` (anyone) and `resolveSignal()` (owner only). Events: `SignalCreated`, `SignalResolved`. |
-| `SessionVault.sol` | MPP payment channels. Users deposit iUSD → open time-limited sessions → sign off-chain vouchers → backend redeems in batches. Supports `createSession`, `topUpSession`, `closeSession`, `redeemVoucher`, `redeemBatch`, `settle`. |
-| `MockIUSD.sol` | ERC20 test token with `faucet()` (1000 iUSD, 1h cooldown) and owner `mint`/`batchMint`. Integrates with Initia's ERC20Registry precompile (`0xF2`) — calls `register_erc20()` in constructor and `register_erc20_store(to)` on every mint/transfer via `_update` hook, making the token visible in Initia explorer and Cosmos bank module. |
-| `SignalPaymentGateway.sol` | Access record logging. Tracks which agents accessed which signals and how much they paid. Service tier pricing. |
-
-Signal struct: `{asset, isBull, confidence(0-100), targetPrice, entryPrice, exitPrice, timestamp, resolved, creator}` — all prices in 18-decimal wei.
-
-### 2.2 Backend (`/backend`)
-
-FastAPI app entry: `app/main.py`. Key modules:
+### 2.1 Backend Modules
 
 | Module | Role |
 |--------|------|
-| `config.py` | Pydantic Settings from `.env`. Switches `local`/`testnet` via `NETWORK`. Properties: `json_rpc_url`, `lcd_url`. |
-| `chain.py` | `ChainClient` — web3.py wrapper with POA middleware. `gasPrice: 0` for gasless local chain. Manages nonce internally. |
-| `signal_engine.py` | Price fetching (Slinky Oracle → CoinGecko OHLC fallback), EMA(5)/EMA(10) crossover + RSI(14) filter, confidence scoring, signal submission, auto-resolution after configurable timeout (default 24h). Tracks recent TX hashes. |
-| `scheduler.py` | APScheduler cron-based: `run_signal_cycle()` at 08:00/14:00/20:00 UTC (3 signals/day), `resolve_all_signals()` at 23:55 UTC (EOD performance resolution). |
-| `report.py` | Performance report generator. Computes ROI, win/loss, per-asset breakdown, simulated $10k portfolio ($100/trade). Supports `?address=` filter for user-specific reports. |
-| `mpp_middleware.py` | `MPPPaymentVerifier` — verifies signed vouchers against on-chain SessionVault, batches redemptions (flush at 10). Builds 402 responses with `x-payment-required` header. |
-| `agent_client.py` | Reference SDK (`SignalAgentClient`) for AI agents to consume paid signals via voucher signing. |
-| `db.py` | Supabase/Postgres signal storage. Manages `signals` table with CRUD operations. **All signals** (AI-engine generated + external provider) are stored here via dual-write. Primary read source for `/api/signals`. Auto-creates table on startup. |
+| `content_engine.py` | CoinGecko trending → Claude (Bedrock) with template fallback → card JSON → Supabase |
+| `signal_engine.py` | Legacy EMA/RSI signal generation + CoinGecko/Oracle prices |
+| `db.py` | 3 tables: `cards`, `swipes`, `signals`. Full CRUD. |
+| `scheduler.py` | Card gen every 5min + signal cycle 3x/day + EOD resolve |
+| `config.py` | Pydantic Settings. AWS Bedrock + Initia chain + Supabase config |
+| `chain.py` | web3.py wrapper for Initia EVM |
+| `main.py` | FastAPI app with card API + legacy signal API |
 
-API endpoints:
-- `GET /api/health` — status + chain connection
-- `GET /api/signals` — paginated signals (free, reads from contract or in-memory store)
-- `GET /api/signals/:id` — single signal
-- `POST /api/signals/generate` — trigger signal cycle (payment-gated when enabled). Params: `?assets=BTC/USD&timeframe=30m&target_pct=1.5`
-- `POST /api/signals/execute` — simulated signal execution (in-memory store, returns fake tx hash). For API-only mode.
-- `GET /api/signal-options` — available token pairs, timeframes, default target %
-- `POST /api/assets?symbol=SOL/USD` — add custom token pair to tracking
-- `DELETE /api/assets?symbol=SOL/USD` — remove token pair from tracking
-- `GET /api/prices` — current market prices
-- `GET /api/prices/:symbol/history` — price history for charting
-- `GET /api/report` — performance report with simulated portfolio. `?address=0x...` for user-specific.
-- `GET /api/tx-history` — AI signal TX hashes with explorer URLs
-- `GET /api/signals/premium` — all signals (payment required)
-- `GET /api/signals/single/:id` — single signal (payment required)
-- `GET /api/payment/session/:id` — session info
-- `GET /api/payment/pricing` — service tier prices
-- `POST /api/payment/faucet?address=` — mint 1000 iUSD (owner only)
-- `POST /api/provider/signals` — external provider submits a single signal (stored in Supabase)
-- `POST /api/provider/signals/batch` — batch submit signals from provider
-- `GET /api/provider/signals?provider=X` — get signals from a specific provider
-- `GET /api/signals?provider=X` — filter all signals by provider
+### 2.2 Content Engine Strategy
+1. **Primary**: Claude AI via AWS Bedrock — sarcastic, personalized card content
+2. **Fallback**: Template-based generation — uses CoinGecko data to create cards with randomized sarcastic hooks/roasts when Bedrock is unavailable (IAM permissions, quota, etc.)
+3. Cards always get created — the feed never runs dry
 
-**Simulation / API-only mode**: When `CONTRACT_ADDRESS` is empty, the backend runs without chain connection. Signals are stored in an in-memory list, generation still works (real prices + EMA/RSI), and `/api/signals/execute` allows simulated execution from the frontend. All chain-connected paths remain intact when `CONTRACT_ADDRESS` is set.
+### 2.3 API Endpoints
 
-### 2.3 Frontend (`/frontend`)
+**Card API**: `GET /api/cards` · `GET /api/cards/{id}` · `POST /api/cards/{id}/ape` · `POST /api/cards/{id}/fade` · `GET /api/cards/user/{address}` · `GET /api/leaderboard` · `POST /api/cards/generate`
 
-React 19 SPA with Vite, TailwindCSS v4, react-router-dom.
+**Legacy**: `/api/signals` · `/api/prices` · `/api/report` · `/api/health`
 
-| Dependency | Usage |
-|------------|-------|
-| `@initia/interwovenkit-react` | Wallet connect, social login, bridge, auto-signing ghost wallet |
-| `wagmi` + `viem` | EVM chain config, contract reads via `publicClient.readContract()` |
-| `@tanstack/react-query` | Data fetching with 15s stale/refetch |
-| `lightweight-charts` | Candlestick charts with Entry/TP/SL price lines |
+### 2.4 Frontend
 
-Pages: Dashboard, SignalFeed, SignalDetail, Portfolio, Report.
+**Pages**: Feed (`/`), Portfolio (`/portfolio`), Leaderboard (`/leaderboard`), History (`/history`), TradeSuccess (`/trade-success/:id`)
 
-Hooks:
-- `useSignals.ts` — fetches from backend REST API first, falls back to viem `readContract()` if backend unavailable
-- `usePrices.ts` — fetches prices from backend REST API. Also exports `useReport()` for performance reports.
-- `useSignalActions.ts` — executes `createSignal` via InterwovenKit `requestTxBlock` with `/minievm.evm.v1.MsgCall`. Falls back to `POST /api/signals/execute` for simulated execution when chain unavailable.
-- `useSession.ts` — MPP flow: faucet claim → approve iUSD → deposit to SessionVault. Multi-step TX progress UI.
-- `useIUSDBalance.ts` — Reads wallet iUSD balance (`balanceOf`) + active session remaining balance from SessionVault. Auto-refreshes 15s. Used in Layout header and Dashboard MPP section.
+**Components**: Layout (KINETIC header + bottom nav), TokenCard (swipe card)
 
-Config (`config/index.ts`): viem chain definitions (local chain ID 1, testnet 7891), InterwovenKit `customChain`, dynamic asset icons for 17+ pairs, price formatting, explorer URL builders.
+**Hooks**: useCards, useSignals, useSignalActions, usePrices, useIUSDBalance, useSession
 
-Dashboard features: Signal configuration UI with token pair picker (add/remove custom pairs), timeframe selector (`15m`/`30m`/`1h`/`4h`/`1d`), target P/L % input, MPP payment session management.
+## 3. Database (Supabase/Postgres)
 
-Auto-signing: `enableAutoSign: { [chainId]: ['/minievm.evm.v1.MsgCall'] }` — users approve once, subsequent txs sign automatically.
+**cards**: id, token_symbol, token_name, chain, hook, roast, metrics JSONB, image_url, price, price_change_24h, volume_24h, market_cap, coingecko_id, status, created_at
+
+**swipes**: id, card_id, user_address, action ('ape'|'fade'), created_at
+
+**signals**: id, asset, symbol, is_bull, confidence, target/entry/exit_price, timestamp, resolved, creator, provider, pattern, analysis
+
+## 4. Deployment
+
+| Service | URL | Port |
+|---------|-----|------|
+| VPS Backend API | `https://13-212-80-72.sslip.io/signal-api` | 8001 (Caddy proxy) |
+| Local Backend | `http://localhost:8000` | 8000 |
+| Local Frontend | `http://localhost:5173` | 5173 |
+
+**VPS**: Lightsail instance. Caddy reverse proxy at `/signal-api/*` → `localhost:8001`. Backend at `~/signal/backend/`. SSH: `ssh -i nim-claw.pem bitnami@13.212.80.72` (key at `/Users/phamdat/arbitrum/arbi-agent/nim-claw.pem`).
+
+**Frontend .env**: `VITE_BACKEND_URL=https://13-212-80-72.sslip.io/signal-api`
+
+## 5. Environment Variables
+
+**Backend** (`backend/.env`): NETWORK, PRIVATE_KEY, CONTRACT_ADDRESS, DATABASE_URL, AWS_REGION, AWS_BEDROCK_MODEL_ID, SESSION_VAULT_ADDRESS, MOCK_IUSD_ADDRESS, PAYMENT_GATEWAY_ADDRESS
+
+**Frontend** (`frontend/.env`): VITE_NETWORK, VITE_CONTRACT_ADDRESS, VITE_CHAIN_ID, VITE_BACKEND_URL, VITE_COSMOS_RPC_URL, VITE_REST_URL
+
+---
+*Updated 2026-04-15 — VPS deployed with fallback content engine. Cards generating via template when Bedrock unavailable.*
 
 ---
 
-## 3. Data Flow
+## 8. On-Chain Feature Upgrade (from Notion "on-chain feature" sub-page)
 
-1. **Signal reads**: Frontend → viem `readContract()` → EVM RPC → SignalRegistry (direct on-chain)
-2. **Prices & leaderboard**: Frontend → Backend REST → Oracle/CoinGecko + contract
-3. **AI signal creation**: Scheduler → `signal_engine` → `ChainClient.create_signal()` → contract
-4. **User signal execution**: Frontend → InterwovenKit `requestTxBlock` (MsgCall) → contract
-5. **Signal resolution**: Backend only (`onlyOwner`) — fetches current price, calls `resolveSignal()`
-6. **MPP payment**: User deposits iUSD → signs voucher off-chain → backend verifies + redeems on-chain in batches
+### Part 1 — Target Smart Contract Architecture (4 contracts)
 
-## 4. Signal Algorithm
+| Contract | Purpose | Status |
+|----------|---------|--------|
+| `ApeVault.sol` | USDC custody, ZK-verified trade execution, 24h withdrawal timelock, per-user sub-accounts | **NEW** — replaces simple pool |
+| `SignalRegistry.sol` | On-chain signal mapping with `TokenSignal` struct (token, sentiment, confidence, dataHash→IPFS, resolved, wasCorrect). AI agent publishes BEFORE surfacing card. Oracle resolves 24h later. | **UPGRADE** — existing contract needs new struct |
+| `RewardEngine.sol` | Streak detection, win rebates (3% USDC), weekly prize pool. Listens to ApeVault + SignalRegistry events. Rewards tracked by `proofHash` not wallet (privacy). | **NEW** |
+| `ProofOfAlpha.sol` | Soulbound ERC-5192 achievement NFTs. ZK-verified stats. Tiers: Bronze/Silver/Gold/Diamond/Signal Sage. Non-transferable. | **NEW** |
+| `AccessController.sol` | Role management: AI Agent, Relayer, Oracle, Keeper | **NEW** |
 
-| Step | Detail |
-|------|--------|
-| Price fetch | Slinky Oracle (`/slinky/oracle/v1/prices` via LCD), fallback to CoinGecko |
-| Bootstrap | CoinGecko OHLC (last 20 candles, configurable timeframe) on startup |
-| Direction | EMA(5) crosses above EMA(10) = bullish; below = bearish. Also triggers on strong trend (>0.1% divergence) |
-| Filter | RSI(14) > 75 blocks bullish signals; RSI < 25 blocks bearish |
-| Confidence | `25 + EMA_strength(0-40) + RSI_distance(0-30)`, clamped to 50-95% |
-| Target | Entry ± configurable % (default 1.5%, range 0.1-20%), 1:1 risk/reward |
-| Resolution | Auto after `SIGNAL_RESOLVE_TIMEOUT_HOURS` (default 24h) with actual market price |
-| Timeframes | `15m` (1d data), `30m` (1d), `1h` (7d), `4h` (30d), `1d` (90d) |
-| Tracked pairs | Default: BTC/USD, ETH/USD, INIT/USD. Extensible via API with 17 supported CoinGecko pairs (SOL, AVAX, DOGE, LINK, DOT, ATOM, TIA, SEI, SUI, APT, ARB, OP, INJ, MATIC) |
+### Part 2 — x402 Agent Payment Architecture (5 flows)
 
-## 5. Deployment
+| Flow | What | Price | Pattern |
+|------|------|-------|---------|
+| A: Per-Card Fee | $0.05 USDC per card served | Micro | x402 per-request, invisible background payment |
+| B: Deep Analysis | $0.25 USDC per AI drill-down | Micro | x402 per-request on `POST /analyze` |
+| C: Premium Tier | $9.99 USDC/month subscription | Subscription | x402 payment → JWT (30-day pass) → skip micro-charges |
+| D: Agent Deposit | $X USDC to fund AI agent wallet | Agent-to-agent | User deposits "Agent Fuel" → AI agent auto-pays for premium data sources |
+| E: Signal API | $0.10 USDC per signal query | B2B | Third-party bots/apps pay for signal history |
 
-| Method | Command |
-|--------|---------|
-| Local appchain | `weave init` (EVM + oracle) → `deploy.sh` (minitiad tx evm create) |
-| Testnet | `deploy-testnet.sh` (forge script to Initia testnet RPC) |
-| Full stack | `start.sh` — backend :8000 + frontend :5173 |
-| VPS (API-only) | Backend on VPS with Caddy HTTPS reverse proxy. `CONTRACT_ADDRESS=""` for simulation mode. |
+**Key concepts**:
+- x402 V2 on Base mainnet (production-ready, 75M+ transactions)
+- `@x402/express` middleware wraps endpoints
+- `HTTPFacilitatorClient` → `https://x402.org/facilitator`
+- Premium JWT: payment IS the authorization (no subscription DB needed)
+- Agent Fuel: separate balance from trading pool, AI agent has autonomous wallet (CDP AgentKit + x402 client)
+- If Agent Fuel = $0, falls back to free-tier data sources
 
-Local endpoints: EVM RPC `:8545`, Cosmos RPC `:26657`, LCD `:1317`, Indexer `:8080`.
+### Full Integrated Flow (Target)
+```
+User opens app → wallet checks: Trading Pool ($85), Agent Fuel ($6.40), Premium (22d left)
+→ Feed loads (no charge, Premium JWT) → AI agent polls DexScreener Premium (auto-pays $0.001)
+→ AI publishes signal on-chain (SignalRegistry) → generates card → Supabase
+→ User swipes right ($50 trade) → ZK Proof → Relayer → 1inch swap → ApeVault emits TradeExecuted
+→ 24h later: Oracle resolves signal → RewardEngine triggers rebate
+→ Win streak hit 5 → ProofOfAlpha mints Silver Ape badge (Soulbound)
+```
 
-VPS deployment: `https://13.212.80.72` — Caddy (port 443, self-signed TLS) → uvicorn (127.0.0.1:8000). Backend runs in simulation mode (no chain, in-memory signals).
+### Implementation Modules (from Notion)
+1. **Smart Contract Deployment**: ApeVault, SignalRegistry, RewardEngine, ProofOfAlpha, AccessController (Hardhat + OpenZeppelin + Chainlink + Base Sepolia)
+2. **x402 Payment Middleware**: @x402/express wrapping /feed, /analyze, /signals + Premium JWT issuer + Agent Fuel sub-account + CDP AgentKit
+3. **Signal Oracle Integration**: Chainlink Automation (24h resolution) + IPFS uploader + accuracy dashboard
+4. **Reward & NFT Claim Flow**: Event listener → RewardEngine → ZK achievement circuit (Noir) → Soulbound NFT mint
 
-## 6. Key Conventions
+### What Exists vs What's Needed
 
-- Prices: uint256 in 18-decimal wei on-chain; Oracle uses 8-decimal (converted in signal_engine)
-- Asset addresses: `0x...0001` (BTC), `0x...0002` (ETH), `0x...0003` (INIT) — placeholder addresses. Custom pairs use hash-based addresses via `_symbol_to_address()`.
-- Backend settings: `pydantic-settings` with `@lru_cache` singleton
-- Simulation mode: When `CONTRACT_ADDRESS` is empty, signals stored in-memory, no chain TX. `POST /api/signals/execute` for frontend simulated signing.
-- Foundry: `--via-ir` required, remapping `@openzeppelin/contracts/` → `lib/openzeppelin-contracts/contracts/`
-- ABI sync: `backend/app/abi.json` ↔ `frontend/src/abi/SignalRegistry.ts` must match
-- Gasless: local chain uses `gasPrice: 0`
-
-## 7. Environment Variables
-
-Backend (`backend/.env`): `NETWORK`, `PRIVATE_KEY`, `CONTRACT_ADDRESS`, `DATABASE_URL`, `SESSION_VAULT_ADDRESS`, `MOCK_IUSD_ADDRESS`, `PAYMENT_GATEWAY_ADDRESS`, `ENABLE_PAYMENT_GATING`, `SIGNAL_INTERVAL_MINUTES`, `SIGNAL_RESOLVE_TIMEOUT_HOURS`.
-
-Frontend (`frontend/.env`): `VITE_NETWORK`, `VITE_CONTRACT_ADDRESS`, `VITE_CHAIN_ID`, `VITE_COSMOS_RPC_URL`, `VITE_REST_URL`, `VITE_BACKEND_URL`, `VITE_MOCK_IUSD_ADDRESS`, `VITE_SESSION_VAULT_ADDRESS`, `VITE_PAYMENT_GATEWAY_ADDRESS`, `VITE_PAYMENT_ENABLED`.
+| Feature | Current State | Notion Target |
+|---------|--------------|---------------|
+| Signal on-chain | ✅ SignalRegistry.sol (basic) | Upgrade: add TokenSignal struct, dataHash→IPFS, wasCorrect |
+| Payment sessions | ✅ SessionVault.sol (MPP) | Replace with x402 V2 + ApeVault.sol |
+| Rewards | ❌ None | NEW: RewardEngine.sol (streaks, rebates, weekly pool) |
+| Achievement NFTs | ❌ None | NEW: ProofOfAlpha.sol (Soulbound ERC-5192) |
+| Agent payments | ✅ agent_client.py (basic vouchers) | Upgrade: CDP AgentKit + x402 autonomous wallet |
+| Micro-payments | ✅ MPP middleware | Replace with @x402/express middleware |
+| Premium tier | ❌ None | NEW: x402 subscription → JWT pass |
 
 ---
-*Updated 2026-04-11 — Added simulation/API-only mode, dynamic asset registry, configurable timeframes/targets, report module, VPS deployment with Caddy HTTPS, external provider API with Supabase storage.*
+*Updated 2026-04-15 — Added on-chain feature upgrade spec and x402 agent payment architecture from Notion.*
+
+---
+
+## 9. Card Generation Pipeline (from Notion "card generate" sub-page)
+
+### Overview
+5-stage multi-agent pipeline. Each stage is a specialized agent with one job. Runs every 5 minutes, processes ~20 tokens in parallel. If any stage fails, card ships with fallback.
+
+### Pipeline Stages
+
+```
+[Stage 1] DATA HARVESTER → Raw on-chain JSON (DexScreener + GeckoTerminal + RPC)
+[Stage 2] SIGNAL ANALYZER → Scored anomaly signals (volume, whale, liquidity, dev)
+[Stage 3] NARRATIVE WRITER (LLM) → Structured card JSON (hook, roast, verdict, metrics)
+[Stage 4] VISUAL GENERATOR (Image AI) → Token card image (meme aesthetic)
+[Stage 5] CARD ASSEMBLER → Final card → on-chain signal anchor → Supabase → Feed API
+```
+
+### Stage 1 — Data Harvester
+3 parallel data sources: DexScreener API (price, volume, txCount, liquidity), GeckoTerminal (holders, top10 concentration, whale activity), Base RPC (contract age, dev wallet, supply).
+
+### Stage 2 — Signal Analyzer (pure logic, no LLM)
+11 signal types detected: VOLUME_SPIKE, WHALE_ENTRY, LIQUIDITY_LOCK, LIQUIDITY_RUG_RISK, DEV_WALLET_LOCKED, DEV_WALLET_ACTIVE, NEW_TOKEN, HOLDER_CONCENTRATION, BUY_SELL_IMBALANCE, PRICE_MOMENTUM, MCAP_TO_VOLUME_RATIO.
+
+Each signal has: type, severity (1-5), direction (bullish/bearish/neutral), rawFinding, emoji.
+
+Risk score: base 50, +5 per bearish severity, -3 per bullish severity, clamped 0-100.
+
+### Stage 3 — Narrative Writer (LLM)
+Uses structured outputs (guaranteed valid JSON). Output schema:
+- `hook`: 1 punchy sentence, max 12 words (scroll-stopper)
+- `roast`: 1-2 sarcastic sentences (the meat)
+- `verdict`: "APE" | "FADE" | "DYOR"
+- `verdictReason`: 1 sentence explaining verdict
+- `metrics`: exactly 3 MetricBullet objects (emoji, label, value, sentiment)
+- `riskLevel`: "DEGEN" | "MID" | "SAFE"
+- `imagePrompt`: visual generation prompt
+- `notificationHook`: push notification if token pumps (max 15 words, should sting)
+
+Tone: Gen-Z, sharp, irreverent. Like a hedge fund analyst who grew up on 4chan.
+
+Key principle: **LLM's job is NOT analysis** — that's Stage 2's job. LLM only makes raw signals *entertaining*.
+
+### Stage 4 — Visual Generator
+DALL·E 3 or Stable Diffusion XL. 9:16 vertical (mobile card format). Color coding: APE=green neon, FADE=red warning, DYOR=amber fog. Risk modifiers: DEGEN=chaotic/explosive, MID=urban street art, SAFE=clean/minimal. No text in images. Pin to IPFS.
+
+### Stage 5 — Card Assembler
+1. Pin raw data to IPFS (for on-chain anchoring)
+2. Publish signal to SignalRegistry.sol (on-chain timestamped BEFORE users see card)
+3. Assemble final TokenCard object
+4. Store in Supabase
+5. Cards expire after 4 hours
+
+### Quality Gates
+Before entering feed: hook ≤80 chars, exactly 3 metrics, valid verdict, image stored on IPFS, on-chain anchor exists, liquidity ≥$5K, market cap ≤$50M.
+
+### Performance Targets
+- Stage 1 (Harvest): <500ms per token
+- Stage 2 (Analyze): <50ms (pure logic)
+- Stage 3 (Narrative): <2s (LLM call)
+- Stage 4 (Image): <8s (parallel with Stage 3)
+- Stage 5 (Assemble): <1s
+- Total per card: <3s (Stages 3+4 parallel)
+- Pipeline cycle: 20 cards in <30s
+
+### Current Implementation vs Target
+
+| Feature | Current State | Notion Target |
+|---------|--------------|---------------|
+| Data source | CoinGecko markets API | DexScreener + GeckoTerminal + Base RPC (3 parallel) |
+| Signal analysis | None (raw price data only) | 11 signal types with severity scoring |
+| LLM | Claude (Bedrock) with template fallback | Structured outputs (guaranteed JSON schema) |
+| Card schema | Basic (hook, roast, metrics) | Full TokenCard with verdict, riskLevel, notificationHook |
+| Image generation | CoinGecko token logo (fallback) | DALL·E 3 / SDXL with verdict-based color coding |
+| On-chain anchoring | Not yet | SignalRegistry.publishSignal() with dataHash→IPFS |
+| Quality gates | None | 7 automated checks before feed entry |
+| Card expiry | None | 4-hour TTL |
+| Parallelism | Sequential | 20 concurrent tokens, Stages 3+4 parallel |
+
+---
+*Updated 2026-04-15 — Added card generation pipeline spec from Notion "card generate" sub-page.*

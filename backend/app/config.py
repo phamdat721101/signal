@@ -16,10 +16,15 @@ class Settings(BaseSettings):
     session_vault_address: str = ""
     mock_iusd_address: str = ""
     payment_gateway_address: str = ""
+    reward_engine_address: str = ""
+    proof_of_alpha_address: str = ""
     enable_payment_gating: bool = True
     free_signals_per_day: int = 3
     # Supabase/Postgres
     database_url: str = ""
+    # Claude AI (Bedrock)
+    aws_region: str = "us-east-1"
+    aws_bedrock_model_id: str = "anthropic.claude-3-haiku-20240307-v1:0"
 
     @property
     def json_rpc_url(self) -> str:

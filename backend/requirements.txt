@@ -7,4 +7,5 @@ python-dotenv==1.0.1
 pydantic==2.10.0
 pydantic-settings==2.6.0
 eth-abi
-psycopg2-binary==2.9.9
+psycopg2-binary>=2.9.9
+boto3

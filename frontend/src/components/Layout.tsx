@@ -1,99 +1,63 @@
 import { NavLink } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { useInterwovenKit } from '@initia/interwovenkit-react';
-import { truncateAddress, config } from '../config';
-
-import { useIUSDBalance } from '../hooks/useIUSDBalance';
 
 const navItems = [
-  { to: '/', label: 'Dashboard', icon: 'H' },
-  { to: '/signals', label: 'Signals', icon: 'S' },
-  { to: '/portfolio', label: 'Portfolio', icon: 'P' },
-  { to: '/report', label: 'Report', icon: 'R' },
+  { to: '/', icon: 'bolt', label: 'Feed', fill: true },
+  { to: '/leaderboard', icon: 'leaderboard', label: 'Ranks' },
+  { to: '/portfolio', icon: 'account_balance_wallet', label: 'Portfolio' },
+  { to: '/history', icon: 'receipt_long', label: 'History' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
-  const { initiaAddress, openConnect, openWallet, openBridge } = useInterwovenKit();
-  const { walletFormatted } = useIUSDBalance();
+  const { initiaAddress, openConnect, openWallet } = useInterwovenKit();
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-screen flex flex-col bg-[#0e0e0e] overflow-hidden">
       {/* Header */}
-      <header className="border-b border-[var(--color-border)] px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-xl font-bold text-white">Initia Signal</span>
-          <span className="text-xs px-2 py-0.5 rounded bg-[var(--color-accent)] text-white">AI</span>
+      <header className="flex justify-between items-center px-5 py-3 shrink-0 z-50">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-full bg-[#262626] flex items-center justify-center text-[#8eff71] font-bold text-sm">
+            {initiaAddress ? initiaAddress.slice(-2).toUpperCase() : '??'}
+          </div>
+          <h1 className="text-2xl font-black text-[#8eff71] italic font-headline tracking-tight">KINETIC</h1>
         </div>
-        <nav className="hidden md:flex items-center gap-1">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }) =>
-                `px-4 py-2 rounded-lg text-sm transition-colors ${
-                  isActive
-                    ? 'bg-[var(--color-surface)] text-white'
-                    : 'text-[var(--color-muted)] hover:text-white'
-                }`
-              }
-            >
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => openBridge({ srcChainId: 'initiation-2', srcDenom: 'uinit' })}
-            className="px-3 py-1.5 text-xs bg-green-500/10 border border-green-500/30 text-green-400 rounded-lg hover:bg-green-500/20 transition-colors"
-          >
-            Bridge
+        {initiaAddress ? (
+          <button onClick={openWallet}
+            className="flex items-center bg-[#131313] px-3 py-1.5 rounded-lg border border-[#494847]/15">
+            <span className="text-[#8eff71] font-label font-bold text-sm tracking-tight">
+              {initiaAddress.slice(0, 6)}...{initiaAddress.slice(-4)}
+            </span>
           </button>
-          {initiaAddress ? (
-            <>
-              {config.paymentEnabled && (
-                <span className="text-xs text-amber-400 font-mono">
-                  💰 {Number(walletFormatted).toFixed(2)} iUSD
-                </span>
-              )}
-              <button
-                onClick={openWallet}
-                className="px-3 py-1.5 text-xs bg-[var(--color-surface)] border border-[var(--color-border)] text-white rounded-lg font-mono"
-              >
-                {truncateAddress(initiaAddress)}
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={openConnect}
-              className="px-3 py-1.5 text-xs bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity"
-            >
-              Connect Wallet
-            </button>
-          )}
-        </div>
+        ) : (
+          <button onClick={openConnect}
+            className="ape-gradient px-4 py-1.5 rounded-lg text-[#0b5800] font-headline font-bold text-sm">
+            Connect
+          </button>
+        )}
       </header>
 
       {/* Main */}
-      <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
+      <main className="flex-1 overflow-y-auto overflow-x-hidden">
         {children}
       </main>
 
-      {/* Mobile Nav */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-[var(--color-surface)] border-t border-[var(--color-border)] flex">
+      {/* Bottom Nav */}
+      <nav className="shrink-0 flex justify-around items-center px-4 pb-6 pt-2 bg-[#0e0e0e]/80 backdrop-blur-md z-50">
         {navItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.to === '/'}
+          <NavLink key={item.to} to={item.to} end={item.to === '/'}
             className={({ isActive }) =>
-              `flex-1 py-3 text-center text-xs transition-colors ${
-                isActive ? 'text-white' : 'text-[var(--color-muted)]'
+              `flex flex-col items-center justify-center transition-colors ${
+                isActive ? 'text-[#8eff71] scale-110' : 'text-[#adaaaa] opacity-50 hover:text-[#bf81ff]'
               }`
-            }
-          >
-            <div className="text-lg">{item.icon}</div>
-            {item.label}
+            }>
+            <span className="material-symbols-outlined"
+              style={item.fill ? { fontVariationSettings: "'FILL' 1" } : undefined}>
+              {item.icon}
+            </span>
+            <span className="font-body font-semibold text-[10px] uppercase tracking-widest mt-1">
+              {item.label}
+            </span>
           </NavLink>
         ))}
       </nav>
