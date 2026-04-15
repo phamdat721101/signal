@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@initia/icons-react": "^2.1.0",
     "@initia/interwovenkit-react": "^2.5.1",
     "@tanstack/react-query": "^5.96.1",
     "lightweight-charts": "^5.1.0",

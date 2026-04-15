@@ -2,7 +2,13 @@ import { useQuery } from '@tanstack/react-query';
 import { createPublicClient, http } from 'viem';
 import { config } from '../config';
 import { SIGNAL_REGISTRY_ABI } from '../abi/SignalRegistry';
-import type { Signal } from '../components/SignalCard';
+export interface Signal {
+  id: number; asset: string; isBull: boolean; confidence: number;
+  targetPrice: string; entryPrice: string; exitPrice: string;
+  timestamp: number; resolved: boolean; creator: string;
+  pattern?: string; analysis?: string; timeframe?: string;
+  stopLoss?: string; symbol?: string;
+}
 
 const client = createPublicClient({
   chain: config.chain,
