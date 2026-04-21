@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import type { ReactNode } from 'react';
-import { useInterwovenKit } from '@initia/interwovenkit-react';
+import { usePrivy } from '@privy-io/react-auth';
 
 const navItems = [
   { to: '/', icon: 'bolt', label: 'Feed', fill: true },
@@ -10,27 +10,26 @@ const navItems = [
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
-  const { initiaAddress, openConnect, openWallet } = useInterwovenKit();
+  const { user, login, logout, authenticated } = usePrivy();
+  const walletAddress = user?.wallet?.address || "";
 
   return (
     <div className="h-screen flex flex-col bg-[#0e0e0e] overflow-hidden">
       {/* Header */}
       <header className="flex justify-between items-center px-5 py-3 shrink-0 z-50">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-[#262626] flex items-center justify-center text-[#8eff71] font-bold text-sm">
-            {initiaAddress ? initiaAddress.slice(-2).toUpperCase() : '??'}
-          </div>
+          <img src="/app.png" alt="KINETIC" className="w-8 h-8 rounded-full object-cover" />
           <h1 className="text-2xl font-black text-[#8eff71] italic font-headline tracking-tight">KINETIC</h1>
         </div>
-        {initiaAddress ? (
-          <button onClick={openWallet}
+        {authenticated && walletAddress ? (
+          <button onClick={logout}
             className="flex items-center bg-[#131313] px-3 py-1.5 rounded-lg border border-[#494847]/15">
             <span className="text-[#8eff71] font-label font-bold text-sm tracking-tight">
-              {initiaAddress.slice(0, 6)}...{initiaAddress.slice(-4)}
+              {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
             </span>
           </button>
         ) : (
-          <button onClick={openConnect}
+          <button onClick={login}
             className="ape-gradient px-4 py-1.5 rounded-lg text-[#0b5800] font-headline font-bold text-sm">
             Connect
           </button>

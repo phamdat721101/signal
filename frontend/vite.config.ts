@@ -8,6 +8,6 @@ export default defineConfig({
     global: 'globalThis',
   },
   resolve: {
-    dedupe: ['react', 'react-dom', 'wagmi', '@tanstack/react-query', 'viem'],
+    dedupe: ['react', 'react-dom', '@tanstack/react-query', 'viem'],
   },
 })

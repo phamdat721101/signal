@@ -12,6 +12,11 @@
   "dependencies": {
     "@initia/icons-react": "^2.1.0",
     "@initia/interwovenkit-react": "^2.5.1",
+    "@privy-io/react-auth": "^3.22.1",
+    "@solana-program/memo": "^0.11.0",
+    "@solana-program/system": "^0.12.0",
+    "@solana-program/token": "^0.13.0",
+    "@solana/kit": "^6.8.0",
     "@tanstack/react-query": "^5.96.1",
     "lightweight-charts": "^5.1.0",
     "react": "^19.2.4",

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useInterwovenKit } from '@initia/interwovenkit-react';
+import { usePrivy } from '@privy-io/react-auth';
 import { useCards, useSwipe } from '../hooks/useCards';
 import TokenCard from '../components/TokenCard';
 
@@ -9,7 +9,8 @@ export default function Feed() {
   const { data, isLoading } = useCards(0, 50);
   const apeMutation = useSwipe('ape');
   const fadeMutation = useSwipe('fade');
-  const { initiaAddress } = useInterwovenKit();
+  const { user } = usePrivy();
+  const initiaAddress = user?.wallet?.address || "";
   const navigate = useNavigate();
 
   const cards = data?.cards ?? [];

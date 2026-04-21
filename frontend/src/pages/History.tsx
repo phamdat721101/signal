@@ -1,9 +1,10 @@
-import { useInterwovenKit } from '@initia/interwovenkit-react';
+import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
 import { config } from '../config';
 
 export default function History() {
-  const { initiaAddress } = useInterwovenKit();
+  const { user } = usePrivy();
+  const initiaAddress = user?.wallet?.address || "";
 
   const { data, isLoading } = useQuery({
     queryKey: ['history', initiaAddress],

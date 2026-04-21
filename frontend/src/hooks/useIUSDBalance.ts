@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { createPublicClient, formatEther, http } from 'viem';
-import { useInterwovenKit } from '@initia/interwovenkit-react';
+import { usePrivy } from '@privy-io/react-auth';
 import { config } from '../config';
 
 const BALANCE_OF_ABI = [
@@ -46,7 +46,8 @@ async function fetchSessionBalance(evmAddress: `0x${string}`): Promise<bigint> {
 }
 
 export function useIUSDBalance() {
-  const { initiaAddress } = useInterwovenKit();
+  const { user } = usePrivy();
+  const initiaAddress = user?.wallet?.address || "";
   const evmAddress = initiaAddress ? bech32ToHex(initiaAddress) : undefined;
 
   const { data, isLoading } = useQuery({

@@ -1,8 +1,6 @@
 import { useState } from 'react';
-import { encodeFunctionData } from 'viem';
-import { useInterwovenKit } from '@initia/interwovenkit-react';
-import { config, customChain } from '../config';
-import { SIGNAL_REGISTRY_ABI } from '../abi/SignalRegistry';
+import { usePrivy } from '@privy-io/react-auth';
+import { config } from '../config';
 import { useQueryClient } from '@tanstack/react-query';
 
 type TxStatus = 'idle' | 'pending' | 'success' | 'error';
@@ -12,7 +10,8 @@ export function useSignalActions() {
   const [txHash, setTxHash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const queryClient = useQueryClient();
-  const { initiaAddress, requestTxBlock } = useInterwovenKit();
+  const { user } = usePrivy();
+  const walletAddress = user?.wallet?.address || '';
 
   const executeSignal = async (
     asset: string,
@@ -26,66 +25,25 @@ export function useSignalActions() {
     setTxHash(null);
 
     try {
-      if (!initiaAddress) throw new Error('No wallet connected');
-
-      const data = encodeFunctionData({
-        abi: SIGNAL_REGISTRY_ABI,
-        functionName: 'createSignal',
-        args: [asset as `0x${string}`, isBull, confidence, targetPrice, entryPrice],
+      if (!walletAddress) throw new Error('No wallet connected');
+      const params = new URLSearchParams({
+        asset, isBull: String(isBull), confidence: String(confidence),
+        targetPrice: String(targetPrice), entryPrice: String(entryPrice),
+        creator: walletAddress,
       });
-
-      console.log('[Signal] Executing tx...');
-      const result = await requestTxBlock({
-        chainId: customChain.chain_id,
-        messages: [{
-          typeUrl: '/minievm.evm.v1.MsgCall',
-          value: {
-            sender: initiaAddress.toLowerCase(),
-            contractAddr: config.contractAddress,
-            input: data,
-            value: '0',
-            accessList: [],
-            authList: [],
-          },
-        }],
-      });
-
-      console.log('[Signal] TX result:', result);
-      setTxHash(result?.transactionHash || null);
+      const resp = await fetch(`${config.backendUrl}/api/signals/execute?${params}`, { method: 'POST' });
+      if (!resp.ok) throw new Error(`Backend: ${resp.status}`);
+      const result = await resp.json();
+      setTxHash(result.txHash);
       setStatus('success');
       queryClient.invalidateQueries({ queryKey: ['signals'] });
-      queryClient.invalidateQueries({ queryKey: ['signalCount'] });
-      queryClient.invalidateQueries({ queryKey: ['userSignals'] });
     } catch (e: any) {
-      console.warn('[Signal] On-chain TX failed, trying simulated execution:', e.message);
-      try {
-        const params = new URLSearchParams({
-          asset, isBull: String(isBull), confidence: String(confidence),
-          targetPrice: String(targetPrice), entryPrice: String(entryPrice),
-          creator: initiaAddress || '0x0000000000000000000000000000000000000000',
-        });
-        const resp = await fetch(`${config.backendUrl}/api/signals/execute?${params}`, { method: 'POST' });
-        if (!resp.ok) throw new Error(`Backend: ${resp.status}`);
-        const result = await resp.json();
-        console.log('[Signal] Simulated TX result:', result);
-        setTxHash(result.txHash);
-        setStatus('success');
-        queryClient.invalidateQueries({ queryKey: ['signals'] });
-        queryClient.invalidateQueries({ queryKey: ['signalCount'] });
-        queryClient.invalidateQueries({ queryKey: ['userSignals'] });
-      } catch (simErr: any) {
-        console.error('[Signal] Simulated TX also failed:', simErr);
-        setError(simErr.message || 'Transaction failed');
-        setStatus('error');
-      }
+      setError(e.message || 'Transaction failed');
+      setStatus('error');
     }
   };
 
-  const reset = () => {
-    setStatus('idle');
-    setTxHash(null);
-    setError(null);
-  };
+  const reset = () => { setStatus('idle'); setTxHash(null); setError(null); };
 
-  return { executeSignal, status, txHash, error, reset, connected: !!initiaAddress };
+  return { executeSignal, status, txHash, error, reset, connected: !!walletAddress };
 }

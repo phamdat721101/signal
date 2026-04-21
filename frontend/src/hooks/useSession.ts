@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
-import { useInterwovenKit } from '@initia/interwovenkit-react';
+import { usePrivy } from '@privy-io/react-auth';
 import { createPublicClient, encodeFunctionData, http, parseEther } from 'viem';
-import { config, customChain } from '../config';
+import { config } from '../config';
 import { useQueryClient } from '@tanstack/react-query';
 
 const MOCK_IUSD_ABI = [
@@ -34,47 +34,23 @@ type SessionInfo = {
 
 const publicClient = createPublicClient({ chain: config.chain, transport: http() });
 
-/** Decode bech32 initia address to 0x hex address. */
-function bech32ToHex(addr: string): `0x${string}` {
-  const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
-  const sepIdx = addr.lastIndexOf('1');
-  const data = addr.slice(sepIdx + 1);
-  const values = [...data].map(c => CHARSET.indexOf(c));
-  const words = values.slice(0, -6); // drop checksum
-  let bits = 0, value = 0;
-  const bytes: number[] = [];
-  for (const w of words) {
-    value = (value << 5) | w;
-    bits += 5;
-    while (bits >= 8) {
-      bits -= 8;
-      bytes.push((value >> bits) & 0xff);
-    }
-  }
-  return `0x${bytes.map(b => b.toString(16).padStart(2, '0')).join('')}` as `0x${string}`;
-}
-
 export function useSession() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [steps, setSteps] = useState<TxStep[]>([]);
-  const { initiaAddress, requestTxBlock } = useInterwovenKit();
+  const { user } = usePrivy();
+  const initiaAddress = user?.wallet?.address || "";
   const queryClient = useQueryClient();
 
-  const evmAddress = initiaAddress ? bech32ToHex(initiaAddress) : undefined;
+  const evmAddress = (initiaAddress || undefined) as `0x${string}` | undefined;
 
   const updateStep = (index: number, update: Partial<TxStep>) => {
     setSteps(prev => prev.map((s, i) => i === index ? { ...s, ...update } : s));
   };
 
-  const sendTx = useCallback(async (contractAddr: string, data: string): Promise<string | undefined> => {
-    if (!initiaAddress) throw new Error('Wallet not connected');
-    const result = await requestTxBlock({
-      chainId: customChain.chain_id,
-      messages: [{ typeUrl: '/minievm.evm.v1.MsgCall', value: { sender: initiaAddress.toLowerCase(), contractAddr, input: data, value: '0', accessList: [], authList: [] } }],
-    });
-    return result?.transactionHash;
-  }, [initiaAddress, requestTxBlock]);
+  const sendTx = useCallback(async (_contractAddr: string, _data: string): Promise<string | undefined> => {
+    throw new Error('On-chain session transactions not supported with Privy wallet');
+  }, []);
 
   const findActiveSession = useCallback(async (minBalance: bigint): Promise<SessionInfo | null> => {
     if (!evmAddress) return null;
