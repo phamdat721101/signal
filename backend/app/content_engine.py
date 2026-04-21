@@ -234,6 +234,82 @@ def _narrative_fallback(token: dict, signals: list[dict], verdict: str, risk_lev
             "ai_image_prompt": f"{sym} crypto {'rocket launch' if verdict == 'APE' else 'crash landing' if verdict == 'FADE' else 'foggy crossroads'}"}
 
 
+
+
+def generate_card_svg(card: dict) -> str:
+    """Generate an SVG card image from card metadata."""
+    sym = card.get('token_symbol', '??')
+    verdict = card.get('verdict', 'DYOR')
+    risk_level = card.get('risk_level', 'MID')
+    pct = card.get('price_change_24h', 0)
+    risk_score = card.get('risk_score', 50)
+
+    # Colors by verdict
+    colors = {'APE': ('#8eff71', '#0b5800'), 'FADE': ('#ff7166', '#5c0800'), 'DYOR': ('#bf81ff', '#3a0066')}
+    accent, accent_dark = colors.get(verdict, colors['DYOR'])
+
+    # Risk bar width (0-100 mapped to 0-260)
+    bar_w = max(10, min(260, int(risk_score * 2.6)))
+
+    # Price display
+    price = card.get('price', 0)
+    price_str = f'$' + f'{price:,.2f}' if price >= 1 else f'$' + f'{price:.6f}'
+    pct_str = f'{pct:+.1f}%'
+    pct_color = '#8eff71' if pct >= 0 else '#ff7166'
+
+    # Metrics (up to 3)
+    metrics = card.get('metrics', [])
+    metric_rows = ''
+    for i, m in enumerate(metrics[:3]):
+        if isinstance(m, dict):
+            label = m.get('label', '')[:18]
+            value = m.get('value', '')[:20]
+            emoji = m.get('emoji', '')
+        else:
+            label, value, emoji = str(m)[:18], '', ''
+        y = 248 + i * 28
+        metric_rows += f'<text x="30" y="{y}" fill="#adaaaa" font-size="11" font-family="monospace">{_svg_escape(label)}</text>'
+        metric_rows += f'<text x="370" y="{y}" fill="#fff" font-size="11" font-family="monospace" text-anchor="end">{value}</text>'
+
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 340" width="400" height="340">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#131313"/>
+      <stop offset="100%" stop-color="#1a1919"/>
+    </linearGradient>
+    <linearGradient id="ac" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="{accent}"/>
+      <stop offset="100%" stop-color="{accent}88"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="340" rx="16" fill="url(#bg)"/>
+  <rect x="0" y="0" width="400" height="4" rx="2" fill="{accent}"/>
+  <text x="30" y="50" fill="{accent}" font-size="36" font-weight="900" font-family="system-ui,sans-serif">${sym}</text>
+  <rect x="30" y="62" width="60" height="22" rx="4" fill="{accent_dark}"/>
+  <text x="60" y="78" fill="{accent}" font-size="11" font-weight="700" font-family="monospace" text-anchor="middle">{verdict}</text>
+  <text x="370" y="42" fill="#fff" font-size="18" font-weight="700" font-family="monospace" text-anchor="end">{price_str}</text>
+  <text x="370" y="62" fill="{pct_color}" font-size="14" font-family="monospace" text-anchor="end">{pct_str}</text>
+  <line x1="30" y1="100" x2="370" y2="100" stroke="#262626" stroke-width="1"/>
+  <text x="30" y="125" fill="#adaaaa" font-size="10" font-family="monospace" text-transform="uppercase">RISK SCORE</text>
+  <rect x="30" y="133" width="260" height="6" rx="3" fill="#262626"/>
+  <rect x="30" y="133" width="{bar_w}" height="6" rx="3" fill="url(#ac)"/>
+  <text x="300" y="141" fill="#adaaaa" font-size="10" font-family="monospace">{risk_score}/100</text>
+  <text x="370" y="125" fill="#494847" font-size="10" font-family="monospace" text-anchor="end">{risk_level}</text>
+  <line x1="30" y1="160" x2="370" y2="160" stroke="#262626" stroke-width="1"/>
+  <text x="30" y="185" fill="#fff" font-size="13" font-weight="600" font-family="system-ui,sans-serif">{_svg_escape(card.get('hook', '')[:60])}</text>
+  <text x="30" y="210" fill="#494847" font-size="11" font-family="system-ui,sans-serif">{_svg_escape(card.get('roast', '')[:80])}</text>
+  <line x1="30" y1="230" x2="370" y2="230" stroke="#262626" stroke-width="1"/>
+  {metric_rows}
+  <text x="200" y="332" fill="#262626" font-size="9" font-family="monospace" text-anchor="middle">KINETIC | APE OR FADE</text>
+</svg>"""
+
+
+def _svg_escape(s: str) -> str:
+    import re
+    s = re.sub(r'[^ -~]', '', s)  # ASCII printable only (strips emojis)
+    return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+
+
 # ─── Stage 5: Card Assembler ────────────────────────────────
 
 def assemble_card(token: dict, signals: list[dict], narrative: dict) -> dict:

@@ -86,3 +86,4 @@ signal-ui/
 
 # ── Keep submission ──
 !.initia/
+docs/*

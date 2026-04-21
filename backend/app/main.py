@@ -141,8 +141,10 @@ async def health():
 
 
 @app.get("/api/errors")
-async def get_errors():
-    return {"errors": error_tracker.get_recent()}
+async def get_errors(code: str | None = Query(default=None)):
+    if code:
+        return {"errors": error_tracker.get_by_code(code)}
+    return {"errors": error_tracker.get_recent(), "summary": error_tracker.summary()}
 
 
 @app.get("/api/signals")
@@ -461,6 +463,24 @@ async def get_card(card_id: int):
         raise HTTPException(status_code=404, detail="Card not found")
     return card
 
+
+
+
+@app.get("/api/cards/{card_id}/image")
+async def get_card_image(card_id: int):
+    from app.db import get_card_by_id
+    from app.content_engine import generate_card_svg
+    from fastapi.responses import Response
+    card = get_card_by_id(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    try:
+        svg = generate_card_svg(card)
+    except Exception as e:
+        error_tracker.track("SVG_GENERATION_ERROR", str(e), {"card_id": card_id, "symbol": card.get("token_symbol")})
+        raise HTTPException(status_code=500, detail=f"SVG generation failed: {e}")
+    return Response(content=svg, media_type="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=3600"})
 
 @app.post("/api/cards/{card_id}/ape")
 async def ape_card(card_id: int, request: Request):
