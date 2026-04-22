@@ -331,6 +331,117 @@ def assemble_card(token: dict, signals: list[dict], narrative: dict) -> dict:
     }
 
 
+# --- Stage 2.5: Chart Analyzer -------------------------------------------
+
+def fetch_chart_data(coingecko_id: str) -> list[float]:
+    try:
+        resp = httpx.get(
+            f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart",
+            params={"vs_currency": "usd", "days": 1}, timeout=15,
+        )
+        resp.raise_for_status()
+        return [p[1] for p in resp.json().get("prices", [])]
+    except Exception as e:
+        logger.warning(f"Chart fetch failed for {coingecko_id}: {e}")
+        return []
+
+
+def _ema(prices: list[float], period: int) -> list[float]:
+    k = 2 / (period + 1)
+    ema = [prices[0]]
+    for p in prices[1:]:
+        ema.append(p * k + ema[-1] * (1 - k))
+    return ema
+
+
+def _build_sparkline(prices: list[float], points: int = 48) -> list[float]:
+    if len(prices) < 2:
+        return []
+    step = max(1, len(prices) // points)
+    return [round(prices[i], 2) for i in range(0, len(prices), step)][:points]
+
+
+PATTERN_LESSONS = {
+    "EMA_CROSSOVER": "EMA crossovers signal trend reversals — historically leading to 2-5% moves within 24h.",
+    "BREAKOUT": "Breakouts above 24h highs often trigger momentum buying as stop-losses get hit.",
+    "HIGHER_HIGHS": "Consecutive higher peaks confirm an uptrend — each dip is a buying opportunity.",
+    "LOWER_HIGHS": "Consecutive lower peaks signal a downtrend — rallies are selling opportunities.",
+    "CONSOLIDATION": "Tight price ranges build energy — the breakout direction usually continues.",
+    "SUPPORT_TEST": "Price bouncing off the same level creates a floor that buyers defend.",
+}
+
+
+def detect_patterns(prices: list[float]) -> list[dict]:
+    if len(prices) < 20:
+        return []
+    patterns = []
+    ema5 = _ema(prices, 5)
+    ema20 = _ema(prices, 20)
+    for i in range(-min(48, len(ema5) - 1), 0):
+        if ema5[i - 1] <= ema20[i - 1] and ema5[i] > ema20[i]:
+            patterns.append({"type": "EMA_CROSSOVER", "direction": "bullish",
+                             "label": "EMA Crossover ↑", "description": "Short-term trend crossed above long-term"})
+            break
+        elif ema5[i - 1] >= ema20[i - 1] and ema5[i] < ema20[i]:
+            patterns.append({"type": "EMA_CROSSOVER", "direction": "bearish",
+                             "label": "EMA Crossover ↓", "description": "Short-term trend crossed below long-term"})
+            break
+    high_24h, low_24h = max(prices), min(prices)
+    recent = prices[-12:] if len(prices) >= 12 else prices
+    if max(recent) >= high_24h * 0.999:
+        patterns.append({"type": "BREAKOUT", "direction": "bullish",
+                         "label": "24h Breakout ↑", "description": "Price breaking above 24-hour high"})
+    elif min(recent) <= low_24h * 1.001:
+        patterns.append({"type": "BREAKOUT", "direction": "bearish",
+                         "label": "24h Breakdown ↓", "description": "Price breaking below 24-hour low"})
+    if len(prices) >= 60:
+        thirds = [prices[i:i + len(prices) // 3] for i in range(0, len(prices), len(prices) // 3)][:3]
+        if len(thirds) == 3:
+            highs = [max(t) for t in thirds]
+            if highs[0] < highs[1] < highs[2]:
+                patterns.append({"type": "HIGHER_HIGHS", "direction": "bullish",
+                                 "label": "Higher Highs", "description": "Consecutive higher peaks — uptrend"})
+            elif highs[0] > highs[1] > highs[2]:
+                patterns.append({"type": "LOWER_HIGHS", "direction": "bearish",
+                                 "label": "Lower Highs", "description": "Consecutive lower peaks — downtrend"})
+    # Consolidation: tight range in last 4h
+    if len(prices) >= 60:
+        last_4h = prices[-48:]
+        range_pct = (max(last_4h) - min(last_4h)) / min(last_4h) * 100 if min(last_4h) > 0 else 0
+        if range_pct < 2:
+            patterns.append({"type": "CONSOLIDATION", "direction": "neutral",
+                             "label": "Volatility Squeeze", "description": "Tight range building energy — breakout imminent"})
+
+    # Support Test: near 24h low but bouncing
+    if len(prices) >= 12:
+        if min(recent) <= low_24h * 1.01 and prices[-1] > min(recent) * 1.005:
+            patterns.append({"type": "SUPPORT_TEST", "direction": "bullish",
+                             "label": f"Support Test ${low_24h:,.0f}", "description": "Price testing and bouncing off 24h low"})
+
+    result = patterns[:3]
+    for p in result:
+        p["lesson"] = PATTERN_LESSONS.get(p["type"], "")
+    return result
+
+
+# ─── Quality Gates ───────────────────────────────────────────
+
+def _passes_quality_gates(card: dict) -> bool:
+    if len(card.get('hook', '')) > 80:
+        logger.info(f"Quality gate: hook too long for {card.get('token_symbol')}")
+        return False
+    if len(card.get('metrics', [])) != 3:
+        logger.info(f"Quality gate: need exactly 3 metrics for {card.get('token_symbol')}")
+        return False
+    if card.get('verdict') not in ('APE', 'FADE', 'DYOR'):
+        logger.info(f"Quality gate: invalid verdict for {card.get('token_symbol')}")
+        return False
+    if card.get('volume_24h', 0) < 5000:
+        logger.info(f"Quality gate: low volume for {card.get('token_symbol')}")
+        return False
+    return True
+
+
 # ─── Pipeline Orchestrator ──────────────────────────────────
 
 def run_card_generation_cycle():
@@ -364,12 +475,22 @@ def run_card_generation_cycle():
             if signals and max(s["severity"] for s in signals) < 2:
                 continue
 
+            # Stage 2.5: Chart analysis
+            time.sleep(2)  # Rate-limit: CoinGecko ~30 req/min
+            chart_prices = fetch_chart_data(token["coingecko_id"])
+            sparkline = _build_sparkline(chart_prices) if chart_prices else []
+            patterns = detect_patterns(chart_prices) if chart_prices else []
+
             # Stage 3: Narrative
             narrative = generate_narrative(token, signals, risk_score)
 
             # Stage 4: Visual (using CoinGecko logo for now)
             # Stage 5: Assemble
             card = assemble_card(token, signals, narrative)
+            card["sparkline"] = sparkline
+            card["patterns"] = patterns
+            if not _passes_quality_gates(card):
+                continue
             card_id = insert_card(card)
             if card_id > 0:
                 created += 1
@@ -380,6 +501,35 @@ def run_card_generation_cycle():
 
     elapsed = time.time() - t0
     logger.info(f"Pipeline complete: {created} cards in {elapsed:.1f}s from {len(new_tokens)} candidates")
+
+
+def backfill_chart_data():
+    """Retry chart data for cards with empty sparkline."""
+    from app.db import _get_conn
+    import json as _json
+    conn = _get_conn()
+    if not conn:
+        return
+    from psycopg2.extras import RealDictCursor
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT id, coingecko_id FROM cards WHERE status = 'active' AND (sparkline IS NULL OR sparkline = '[]'::jsonb) LIMIT 5")
+        rows = cur.fetchall()
+    if not rows:
+        return
+    filled = 0
+    for row in rows:
+        time.sleep(2)
+        prices = fetch_chart_data(row["coingecko_id"])
+        if not prices:
+            continue
+        sparkline = _build_sparkline(prices)
+        patterns = detect_patterns(prices)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE cards SET sparkline = %s, patterns = %s WHERE id = %s",
+                        (_json.dumps(sparkline), _json.dumps(patterns), row["id"]))
+        filled += 1
+    if filled:
+        logger.info(f"Backfilled chart data for {filled}/{len(rows)} cards")
 
 
 def _fmt(v: float) -> str:

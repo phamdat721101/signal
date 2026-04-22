@@ -3,7 +3,7 @@ import { defineChain } from 'viem';
 const network = import.meta.env.VITE_NETWORK || 'local';
 
 const localChain = defineChain({
-  id: 1,
+  id: 4354150043272442,
   name: 'Minitia Local',
   nativeCurrency: { name: 'INIT', symbol: 'INIT', decimals: 18 },
   rpcUrls: {
@@ -153,4 +153,10 @@ export function formatVolume(n: number): string {
   if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
   if (n >= 1e3) return `$${(n / 1e3).toFixed(0)}K`;
   return `$${n.toFixed(0)}`;
+}
+
+export function shareToX(text: string, url?: string) {
+  const params = new URLSearchParams({ text });
+  if (url) params.set('url', url);
+  window.open(`https://twitter.com/intent/tweet?${params}`, '_blank');
 }

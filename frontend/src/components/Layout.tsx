@@ -1,17 +1,29 @@
 import { NavLink } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { usePrivy } from '@privy-io/react-auth';
+import { useQuery } from '@tanstack/react-query';
+import { config } from '../config';
 
 const navItems = [
   { to: '/', icon: 'bolt', label: 'Feed', fill: true },
   { to: '/leaderboard', icon: 'leaderboard', label: 'Ranks' },
   { to: '/portfolio', icon: 'account_balance_wallet', label: 'Portfolio' },
-  { to: '/history', icon: 'receipt_long', label: 'History' },
+  { to: '/profile', icon: 'person', label: 'Profile' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
   const { user, login, logout, authenticated } = usePrivy();
   const walletAddress = user?.wallet?.address || "";
+  const { data: rewardsData } = useQuery({
+    queryKey: ['rewards', walletAddress],
+    queryFn: async () => {
+      const resp = await fetch(`${config.backendUrl}/api/rewards/${walletAddress}`);
+      return resp.ok ? resp.json() : null;
+    },
+    enabled: !!walletAddress,
+    staleTime: 60_000,
+  });
+  const streak = rewardsData?.currentStreak || 0;
 
   return (
     <div className="h-screen flex flex-col bg-[#0e0e0e] overflow-hidden">
@@ -27,6 +39,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             <span className="text-[#8eff71] font-label font-bold text-sm tracking-tight">
               {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
             </span>
+            {streak > 0 && <span className="text-[#ff7166] font-headline font-bold text-sm ml-1">🔥{streak}</span>}
           </button>
         ) : (
           <button onClick={login}

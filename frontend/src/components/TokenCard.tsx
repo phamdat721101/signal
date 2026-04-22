@@ -20,6 +20,31 @@ const verdictColor: Record<string, string> = {
   DYOR: 'bg-[#bf81ff]/15 text-[#bf81ff] border-[#bf81ff]/30',
 };
 
+function Sparkline({ data, color }: { data: number[]; color: string }) {
+  if (data.length < 2) return null;
+  const min = Math.min(...data), max = Math.max(...data), range = max - min || 1;
+  const w = 280, h = 48;
+  const points = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * h}`).join(' ');
+  const last = data[data.length - 1];
+  const entryY = h - ((last - min) / range) * h;
+  const targetY = h - ((last * 1.015 - min) / range) * h;
+  const stopY = h - ((last * 0.985 - min) / range) * h;
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-12">
+      <rect x="0" y={Math.min(targetY, entryY)} width={w} height={Math.abs(entryY - targetY)} fill="#8eff71" opacity="0.08" />
+      <rect x="0" y={Math.min(entryY, stopY)} width={w} height={Math.abs(stopY - entryY)} fill="#ff7166" opacity="0.08" />
+      <line x1="0" y1={entryY} x2={w} y2={entryY} stroke="#494847" strokeWidth="0.5" strokeDasharray="4 2" />
+      <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+const patternColor: Record<string, string> = {
+  bullish: 'bg-[#8eff71]/10 text-[#8eff71] border-[#8eff71]/20',
+  bearish: 'bg-[#ff7166]/10 text-[#ff7166] border-[#ff7166]/20',
+  neutral: 'bg-[#bf81ff]/10 text-[#bf81ff] border-[#bf81ff]/20',
+};
+
 export default function TokenCard({ card, onApe, onFade }: {
   card: Card;
   onApe: () => void;
@@ -62,6 +87,33 @@ export default function TokenCard({ card, onApe, onFade }: {
         <p className="text-[#adaaaa] text-sm leading-relaxed">{card.hook}</p>
         {card.roast && <p className="text-[#494847] text-xs mt-1">{card.roast}</p>}
       </div>
+
+      {/* Sparkline + Patterns */}
+      {card.sparkline && card.sparkline.length > 0 && (
+        <div className="px-4 pb-2">
+          <Sparkline data={card.sparkline} color={card.price_change_24h >= 0 ? '#8eff71' : '#ff7166'} />
+          {card.patterns && card.patterns.length > 0 && (
+            <div className="space-y-1 mt-1">
+              {card.patterns.map((p: any, i: number) => (
+                <div key={i} className={`text-[9px] px-2 py-1 rounded border ${patternColor[p.direction] || patternColor.neutral}`}>
+                  <span className="font-label font-bold">{p.label}</span>
+                  {p.lesson && <span className="ml-1 opacity-70">{p.lesson}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Why verdict */}
+      {card.verdict_reason && (
+        <div className="px-4 pb-2">
+          <div className="bg-[#262626] p-2 rounded-lg">
+            <div className="font-label text-[9px] text-[#bf81ff] uppercase tracking-widest">Why {card.verdict || 'DYOR'}</div>
+            <div className="text-[#adaaaa] text-xs mt-1">{card.verdict_reason}</div>
+          </div>
+        </div>
+      )}
 
       {/* Metrics bento grid */}
       <div className="px-4 pb-2">

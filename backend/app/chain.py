@@ -85,6 +85,75 @@ class ChainClient:
             Web3.to_checksum_address(user)
         ).call()
 
+    def publish_signal(self, asset: str, is_bull: bool, confidence: int,
+                       target_price: int, entry_price: int, data_hash: bytes) -> tuple[int, str]:
+        fn = self.contract.functions.publishSignal(
+            Web3.to_checksum_address(asset), is_bull, confidence, target_price, entry_price, data_hash
+        )
+        receipt = self._send_tx(fn)
+        logs = self.contract.events.SignalCreated().process_receipt(receipt)
+        signal_id = logs[0]["args"]["id"] if logs else -1
+        return signal_id, receipt["transactionHash"].hex()
+
+    # ─── RewardEngine ────────────────────────────────────
+    _REWARD_ABI = [
+        {"type":"function","name":"onTradeResolved","inputs":[{"name":"user","type":"address"},{"name":"wasProfit","type":"bool"},{"name":"tradeAmount","type":"uint256"}],"outputs":[],"stateMutability":"nonpayable"},
+        {"type":"function","name":"getStats","inputs":[{"name":"user","type":"address"}],"outputs":[{"name":"","type":"tuple","components":[{"name":"totalTrades","type":"uint256"},{"name":"wins","type":"uint256"},{"name":"currentStreak","type":"uint256"},{"name":"bestStreak","type":"uint256"},{"name":"totalRewards","type":"uint256"}]}],"stateMutability":"view"},
+    ]
+
+    def _reward_contract(self):
+        settings = get_settings()
+        if not settings.reward_engine_address:
+            return None
+        return self.w3.eth.contract(
+            address=Web3.to_checksum_address(settings.reward_engine_address),
+            abi=self._REWARD_ABI,
+        )
+
+    def on_trade_resolved(self, user: str, was_profit: bool, trade_amount_wei: int) -> str:
+        rc = self._reward_contract()
+        if not rc:
+            return ""
+        fn = rc.functions.onTradeResolved(Web3.to_checksum_address(user), was_profit, trade_amount_wei)
+        receipt = self._send_tx(fn)
+        return receipt["transactionHash"].hex()
+
+    def get_user_stats(self, user: str) -> dict:
+        rc = self._reward_contract()
+        if not rc:
+            return {"totalTrades": 0, "wins": 0, "currentStreak": 0, "bestStreak": 0, "totalRewards": 0}
+        raw = rc.functions.getStats(Web3.to_checksum_address(user)).call()
+        return {"totalTrades": raw[0], "wins": raw[1], "currentStreak": raw[2], "bestStreak": raw[3], "totalRewards": raw[4]}
+
+    # ─── ProofOfAlpha ────────────────────────────────────
+    _ALPHA_ABI = [
+        {"type":"function","name":"mintAchievement","inputs":[{"name":"to","type":"address"},{"name":"tier","type":"uint8"},{"name":"wins","type":"uint256"},{"name":"winRate","type":"uint256"},{"name":"bestStreak","type":"uint256"}],"outputs":[{"name":"","type":"uint256"}],"stateMutability":"nonpayable"},
+        {"type":"function","name":"hasTier","inputs":[{"name":"","type":"address"},{"name":"","type":"uint8"}],"outputs":[{"name":"","type":"bool"}],"stateMutability":"view"},
+    ]
+
+    def _alpha_contract(self):
+        settings = get_settings()
+        if not settings.proof_of_alpha_address:
+            return None
+        return self.w3.eth.contract(
+            address=Web3.to_checksum_address(settings.proof_of_alpha_address),
+            abi=self._ALPHA_ABI,
+        )
+
+    def mint_achievement(self, to: str, tier: int, wins: int, win_rate: int, best_streak: int) -> str:
+        ac = self._alpha_contract()
+        if not ac:
+            return ""
+        fn = ac.functions.mintAchievement(Web3.to_checksum_address(to), tier, wins, win_rate, best_streak)
+        receipt = self._send_tx(fn)
+        return receipt["transactionHash"].hex()
+
+    def has_tier(self, user: str, tier: int) -> bool:
+        ac = self._alpha_contract()
+        if not ac:
+            return False
+        return ac.functions.hasTier(Web3.to_checksum_address(user), tier).call()
+
     @staticmethod
     def _parse_signal(idx: int, raw) -> dict:
         return {
@@ -99,3 +168,26 @@ class ChainClient:
             "resolved": raw[7],
             "creator": raw[8],
         }
+
+    # ─── Tucana DEX ──────────────────────────────────────
+    _TUCANA_ABI = [
+        {"type":"function","name":"swapExactTokensForTokens","inputs":[{"name":"amountIn","type":"uint256"},{"name":"amountOutMin","type":"uint256"},{"name":"path","type":"address[]"},{"name":"to","type":"address"},{"name":"deadline","type":"uint256"}],"outputs":[{"name":"","type":"uint256[]"}],"stateMutability":"nonpayable"},
+    ]
+
+    def swap_via_tucana(self, token_in: str, token_out: str, amount_in: int, min_amount_out: int) -> str:
+        settings = get_settings()
+        if not settings.tucana_router_address:
+            return ""
+        router = self.w3.eth.contract(
+            address=Web3.to_checksum_address(settings.tucana_router_address),
+            abi=self._TUCANA_ABI,
+        )
+        import time as _time
+        deadline = int(_time.time()) + 300
+        fn = router.functions.swapExactTokensForTokens(
+            amount_in, min_amount_out,
+            [Web3.to_checksum_address(token_in), Web3.to_checksum_address(token_out)],
+            self.account.address, deadline,
+        )
+        receipt = self._send_tx(fn)
+        return receipt["transactionHash"].hex()

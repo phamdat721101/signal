@@ -1,11 +1,14 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { config } from '../config';
+import { config, shareToX } from '../config';
 import type { Card } from '../hooks/useCards';
 
 export default function TradeSuccess() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const trade = (location.state as any)?.trade;
+
   const { data: card } = useQuery<Card>({
     queryKey: ['card', id],
     queryFn: async () => {
@@ -18,75 +21,76 @@ export default function TradeSuccess() {
 
   return (
     <div className="flex flex-col items-center justify-center h-full px-6 relative overflow-hidden">
-      {/* Ambient blurs */}
       <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-[#8eff71]/5 rounded-full blur-[120px]" />
       <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-[#bf81ff]/5 rounded-full blur-[120px]" />
 
       <div className="relative z-10 flex flex-col items-center text-center space-y-6 w-full max-w-md">
-        {/* Rocket icon with HUD rings */}
         <div className="relative">
           <div className="absolute inset-0 bg-[#8eff71]/20 blur-3xl rounded-full scale-150" />
-          <div className="relative w-40 h-40 flex items-center justify-center bg-[#262626]/40 backdrop-blur-xl border border-[#8eff71]/20 rounded-full">
-            <span className="material-symbols-outlined text-7xl text-[#8eff71]"
-              style={{ fontVariationSettings: "'FILL' 1" }}>rocket_launch</span>
-            <div className="absolute inset-[-10px] border-2 border-dashed border-[#8eff71]/10 rounded-full animate-[spin_20s_linear_infinite]" />
-            <div className="absolute inset-[-20px] border border-[#bf81ff]/20 rounded-full animate-[spin_30s_linear_infinite_reverse]" />
+          <div className="relative w-32 h-32 flex items-center justify-center bg-[#262626]/40 backdrop-blur-xl border border-[#8eff71]/20 rounded-full">
+            <span className="material-symbols-outlined text-6xl text-[#8eff71]" style={{ fontVariationSettings: "'FILL' 1" }}>rocket_launch</span>
           </div>
         </div>
 
         <div>
-          <h1 className="font-headline text-3xl font-black tracking-tight text-[#8eff71] italic uppercase">
-            TRADE SUCCESSFUL! 🚀
-          </h1>
-          <p className="font-label text-[#adaaaa] tracking-widest text-xs uppercase mt-1">
-            Aping into ${card?.token_symbol ?? '...'}
+          <h1 className="font-headline text-2xl font-black text-[#8eff71] italic uppercase">TRADE EXECUTED</h1>
+          <p className="font-label text-[#adaaaa] text-xs uppercase tracking-widest mt-1">
+            Aped into ${card?.token_symbol ?? '...'}
           </p>
         </div>
 
-        {/* ZK progress bar */}
-        <div className="w-full bg-[#131313] p-4 rounded-lg border border-[#494847]/10 space-y-3">
-          <div className="flex justify-between items-end">
-            <div className="flex flex-col text-left">
-              <span className="text-[#bf81ff] font-headline font-bold text-[10px] tracking-widest uppercase flex items-center gap-1">
-                <span className="material-symbols-outlined text-[12px]">security</span> ZK-AI PRIVACY LAYER
-              </span>
-              <span className="font-label text-sm text-white mt-1">Verifying on Initia...</span>
+        {/* Trade details */}
+        {trade && (
+          <div className="w-full space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-[#262626] p-4 rounded-xl">
+                <span className="font-label text-[10px] text-[#adaaaa] uppercase tracking-widest">Entry Price</span>
+                <div className="font-headline text-lg font-bold text-white mt-1">
+                  ${trade.entry_price >= 1 ? trade.entry_price.toLocaleString(undefined, { maximumFractionDigits: 2 }) : trade.entry_price.toFixed(6)}
+                </div>
+              </div>
+              <div className="bg-[#262626] p-4 rounded-xl">
+                <span className="font-label text-[10px] text-[#adaaaa] uppercase tracking-widest">Amount</span>
+                <div className="font-headline text-lg font-bold text-[#8eff71] mt-1">${trade.amount_usd.toFixed(2)}</div>
+                <div className="font-label text-[10px] text-[#adaaaa]">{trade.token_amount} {card?.token_symbol}</div>
+              </div>
             </div>
-            <span className="font-label text-[#8eff71] text-xs">100%</span>
-          </div>
-          <div className="w-full h-1 bg-[#262626] overflow-hidden">
-            <div className="w-full h-full bg-gradient-to-r from-[#8eff71] to-[#2ff801]" />
-          </div>
-          <div className="flex justify-between text-[10px] font-label text-[#adaaaa]">
-            <span>SIGNAL RECORDED ON-CHAIN</span>
-            <span className="text-[#8eff71]">DONE</span>
-          </div>
-        </div>
 
-        {/* P&L bento */}
-        {card && (
-          <div className="w-full grid grid-cols-2 gap-3">
-            <div className="bg-[#262626] p-4 rounded-xl flex flex-col items-start">
-              <span className="font-label text-[10px] text-[#adaaaa] tracking-widest uppercase mb-1">Entry Price</span>
-              <span className="font-headline text-xl font-bold text-white">
-                ${card.price >= 1 ? card.price.toLocaleString(undefined, { maximumFractionDigits: 2 }) : card.price.toFixed(6)}
-              </span>
-            </div>
-            <div className="bg-[#262626] p-4 rounded-xl flex flex-col items-start">
-              <span className="font-label text-[10px] text-[#adaaaa] tracking-widest uppercase mb-1">24H Change</span>
-              <span className={`font-headline text-xl font-bold kinetic-pulse ${card.price_change_24h >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]'}`}>
-                {card.price_change_24h >= 0 ? '+' : ''}{card.price_change_24h.toFixed(2)}%
-              </span>
-            </div>
+            {/* Tx hash */}
+            {trade.tx_hash && (
+              <div className="w-full bg-[#131313] p-4 rounded-xl border border-[#494847]/10">
+                <div className="font-label text-[9px] text-[#bf81ff] uppercase tracking-widest mb-1">
+                  {trade.on_chain ? 'On-Chain Transaction' : 'Simulated Trade ID'}
+                </div>
+                <div className="font-mono text-xs text-[#adaaaa] truncate">{trade.tx_hash}</div>
+                {trade.explorer_url ? (
+                  <a href={trade.explorer_url} target="_blank" rel="noopener noreferrer"
+                    className="font-label text-[10px] text-[#8eff71] mt-1 flex items-center gap-1 hover:underline">
+                    View in Explorer <span className="material-symbols-outlined text-[12px]">open_in_new</span>
+                  </a>
+                ) : (
+                  <div className="font-label text-[10px] text-[#494847] mt-1">Paper trade — no on-chain record</div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
-        {/* CTA */}
         <button onClick={() => navigate('/portfolio')}
-          className="w-full ape-gradient text-[#0b5800] font-headline font-black py-4 rounded-lg tracking-widest uppercase shadow-[0_0_24px_rgba(142,255,113,0.3)] active:scale-95 transition-transform flex items-center justify-center gap-3">
+          className="w-full ape-gradient text-[#0b5800] font-headline font-black py-4 rounded-lg tracking-widest uppercase active:scale-95 transition-transform flex items-center justify-center gap-3">
           GO TO PORTFOLIO
           <span className="material-symbols-outlined text-lg">arrow_forward</span>
         </button>
+
+        {trade && (
+          <button onClick={() => shareToX(
+            `I just aped $${card?.token_symbol} at $${trade.entry_price >= 1 ? trade.entry_price.toLocaleString(undefined, {maximumFractionDigits: 2}) : trade.entry_price.toFixed(6)} on @KineticApp 🚀 My alpha has receipts. #ApeOrFade`,
+            trade.explorer_url || undefined
+          )} className="w-full bg-[#262626] text-[#adaaaa] font-headline font-bold py-3 rounded-lg flex items-center justify-center gap-2 mt-2">
+            <span className="material-symbols-outlined text-lg">share</span>
+            Share to X
+          </button>
+        )}
       </div>
     </div>
   );

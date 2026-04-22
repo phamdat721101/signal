@@ -87,3 +87,5 @@ signal-ui/
 # ── Keep submission ──
 !.initia/
 docs/*
+deploy-vps.sh
+deploy.sh

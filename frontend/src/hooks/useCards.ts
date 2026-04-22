@@ -24,6 +24,8 @@ export interface Card {
   risk_score?: number;
   notification_hook?: string;
   signals?: { type: string; severity: number; direction: string; finding: string }[];
+  sparkline?: number[];
+  patterns?: { type: string; direction: string; label: string; description: string; lesson?: string }[];
 }
 
 async function fetchCards(offset = 0, limit = 20) {

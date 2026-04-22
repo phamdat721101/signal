@@ -483,23 +483,79 @@ async def get_card_image(card_id: int):
                     headers={"Cache-Control": "public, max-age=3600"})
 
 @app.post("/api/cards/{card_id}/ape")
+def _is_premium(address: str) -> bool:
+    """Check if user has an active SessionVault session (premium)."""
+    settings = get_settings()
+    if not settings.session_vault_address or not settings.contract_address:
+        return False
+    try:
+        chain = get_chain()
+        from web3 import Web3
+        import json
+        from pathlib import Path
+        vault_abi = json.loads((Path(__file__).parent / "session_vault_abi.json").read_text())
+        vault = chain.w3.eth.contract(address=Web3.to_checksum_address(settings.session_vault_address), abi=vault_abi)
+        session_ids = vault.functions.getUserSessions(Web3.to_checksum_address(address)).call()
+        for sid in reversed(session_ids):
+            s = vault.functions.getSession(sid).call()
+            if s[7] and s[2] > 0:  # active=True and remainingBalance > 0
+                return True
+    except Exception:
+        pass
+    return False
+
+
 async def ape_card(card_id: int, request: Request):
     body = await request.json()
     address = body.get("address", "")
-    from app.db import record_swipe, get_card_by_id
+    amount_usd = float(body.get("amount_usd", 1.0))
+    tx_hash = body.get("tx_hash", "")
+    from app.db import record_swipe, get_card_by_id, insert_trade, get_daily_swipe_count, increment_daily_swipes
+    if address and get_daily_swipe_count(address) >= 5 and not _is_premium(address):
+        raise HTTPException(status_code=402, detail={"message": "Daily free swipe limit reached", "limit": 5})
     card = get_card_by_id(card_id)
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
-    swipe_id = record_swipe(card_id, address, "ape")
-    return {"status": "ok", "swipe_id": swipe_id, "action": "ape", "card": card}
+    price = card.get("price", 0)
+    if price <= 0:
+        raise HTTPException(status_code=400, detail="Card has no valid price")
+    token_amount = amount_usd / price
+    on_chain = bool(tx_hash)
+    if not tx_hash:
+        import os
+        tx_hash = f"0x{os.urandom(32).hex()}"
+    trade_id = insert_trade({
+        "card_id": card_id, "user_address": address,
+        "token_symbol": card["token_symbol"], "token_name": card.get("token_name", ""),
+        "entry_price": price, "amount_usd": amount_usd,
+        "token_amount": token_amount, "tx_hash": tx_hash,
+    })
+    record_swipe(card_id, address, "ape")
+    if address:
+        increment_daily_swipes(address)
+    explorer_url = f"https://scan.testnet.initia.xyz/initia-signal-1/evm-txs/{tx_hash}" if on_chain else None
+    return {
+        "status": "ok", "action": "ape",
+        "trade": {
+            "id": trade_id, "token_symbol": card["token_symbol"],
+            "entry_price": price, "amount_usd": amount_usd,
+            "token_amount": round(token_amount, 6),
+            "tx_hash": tx_hash, "explorer_url": explorer_url,
+            "on_chain": on_chain, "trade_type": "futures" if on_chain else "paper",
+        },
+    }
 
 
 @app.post("/api/cards/{card_id}/fade")
 async def fade_card(card_id: int, request: Request):
     body = await request.json()
     address = body.get("address", "")
-    from app.db import record_swipe
+    from app.db import record_swipe, get_daily_swipe_count, increment_daily_swipes
+    if address and get_daily_swipe_count(address) >= 5 and not _is_premium(address):
+        raise HTTPException(status_code=402, detail={"message": "Daily free swipe limit reached", "limit": 5})
     swipe_id = record_swipe(card_id, address, "fade")
+    if address:
+        increment_daily_swipes(address)
     return {"status": "ok", "swipe_id": swipe_id, "action": "fade"}
 
 
@@ -510,10 +566,90 @@ async def get_user_card_history(address: str, offset: int = 0, limit: int = Quer
     return {"swipes": swipes, "total": total}
 
 
+
+
+@app.get("/api/trades/{address}")
+async def get_user_trades_endpoint(address: str, offset: int = 0, limit: int = Query(default=50, le=100)):
+    from app.db import get_user_trades
+    trades, total = get_user_trades(address, offset, limit)
+    resolved = [t for t in trades if t.get("resolved")]
+    summary = {
+        "total_invested": sum(t.get("amount_usd", 0) for t in trades),
+        "total_pnl_usd": round(sum(t.get("pnl_usd", 0) or 0 for t in trades), 2),
+        "total_pnl_pct": 0,
+        "win_count": sum(1 for t in resolved if (t.get("pnl_usd") or 0) > 0),
+        "loss_count": sum(1 for t in resolved if (t.get("pnl_usd") or 0) <= 0),
+        "total_trades": total,
+    }
+    invested = summary["total_invested"]
+    if invested > 0:
+        summary["total_pnl_pct"] = round(summary["total_pnl_usd"] / invested * 100, 2)
+    return {"trades": trades, "total": total, "summary": summary}
+
+# Username cache for .init resolution
+_username_cache: dict[str, tuple[float, str]] = {}
+
+async def _resolve_init_username(address: str) -> str:
+    entry = _username_cache.get(address)
+    if entry and time.time() - entry[0] < 3600:
+        return entry[1]
+    try:
+        import httpx
+        resp = await httpx.AsyncClient().get(
+            f"https://indexer.initia.xyz/indexer/username/v1/addresses/{address}",
+            timeout=3,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            username = data.get("username", "")
+            if username:
+                _username_cache[address] = (time.time(), username)
+                return username
+    except Exception:
+        pass
+    _username_cache[address] = (time.time(), "")
+    return ""
+
+@app.get("/api/trades/{address}/resolved-recent")
+async def get_resolved_recent(address: str):
+    from app.db import get_recently_resolved_trades
+    return {"trades": get_recently_resolved_trades(address)}
+
+
 @app.get("/api/leaderboard")
 async def get_leaderboard_data():
-    from app.db import get_leaderboard
-    return {"leaderboard": get_leaderboard()}
+    from app.db import get_leaderboard_by_pnl, get_leaderboard
+    pnl_lb = get_leaderboard_by_pnl()
+    entries = pnl_lb if pnl_lb else get_leaderboard()
+    for entry in entries:
+        addr = entry.get("user_address", "")
+        if addr:
+            entry["username"] = await _resolve_init_username(addr)
+    return {"leaderboard": entries}
+
+
+@app.get("/api/metrics")
+async def get_metrics():
+    """Appchain metrics for VIP application."""
+    settings = get_settings()
+    metrics = {"signals": 0, "cards": 0, "swipes": 0, "trades": 0, "unique_users": 0}
+    if settings.database_url:
+        from app.db import _get_conn
+        conn = _get_conn()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM signals")
+                metrics["signals"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM cards")
+                metrics["cards"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM swipes")
+                metrics["swipes"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM trades")
+                metrics["trades"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(DISTINCT user_address) FROM swipes")
+                metrics["unique_users"] = cur.fetchone()[0]
+    metrics["total_transactions"] = metrics["signals"] + metrics["swipes"] + metrics["trades"]
+    return metrics
 
 
 @app.post("/api/cards/generate")
@@ -529,6 +665,34 @@ async def trigger_card_generation():
 
 
 # ─── Rewards & Achievements API ──────────────────────────────
+
+@app.get("/api/profile/{address}")
+async def get_profile(address: str):
+    """Aggregated profile: rewards + achievements + trades + trading IQ."""
+    rewards_data = await get_user_rewards(address)
+    achievements_data = await get_user_achievements(address)
+    from app.db import get_user_trades
+    trades, trade_total = get_user_trades(address, 0, 50)
+    resolved = [t for t in trades if t.get("resolved")]
+    trades_data = {"summary": {
+        "total_invested": sum(t.get("amount_usd", 0) for t in trades),
+        "total_pnl_usd": round(sum(t.get("pnl_usd", 0) or 0 for t in trades), 2),
+        "total_trades": trade_total,
+        "win_count": sum(1 for t in resolved if (t.get("pnl_usd") or 0) > 0),
+    }}
+    wins = rewards_data.get("wins", 0)
+    total = rewards_data.get("totalTrades", 0)
+    streak = rewards_data.get("bestStreak", 0)
+    earned = len(achievements_data.get("earned", []))
+    iq = max(0, wins * 10 - (total - wins) * 5 + streak * 5 + earned * 25)
+    return {
+        "address": address,
+        "trading_iq": iq,
+        "rewards": rewards_data,
+        "achievements": achievements_data,
+        "summary": trades_data.get("summary", {}),
+    }
+
 
 @app.get("/api/rewards/{address}")
 async def get_user_rewards(address: str):
@@ -571,7 +735,28 @@ async def get_user_rewards(address: str):
             "winRate": round(stats[1] / stats[0] * 100, 1) if stats[0] > 0 else 0,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning(f"RewardEngine call failed, using fallback: {e}")
+        from app.db import get_user_swipes
+        swipes, total = get_user_swipes(address, 0, 1000)
+        apes = [s for s in swipes if s.get("action") == "ape"]
+        wins = [s for s in apes if (s.get("price_change_24h") or 0) > 0]
+        streak = 0
+        best_streak = 0
+        for s in apes:
+            if (s.get("price_change_24h") or 0) > 0:
+                streak += 1
+                best_streak = max(best_streak, streak)
+            else:
+                streak = 0
+        return {
+            "address": address,
+            "totalTrades": len(apes),
+            "wins": len(wins),
+            "winRate": round(len(wins) / len(apes) * 100, 1) if apes else 0,
+            "currentStreak": streak,
+            "bestStreak": best_streak,
+            "pendingRewards": 0,
+        }
 
 
 @app.get("/api/achievements/{address}")

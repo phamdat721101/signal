@@ -93,12 +93,49 @@ def init_db():
             ("notification_hook", "TEXT DEFAULT ''"),
             ("signals", "JSONB DEFAULT '[]'"),
             ("expires_at", "TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '4 hours')"),
+            ("on_chain_signal_id", "INTEGER DEFAULT NULL"),
+            ("sparkline", "JSONB DEFAULT '[]'"),
+            ("patterns", "JSONB DEFAULT '[]'"),
         ]:
             try:
                 cur.execute(f"ALTER TABLE cards ADD COLUMN IF NOT EXISTS {col} {defn}")
             except Exception:
                 pass
     logger.info("Cards + swipes tables ready")
+    # Trades table (Ape trade execution)
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS trades (
+                id SERIAL PRIMARY KEY,
+                card_id INTEGER NOT NULL,
+                user_address TEXT NOT NULL,
+                token_symbol TEXT NOT NULL,
+                token_name TEXT NOT NULL DEFAULT '',
+                entry_price DOUBLE PRECISION NOT NULL,
+                amount_usd DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+                token_amount DOUBLE PRECISION NOT NULL,
+                tx_hash TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'completed',
+                exit_price DOUBLE PRECISION,
+                pnl_usd DOUBLE PRECISION,
+                pnl_pct DOUBLE PRECISION,
+                resolved BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+    logger.info("Trades table ready")
+    # Daily swipes table (premium gate)
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS daily_swipes (
+                id SERIAL PRIMARY KEY,
+                user_address TEXT NOT NULL,
+                swipe_date DATE NOT NULL DEFAULT CURRENT_DATE,
+                count INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(user_address, swipe_date)
+            )
+        """)
+    logger.info("Daily swipes table ready")
 
 
 def insert_signal(signal: dict) -> int:
@@ -214,8 +251,9 @@ def insert_card(card: dict) -> int:
             """INSERT INTO cards
                (token_symbol, token_name, chain, hook, roast, metrics, image_url,
                 ai_image_prompt, price, price_change_24h, volume_24h, market_cap, coingecko_id,
-                verdict, verdict_reason, risk_level, risk_score, notification_hook, signals)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                verdict, verdict_reason, risk_level, risk_score, notification_hook, signals,
+                sparkline, patterns)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                RETURNING id""",
             (card.get("token_symbol", ""), card.get("token_name", ""),
              card.get("chain", "initia"), card.get("hook", ""), card.get("roast", ""),
@@ -225,7 +263,8 @@ def insert_card(card: dict) -> int:
              card.get("market_cap", 0), card.get("coingecko_id", ""),
              card.get("verdict", "DYOR"), card.get("verdict_reason", ""),
              card.get("risk_level", "MID"), card.get("risk_score", 50),
-             card.get("notification_hook", ""), json.dumps(card.get("signals", [])))
+             card.get("notification_hook", ""), json.dumps(card.get("signals", [])),
+             json.dumps(card.get("sparkline", [])), json.dumps(card.get("patterns", [])))
         )
         return cur.fetchone()[0]
 
@@ -235,10 +274,10 @@ def get_cards(offset: int = 0, limit: int = 20, status: str = "active") -> tuple
     if not conn:
         return [], 0
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("SELECT COUNT(*) as cnt FROM cards WHERE status = %s", (status,))
+        cur.execute("SELECT COUNT(*) as cnt FROM cards WHERE status = %s AND (expires_at > NOW() OR expires_at IS NULL)", (status,))
         total = cur.fetchone()["cnt"]
         cur.execute(
-            "SELECT * FROM cards WHERE status = %s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+            "SELECT * FROM cards WHERE status = %s AND (expires_at > NOW() OR expires_at IS NULL) ORDER BY created_at DESC LIMIT %s OFFSET %s",
             (status, limit, offset)
         )
         rows = cur.fetchall()
@@ -260,7 +299,7 @@ def get_existing_coingecko_ids() -> set[str]:
     if not conn:
         return set()
     with conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT coingecko_id FROM cards")
+        cur.execute("SELECT DISTINCT coingecko_id FROM cards WHERE status = %s AND (expires_at > NOW() OR expires_at IS NULL)", ("active",))
         return {r[0] for r in cur.fetchall()}
 
 
@@ -310,6 +349,96 @@ def get_leaderboard(limit: int = 20) -> list[dict]:
         return [dict(r) for r in cur.fetchall()]
 
 
+def update_card_signal_id(card_id: int, signal_id: int):
+    conn = _get_conn()
+    if not conn:
+        return
+    with conn.cursor() as cur:
+        cur.execute("UPDATE cards SET on_chain_signal_id = %s WHERE id = %s", (signal_id, card_id))
+
+
+
+
+# ─── Trades (Ape Trade Execution) ────────────────────────────
+
+def insert_trade(trade: dict) -> int:
+    conn = _get_conn()
+    if not conn:
+        return -1
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO trades
+               (card_id, user_address, token_symbol, token_name, entry_price,
+                amount_usd, token_amount, tx_hash, status)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (trade["card_id"], trade["user_address"], trade["token_symbol"],
+             trade.get("token_name", ""), trade["entry_price"],
+             trade["amount_usd"], trade["token_amount"],
+             trade.get("tx_hash", ""), trade.get("status", "completed"))
+        )
+        return cur.fetchone()[0]
+
+
+def get_user_trades(user_address: str, offset: int = 0, limit: int = 50) -> tuple[list[dict], int]:
+    conn = _get_conn()
+    if not conn:
+        return [], 0
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT COUNT(*) as cnt FROM trades WHERE user_address = %s", (user_address,))
+        total = cur.fetchone()["cnt"]
+        cur.execute(
+            "SELECT * FROM trades WHERE user_address = %s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+            (user_address, limit, offset))
+        return [dict(r) for r in cur.fetchall()], total
+
+
+def get_unresolved_trades() -> list[dict]:
+    conn = _get_conn()
+    if not conn:
+        return []
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM trades WHERE resolved = FALSE")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def update_trade_pnl(trade_id: int, exit_price: float, pnl_usd: float, pnl_pct: float, resolve: bool = False):
+    conn = _get_conn()
+    if not conn:
+        return
+    with conn.cursor() as cur:
+        if resolve:
+            cur.execute(
+                "UPDATE trades SET exit_price=%s, pnl_usd=%s, pnl_pct=%s, resolved=TRUE WHERE id=%s",
+                (exit_price, pnl_usd, pnl_pct, trade_id))
+        else:
+            cur.execute(
+                "UPDATE trades SET exit_price=%s, pnl_usd=%s, pnl_pct=%s WHERE id=%s",
+                (exit_price, pnl_usd, pnl_pct, trade_id))
+
+
+def get_leaderboard_by_pnl(limit: int = 20) -> list[dict]:
+    conn = _get_conn()
+    if not conn:
+        return []
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """SELECT user_address,
+                      COUNT(*) as total_trades,
+                      COUNT(*) FILTER (WHERE pnl_usd > 0) as wins,
+                      COUNT(*) FILTER (WHERE pnl_usd <= 0 AND resolved) as losses,
+                      COALESCE(SUM(pnl_usd), 0) as total_pnl_usd,
+                      CASE WHEN SUM(amount_usd) > 0
+                           THEN COALESCE(SUM(pnl_usd), 0) / SUM(amount_usd) * 100
+                           ELSE 0 END as total_pnl_pct,
+                      CASE WHEN COUNT(*) FILTER (WHERE resolved) > 0
+                           THEN COUNT(*) FILTER (WHERE pnl_usd > 0)::float
+                                / COUNT(*) FILTER (WHERE resolved) * 100
+                           ELSE 0 END as win_rate
+               FROM trades GROUP BY user_address
+               ORDER BY COALESCE(SUM(pnl_usd), 0) DESC LIMIT %s""",
+            (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
 def _row_to_card(row: dict) -> dict:
     return {
         "id": row["id"],
@@ -335,4 +464,44 @@ def _row_to_card(row: dict) -> dict:
         "notification_hook": row.get("notification_hook", ""),
         "signals": row.get("signals", []) if isinstance(row.get("signals"), list) else json.loads(row.get("signals", "[]")),
         "expires_at": str(row["expires_at"]) if row.get("expires_at") else None,
+        "sparkline": row.get("sparkline", []) if isinstance(row.get("sparkline"), list) else json.loads(row.get("sparkline", "[]")),
+        "patterns": row.get("patterns", []) if isinstance(row.get("patterns"), list) else json.loads(row.get("patterns", "[]")),
     }
+
+
+# ─── Daily Swipes (Premium Gate) ─────────────────────────
+
+def get_daily_swipe_count(address: str) -> int:
+    conn = _get_conn()
+    if not conn or not address:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute("SELECT count FROM daily_swipes WHERE user_address = %s AND swipe_date = CURRENT_DATE", (address,))
+        row = cur.fetchone()
+        return row[0] if row else 0
+
+
+def increment_daily_swipes(address: str) -> int:
+    conn = _get_conn()
+    if not conn or not address:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO daily_swipes (user_address, swipe_date, count) VALUES (%s, CURRENT_DATE, 1)
+               ON CONFLICT (user_address, swipe_date) DO UPDATE SET count = daily_swipes.count + 1
+               RETURNING count""",
+            (address,))
+        return cur.fetchone()[0]
+
+
+def get_recently_resolved_trades(address: str, since_hours: int = 24) -> list[dict]:
+    conn = _get_conn()
+    if not conn:
+        return []
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """SELECT * FROM trades WHERE user_address = %s AND resolved = TRUE
+               AND created_at > NOW() - INTERVAL '24 hours'
+               ORDER BY created_at DESC LIMIT 5""",
+            (address,))
+        return [dict(r) for r in cur.fetchall()]

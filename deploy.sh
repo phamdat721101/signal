@@ -112,6 +112,13 @@ BUILD_OUTPUT=$(forge build --via-ir 2>&1) || {
 echo "$BUILD_OUTPUT" >> "$LOG_FILE"
 ok "Contracts compiled"
 
+# --- Extract ABIs for backend ---
+info "Extracting ABIs..."
+jq '.abi' "out/SignalRegistry.sol/SignalRegistry.json" > "$ROOT_DIR/backend/app/abi.json"
+jq '.abi' "out/RewardEngine.sol/RewardEngine.json" > "$ROOT_DIR/backend/app/reward_engine_abi.json"
+jq '.abi' "out/ProofOfAlpha.sol/ProofOfAlpha.json" > "$ROOT_DIR/backend/app/proof_of_alpha_abi.json"
+ok "ABIs extracted"
+
 # --- 1. Deploy SignalRegistry ---
 extract_bytecode "SignalRegistry" "out/SignalRegistry.sol/SignalRegistry.json" "SignalRegistry.bin"
 CONTRACT_ADDR=$(deploy_contract "SignalRegistry" "SignalRegistry.bin")
@@ -135,7 +142,19 @@ VAULT_ADDR=$(deploy_contract "SessionVault" "SessionVault.bin")
 extract_bytecode "SignalPaymentGateway" "out/SignalPaymentGateway.sol/SignalPaymentGateway.json" "SignalPaymentGateway.bin"
 GW_ADDR=$(deploy_contract "SignalPaymentGateway" "SignalPaymentGateway.bin")
 
-# --- 5. Authorize backend as vault operator ---
+# --- 5. Deploy RewardEngine ---
+extract_bytecode "RewardEngine" "out/RewardEngine.sol/RewardEngine.json" "RewardEngine.bin"
+REWARD_CONSTRUCTOR=$(cast abi-encode "constructor(address)" "$IUSD_ADDR" 2>&1) || {
+  err "RewardEngine constructor encoding failed: $REWARD_CONSTRUCTOR"
+}
+echo -n "$(echo "$REWARD_CONSTRUCTOR" | sed 's/^0x//')" >> RewardEngine.bin
+REWARD_ADDR=$(deploy_contract "RewardEngine" "RewardEngine.bin")
+
+# --- 6. Deploy ProofOfAlpha ---
+extract_bytecode "ProofOfAlpha" "out/ProofOfAlpha.sol/ProofOfAlpha.json" "ProofOfAlpha.bin"
+ALPHA_ADDR=$(deploy_contract "ProofOfAlpha" "ProofOfAlpha.bin")
+
+# --- 7. Authorize backend as vault operator ---
 info "Authorizing backend as SessionVault operator..."
 AUTH_CALLDATA=$(cast calldata "setAuthorizedOperator(address,bool)" "$SENDER_HEX" true)
 AUTH_OUT=$(minitiad tx evm call "$VAULT_ADDR" "$AUTH_CALLDATA" \
@@ -145,6 +164,20 @@ AUTH_OUT=$(minitiad tx evm call "$VAULT_ADDR" "$AUTH_CALLDATA" \
   warn "Operator authorization may have failed. See deploy.log"
 }
 ok "Backend authorized as operator"
+
+info "Authorizing backend on RewardEngine..."
+AUTH_REWARD=$(cast calldata "setAuthorizedCaller(address,bool)" "$SENDER_HEX" true)
+minitiad tx evm call "$REWARD_ADDR" "$AUTH_REWARD" \
+  --from "$KEY_NAME" --keyring-backend "$KEYRING" --chain-id "$CHAIN_ID" \
+  --gas auto --gas-adjustment 1.4 --output json --yes >> "$LOG_FILE" 2>&1 || warn "RewardEngine auth may have failed"
+ok "RewardEngine authorized"
+
+info "Authorizing backend on ProofOfAlpha..."
+AUTH_ALPHA=$(cast calldata "setAuthorizedMinter(address,bool)" "$SENDER_HEX" true)
+minitiad tx evm call "$ALPHA_ADDR" "$AUTH_ALPHA" \
+  --from "$KEY_NAME" --keyring-backend "$KEYRING" --chain-id "$CHAIN_ID" \
+  --gas auto --gas-adjustment 1.4 --output json --yes >> "$LOG_FILE" 2>&1 || warn "ProofOfAlpha auth may have failed"
+ok "ProofOfAlpha authorized"
 
 # --- Wire .env files ---
 info "Updating .env files..."
@@ -167,6 +200,8 @@ update_env "$ROOT_DIR/backend/.env" "CONTRACT_ADDRESS" "$CONTRACT_ADDR"
 update_env "$ROOT_DIR/backend/.env" "MOCK_IUSD_ADDRESS" "$IUSD_ADDR"
 update_env "$ROOT_DIR/backend/.env" "SESSION_VAULT_ADDRESS" "$VAULT_ADDR"
 update_env "$ROOT_DIR/backend/.env" "PAYMENT_GATEWAY_ADDRESS" "$GW_ADDR"
+update_env "$ROOT_DIR/backend/.env" "REWARD_ENGINE_ADDRESS" "$REWARD_ADDR"
+update_env "$ROOT_DIR/backend/.env" "PROOF_OF_ALPHA_ADDRESS" "$ALPHA_ADDR"
 update_env "$ROOT_DIR/backend/.env" "ENABLE_PAYMENT_GATING" "true"
 [ -n "$PRIV_KEY" ] && update_env "$ROOT_DIR/backend/.env" "PRIVATE_KEY" "$PRIV_KEY"
 ok "Updated backend/.env"
@@ -176,6 +211,8 @@ update_env "$ROOT_DIR/frontend/.env" "VITE_CHAIN_ID" "$CHAIN_ID"
 update_env "$ROOT_DIR/frontend/.env" "VITE_MOCK_IUSD_ADDRESS" "$IUSD_ADDR"
 update_env "$ROOT_DIR/frontend/.env" "VITE_SESSION_VAULT_ADDRESS" "$VAULT_ADDR"
 update_env "$ROOT_DIR/frontend/.env" "VITE_PAYMENT_GATEWAY_ADDRESS" "$GW_ADDR"
+update_env "$ROOT_DIR/frontend/.env" "VITE_REWARD_ENGINE_ADDRESS" "$REWARD_ADDR"
+update_env "$ROOT_DIR/frontend/.env" "VITE_PROOF_OF_ALPHA_ADDRESS" "$ALPHA_ADDR"
 update_env "$ROOT_DIR/frontend/.env" "VITE_PAYMENT_ENABLED" "true"
 ok "Updated frontend/.env"
 
@@ -193,6 +230,8 @@ printf "  SignalRegistry:        %s\n" "$CONTRACT_ADDR"
 printf "  MockIUSD:              %s\n" "$IUSD_ADDR"
 printf "  SessionVault:          %s\n" "$VAULT_ADDR"
 printf "  SignalPaymentGateway:  %s\n" "$GW_ADDR"
+printf "  RewardEngine:          %s\n" "$REWARD_ADDR"
+printf "  ProofOfAlpha:          %s\n" "$ALPHA_ADDR"
 printf "  Chain:                 %s\n" "$CHAIN_ID"
 printf "  Deployer:              %s\n" "$SENDER"
 printf "  Log:                   %s\n" "$LOG_FILE"

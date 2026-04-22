@@ -1,27 +1,30 @@
 import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
-import { config } from '../config';
+import { config, shareToX } from '../config';
+
+function fmtPnl(v: number | null): string {
+  if (v == null) return '--';
+  return (v >= 0 ? '+' : '') + v.toFixed(2);
+}
 
 export default function Portfolio() {
   const { user } = usePrivy();
-  const initiaAddress = user?.wallet?.address || "";
+  const address = user?.wallet?.address || '';
 
-  const { data } = useQuery({
-    queryKey: ['userSwipes', initiaAddress],
+  const { data, isLoading } = useQuery({
+    queryKey: ['trades', address],
     queryFn: async () => {
-      const resp = await fetch(`${config.backendUrl}/api/cards/user/${initiaAddress}`);
+      const resp = await fetch(`${config.backendUrl}/api/trades/${address}`);
       if (!resp.ok) throw new Error('Failed');
-      return resp.json() as Promise<{ swipes: any[]; total: number }>;
+      return resp.json() as Promise<{ trades: any[]; total: number; summary: any }>;
     },
-    enabled: !!initiaAddress,
+    enabled: !!address,
   });
 
-  const swipes = data?.swipes ?? [];
-  const apes = swipes.filter((s) => s.action === 'ape');
-  const totalTrades = swipes.length;
-  const winRate = apes.length > 0 ? Math.round((apes.filter((a) => (a.price_change_24h ?? 0) > 0).length / apes.length) * 100) : 0;
+  const trades = data?.trades ?? [];
+  const summary = data?.summary;
 
-  if (!initiaAddress) {
+  if (!address) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 px-6">
         <span className="material-symbols-outlined text-6xl text-[#494847]">account_balance_wallet</span>
@@ -32,58 +35,83 @@ export default function Portfolio() {
 
   return (
     <div className="p-5 space-y-5">
-      {/* Balance header */}
-      <div className="text-center py-6">
-        <div className="font-label text-[10px] text-[#adaaaa] uppercase tracking-widest mb-2">Total Trades</div>
-        <div className="font-headline text-5xl font-black text-[#8eff71]">{totalTrades}</div>
-      </div>
+      {/* Summary */}
+      {summary && (
+        <div className="text-center py-4">
+          <div className="font-label text-[10px] text-[#adaaaa] uppercase tracking-widest mb-2">Total PnL</div>
+          <div className={"font-headline text-4xl font-black " + ((summary.total_pnl_usd || 0) >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]')}>
+            {fmtPnl(summary.total_pnl_usd)}
+            <span className="text-lg ml-1">USD</span>
+          </div>
+        </div>
+      )}
 
       {/* Stats grid */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="bg-[#262626] p-4 rounded-xl">
-          <div className="font-label text-[9px] text-[#adaaaa] uppercase tracking-widest mb-1">Apes</div>
-          <div className="font-headline text-2xl font-bold text-[#8eff71]">{apes.length}</div>
+      {summary && (
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-[#262626] p-4 rounded-xl">
+            <div className="font-label text-[9px] text-[#adaaaa] uppercase tracking-widest mb-1">Trades</div>
+            <div className="font-headline text-2xl font-bold text-white">{summary.total_trades}</div>
+          </div>
+          <div className="bg-[#262626] p-4 rounded-xl">
+            <div className="font-label text-[9px] text-[#adaaaa] uppercase tracking-widest mb-1">Wins</div>
+            <div className="font-headline text-2xl font-bold text-[#8eff71]">{summary.win_count}</div>
+          </div>
+          <div className="bg-[#262626] p-4 rounded-xl">
+            <div className="font-label text-[9px] text-[#adaaaa] uppercase tracking-widest mb-1">Invested</div>
+            <div className="font-headline text-xl font-bold text-white">${summary.total_invested?.toFixed(0)}</div>
+          </div>
         </div>
-        <div className="bg-[#262626] p-4 rounded-xl">
-          <div className="font-label text-[9px] text-[#adaaaa] uppercase tracking-widest mb-1">Fades</div>
-          <div className="font-headline text-2xl font-bold text-[#ff7166]">{totalTrades - apes.length}</div>
-        </div>
-        <div className="bg-[#262626] p-4 rounded-xl">
-          <div className="font-label text-[9px] text-[#adaaaa] uppercase tracking-widest mb-1">Win Rate</div>
-          <div className="font-headline text-2xl font-bold text-white">{winRate}%</div>
-        </div>
-      </div>
+      )}
 
-      {/* Active positions */}
+      {/* VIP Badge */}
+        <div className="bg-[#bf81ff]/10 border border-[#bf81ff]/20 p-4 rounded-xl flex items-center gap-3">
+          <span className="material-symbols-outlined text-[#bf81ff]" style={{ fontVariationSettings: "'FILL' 1" }}>stars</span>
+          <div>
+            <div className="font-headline font-bold text-sm text-[#bf81ff]">VIP Rewards Coming</div>
+            <div className="font-label text-[10px] text-[#adaaaa]">Earn esINIT for every swipe via Initia VIP gauge</div>
+          </div>
+        </div>
+
+      {/* Positions */}
       <div>
-        <h2 className="font-headline font-bold text-lg text-white mb-3">Active Positions</h2>
-        {apes.length === 0 ? (
+        <h2 className="font-headline font-bold text-lg text-white mb-3">Positions</h2>
+        {isLoading ? (
+          <div className="text-center text-[#adaaaa] text-sm py-8">Loading...</div>
+        ) : trades.length === 0 ? (
           <div className="bg-[#131313] rounded-xl p-8 text-center">
-            <p className="text-[#494847] text-sm">No apes yet. Start swiping!</p>
+            <p className="text-[#494847] text-sm">No trades yet. Start swiping!</p>
           </div>
         ) : (
           <div className="space-y-2">
-            {apes.map((s: any) => (
-              <div key={s.id} className="bg-[#131313] p-4 rounded-xl flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-[#262626] flex items-center justify-center font-headline font-bold text-[#8eff71] text-sm">
-                    {s.token_symbol?.slice(0, 2)}
+            {trades.map((t: any) => {
+              const pnl = t.pnl_usd ?? 0;
+              const pnlColor = pnl >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]';
+              return (
+                <div key={t.id} className="bg-[#131313] p-4 rounded-xl flex justify-between items-center">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-[#262626] flex items-center justify-center font-headline font-bold text-[#8eff71] text-sm">
+                      {t.token_symbol?.slice(0, 2)}
+                    </div>
+                    <div>
+                      <div className="font-headline font-bold text-white text-sm">${t.token_symbol}</div>
+                      <div className="font-label text-[10px] text-[#adaaaa]">{t.token_amount?.toFixed(4)} tokens</div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="font-headline font-bold text-white text-sm">${s.token_symbol}</div>
-                    <div className="font-label text-[10px] text-[#adaaaa]">{s.token_name}</div>
+                  <div className="text-right">
+                    <div className={"font-headline font-bold text-sm " + pnlColor}>{fmtPnl(pnl)} USD</div>
+                    <div className={"font-label text-[10px] " + pnlColor}>{fmtPnl(t.pnl_pct)}%</div>
+                    {t.resolved && <div className="flex items-center gap-1">
+                      <span className="font-label text-[8px] text-[#494847]">CLOSED</span>
+                      <button onClick={() => shareToX((t.pnl_usd || 0) > 0
+                        ? `Called $${t.token_symbol}. +${(t.pnl_pct || 0).toFixed(1)}% 🧠 @KineticApp #ApeOrFade`
+                        : `Aped $${t.token_symbol}. ${(t.pnl_pct || 0).toFixed(1)}%. Pain. 😭 @KineticApp`
+                      )}><span className="material-symbols-outlined text-[12px] text-[#494847]">share</span></button>
+                    </div>}
                   </div>
                 </div>
-                <div className="text-right">
-                  <div className={`font-headline font-bold text-sm kinetic-pulse ${(s.price_change_24h ?? 0) >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]'}`}>
-                    {(s.price_change_24h ?? 0) >= 0 ? '+' : ''}{(s.price_change_24h ?? 0).toFixed(1)}%
-                  </div>
-                  <div className="font-label text-[10px] text-[#adaaaa]">
-                    ${s.price >= 1 ? s.price?.toLocaleString(undefined, { maximumFractionDigits: 2 }) : s.price?.toFixed(6)}
-                  </div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

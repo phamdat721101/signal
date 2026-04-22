@@ -1,6 +1,6 @@
 # Ape or Fade — Product Context & Architecture
 
-Primary context document for AI agents and developers. Updated 2026-04-21.
+Primary context document for AI agents and developers. Updated 2026-04-22.
 
 ## 1. Product Overview
 
@@ -24,69 +24,87 @@ Design System: The Kinetic Terminal — #0e0e0e void bg, #8eff71 green (Ape), #f
 | SessionVault.sol | iUSD deposit sessions with voucher micropayments. | Deployed, partially integrated |
 | SignalPaymentGateway.sol | Access record logging for signal API payments. | Deployed, not integrated |
 | MockIUSD.sol | ERC20 test token with faucet. Initia ERC20Registry precompile. | Working |
-| RewardEngine.sol | Win streak tracking, 3% rebate, streak bonus. | Deployed, NOT wired |
-| ProofOfAlpha.sol | Soulbound ERC-721 achievement NFTs. 5 tiers. | Deployed, NOT wired |
+| RewardEngine.sol | Win streak tracking, 3% rebate, streak bonus. | Deployed, wired via scheduler |
+| ProofOfAlpha.sol | Soulbound ERC-721 achievement NFTs. 5 tiers. | Deployed, wired via scheduler |
 
 ### 2.2 Backend Modules
 
 | Module | Role |
 |--------|------|
-| main.py | FastAPI app. 30+ endpoints across Card/Signal/Rewards/Payment/Provider APIs |
-| config.py | Pydantic Settings. Network switching. AWS Bedrock + chain + Supabase config |
-| content_engine.py | 5-stage card pipeline: harvest, analyze, narrate, visual, assemble+store |
-| signal_engine.py | EMA crossover + RSI signal generation. CoinGecko/Oracle prices |
-| db.py | Supabase/Postgres. 3 tables: signals, cards, swipes |
+| main.py | FastAPI app. 30+ endpoints: Card/Signal/Rewards/Payment/Provider/Profile APIs |
+| config.py | Pydantic Settings. Network switching (local/testnet). AWS Bedrock + chain + Supabase config |
+| content_engine.py | 5-stage card pipeline: harvest (CoinGecko) → analyze (anomaly signals) → narrate (Claude Bedrock + template fallback) → visual (SVG generation) → assemble + store |
+| signal_engine.py | EMA(5)/EMA(10) crossover + RSI(14) signal generation. Dynamic asset registry. Multi-timeframe. CoinGecko/Oracle prices. Simulation + on-chain dual-write |
+| db.py | Supabase/Postgres. 5 tables: signals, cards, swipes, trades, daily_swipes |
 | chain.py | web3.py wrapper. POA middleware. gasPrice=0 |
-| scheduler.py | APScheduler: card gen (5min), signal cycle (3x/day), EOD resolve |
+| scheduler.py | APScheduler: card_gen(5m), position_monitor(5m), signal_cycle(3x/day @8,14,20h), resolve(23:55), expire_cards(10m), backfill_charts(30m) |
 | mpp_middleware.py | MPP payment verification via ServicePaid event parsing |
+| agent_client.py | Reference SDK for AI agents with session voucher signing |
+| error_tracker.py | In-memory error tracking with code-based aggregation |
 
 ### 2.3 Frontend
 
-5 pages: Feed, Portfolio, Leaderboard, History, TradeSuccess
-2 components: TokenCard, Layout
-6 hooks: useCards, useSignals, useSignalActions, usePrices, useIUSDBalance, useSession
+6 pages: Feed, Portfolio, Leaderboard, History, Profile, TradeSuccess
+5 components: TokenCard, Layout, BridgePrompt, Onboarding, Paywall
+7 hooks: useCards, useSignals, useSignalActions, usePrices, useIUSDBalance, useSession, useApeTransaction
+
+### 2.4 Key API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | Backend health + chain status |
+| GET | `/api/signals` | All signals (paginated, filterable by provider) |
+| GET | `/api/cards` | Active card feed with expiry filtering |
+| POST | `/api/cards/{id}/ape` | Ape action: record trade + swipe + daily limit |
+| POST | `/api/cards/{id}/fade` | Fade action: record swipe + daily limit |
+| POST | `/api/signals/generate` | Trigger signal cycle (configurable assets/timeframe/target%) |
+| POST | `/api/cards/generate` | Trigger card generation pipeline |
+| GET | `/api/leaderboard` | PnL-ranked leaderboard with .init username resolution |
+| GET | `/api/profile/{address}` | Aggregated profile: rewards + achievements + trades + trading IQ |
+| POST | `/api/provider/signals` | External provider signal submission |
+| GET | `/api/metrics` | Appchain metrics (signals, cards, swipes, trades, unique users) |
+| GET | `/api/report` | Performance report with per-asset breakdown |
 
 ## 3. Database (Supabase/Postgres)
 
 - **signals**: id, asset, symbol, is_bull, confidence, target/entry/exit_price, timestamp, resolved, creator, provider, pattern, analysis
-- **cards**: id, token_symbol, token_name, hook, roast, metrics (JSONB), image_url, price, price_change_24h, volume_24h, market_cap, verdict, risk_level, risk_score, signals (JSONB), expires_at
+- **cards**: id, token_symbol, token_name, hook, roast, metrics (JSONB), verdict, risk_level, risk_score, image_url, price, price_change_24h, volume_24h, market_cap, sparkline (JSONB), patterns (JSONB), expires_at
 - **swipes**: id, card_id, user_address, action, created_at
+- **trades**: id, card_id, user_address, token_symbol, entry_price, amount_usd, token_amount, tx_hash, exit_price, pnl_usd, pnl_pct, resolved
+- **daily_swipes**: id, user_address, swipe_date, count (premium gate: 5 free/day)
 
-## 4. Gap Analysis (2026-04-21)
+## 4. Content Engine Pipeline (5 stages)
 
-### Working End-to-End
-- Card generation pipeline (CoinGecko -> analyze -> Claude/template -> Supabase)
-- Swipe UX (ape/fade with wallet integration)
-- Leaderboard, Portfolio, History pages
-- Legacy signal engine (EMA/RSI -> on-chain or simulation)
-- Rewards/achievements API (computed from swipes, not on-chain)
+1. **Harvest**: CoinGecko markets API → top 15 tokens by volume
+2. **Analyze**: Anomaly signal detection (volume spikes, price momentum, buy/sell imbalance, supply concentration, mcap ratio) → risk score 0-100
+3. **Chart Analysis**: CoinGecko market_chart → EMA crossover, breakout, higher/lower highs, consolidation, support test patterns + sparkline
+4. **Narrate**: Claude Bedrock (Haiku) → sarcastic Gen-Z hook + roast + 3 metrics; template fallback on failure
+5. **Assemble + Quality Gates**: Merge all data, validate (hook ≤80 chars, 3 metrics, valid verdict, volume ≥$5K), store in Supabase
+
+## 5. Working Features (2026-04-22)
+
+- Card generation pipeline (CoinGecko → analyze → Claude/template → chart patterns → Supabase)
+- Swipe UX (ape/fade with wallet integration + daily limit gating)
+- Trade execution with PnL tracking (auto-resolve after 24h)
+- Leaderboard (PnL-ranked with .init username resolution)
+- Portfolio with trade history
+- Profile with Trading IQ score
+- Signal engine (EMA/RSI → dual-write: simulation + Supabase)
+- Rewards/achievements (computed from trades, wired to RewardEngine contract on resolution)
 - Payment verification middleware (MPP)
-- MockIUSD faucet + InterwovenKit wallet + auto-signing
+- Card SVG generation for sharing
+- Card expiry enforcement (4h TTL)
+- Chart pattern detection + sparkline data
+- External provider signal API
+- MockIUSD faucet + Privy wallet
 
-### Deployed but NOT Wired
-- RewardEngine: onTradeResolved() never called from backend
-- ProofOfAlpha: mintAchievement() never called from backend
-- SignalPaymentGateway: not integrated into card flow
-- SessionVault: frontend hooks exist but unused in card/swipe flow
-- publishSignal(): content_engine never calls it (dataHash always bytes32(0))
+## 6. Deployment
 
-### Major Gaps vs Notion Target
-1. No ApeVault (trade execution contract)
-2. No x402 payments (uses custom MPP instead)
-3. No IPFS anchoring (dataHash always bytes32(0))
-4. No image generation (CoinGecko logos only)
-5. No quality gates enforcement
-6. No card expiry filtering
-7. No on-chain signal publishing from content_engine
-8. No growth loops or referral system
-
-### Priority for On-Chain Local Rollup
-1. Wire content_engine -> SignalRegistry.publishSignal()
-2. Wire swipe ape -> RewardEngine.onTradeResolved()
-3. Wire achievements -> ProofOfAlpha.mintAchievement()
-4. Enforce card expiry in get_cards()
-5. Add quality gates before card insertion
-6. Wire SessionVault into card access flow
+- **Backend**: FastAPI on VPS (bitnami@13.212.80.72) via deploy-vps.sh — port 8000
+- **Frontend**: Vite build, static hosting or dev server — port 5173
+- **SSH Key**: nim-claw.pem
+- **API URL**: http://13.212.80.72:8000
+- **Frontend env**: VITE_BACKEND_URL=http://13.212.80.72:8000
 
 ---
-*Updated 2026-04-21 — Full codebase analysis with gap analysis and on-chain integration priorities.*
+*Updated 2026-04-22 — Full codebase analysis with deployment context.*
