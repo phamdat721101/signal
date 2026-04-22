@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
 import { createPublicClient, http } from 'viem';
-import { useCards, useSwipe } from '../hooks/useCards';
+import { useCards } from '../hooks/useCards';
 import { config } from '../config';
 import TokenCard from '../components/TokenCard';
 import Onboarding from '../components/Onboarding';
@@ -22,8 +22,6 @@ export default function Feed() {
   const startX = useRef(0);
   const [showPaywall, setShowPaywall] = useState(false);
   const { data, isLoading } = useCards(0, 50);
-  const apeMutation = useSwipe('ape');
-  const fadeMutation = useSwipe('fade');
   const { user, login } = usePrivy();
   const initiaAddress = user?.wallet?.address || "";
   const navigate = useNavigate();
