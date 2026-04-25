@@ -1,7 +1,7 @@
 {
   "project_name": "Initia Signal — Ape or Fade",
   "repo_url": "https://github.com/phamdat721101/signal",
-  "commit_sha": "dcb952cd5b42671fcaccf7bf4bbb3ab65e7850de",
+  "commit_sha": "c8c4638412264c721cc6e21b752f01849036c41d",
   "rollup_chain_id": "initia-signal-1",
   "deployed_address": "0xc178dcA82a0E1EBaCa5EB373E73C97cd5a0cfADd",
   "vm": "evm",
