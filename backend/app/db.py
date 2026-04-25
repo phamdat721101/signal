@@ -424,18 +424,21 @@ def get_leaderboard_by_pnl(limit: int = 20) -> list[dict]:
         cur.execute(
             """SELECT user_address,
                       COUNT(*) as total_trades,
-                      COUNT(*) FILTER (WHERE pnl_usd > 0) as wins,
-                      COUNT(*) FILTER (WHERE pnl_usd <= 0 AND resolved) as losses,
-                      COALESCE(SUM(pnl_usd), 0) as total_pnl_usd,
-                      CASE WHEN SUM(amount_usd) > 0
-                           THEN COALESCE(SUM(pnl_usd), 0) / SUM(amount_usd) * 100
+                      COUNT(*) FILTER (WHERE resolved AND pnl_usd > 0) as wins,
+                      COUNT(*) FILTER (WHERE resolved AND pnl_usd <= 0) as losses,
+                      COALESCE(SUM(pnl_usd) FILTER (WHERE resolved), 0) as total_pnl_usd,
+                      CASE WHEN SUM(amount_usd) FILTER (WHERE resolved) > 0
+                           THEN COALESCE(SUM(pnl_usd) FILTER (WHERE resolved), 0)
+                                / SUM(amount_usd) FILTER (WHERE resolved) * 100
                            ELSE 0 END as total_pnl_pct,
                       CASE WHEN COUNT(*) FILTER (WHERE resolved) > 0
-                           THEN COUNT(*) FILTER (WHERE pnl_usd > 0)::float
+                           THEN COUNT(*) FILTER (WHERE resolved AND pnl_usd > 0)::float
                                 / COUNT(*) FILTER (WHERE resolved) * 100
                            ELSE 0 END as win_rate
                FROM trades GROUP BY user_address
-               ORDER BY COALESCE(SUM(pnl_usd), 0) DESC LIMIT %s""",
+               HAVING COUNT(*) FILTER (WHERE resolved) > 0
+               ORDER BY COALESCE(SUM(pnl_usd) FILTER (WHERE resolved), 0) DESC
+               LIMIT %s""",
             (limit,))
         return [dict(r) for r in cur.fetchall()]
 
@@ -466,6 +469,7 @@ def _row_to_card(row: dict) -> dict:
         "expires_at": str(row["expires_at"]) if row.get("expires_at") else None,
         "sparkline": row.get("sparkline", []) if isinstance(row.get("sparkline"), list) else json.loads(row.get("sparkline", "[]")),
         "patterns": row.get("patterns", []) if isinstance(row.get("patterns"), list) else json.loads(row.get("patterns", "[]")),
+        "on_chain_signal_id": row.get("on_chain_signal_id"),
     }
 
 

@@ -1,6 +1,6 @@
 import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
-import { config, shareToX } from '../config';
+import { config, shareToX, normalizeAddress } from '../config';
 
 function fmtPnl(v: number | null): string {
   if (v == null) return '--';
@@ -9,7 +9,7 @@ function fmtPnl(v: number | null): string {
 
 export default function Portfolio() {
   const { user } = usePrivy();
-  const address = user?.wallet?.address || '';
+  const address = normalizeAddress(user?.wallet?.address || '');
 
   const { data, isLoading } = useQuery({
     queryKey: ['trades', address],

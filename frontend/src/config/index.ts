@@ -122,6 +122,21 @@ export function truncateAddress(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
+const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+
+/** Convert bech32 (init1...) or hex (0x...) address to lowercase 0x hex. */
+export function normalizeAddress(addr: string): string {
+  if (!addr) return '';
+  if (addr.startsWith('0x') || addr.startsWith('0X')) return addr.toLowerCase();
+  const pos = addr.lastIndexOf('1');
+  if (pos < 1) return addr;
+  const words = [...addr.slice(pos + 1)].map(c => BECH32_CHARSET.indexOf(c)).slice(0, -6);
+  let bits = 0, value = 0;
+  const out: number[] = [];
+  for (const w of words) { value = (value << 5) | w; bits += 5; while (bits >= 8) { bits -= 8; out.push((value >> bits) & 0xff); } }
+  return '0x' + out.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 // Explorer URLs
 const SCAN_BASE = `https://scan.testnet.initia.xyz/${import.meta.env.VITE_CHAIN_ID || 'initia-signal-1'}`;
 const INDEXER_BASE = import.meta.env.VITE_INDEXER_URL || 'http://localhost:8080';

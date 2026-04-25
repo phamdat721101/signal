@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     payment_gateway_address: str = ""
     reward_engine_address: str = ""
     proof_of_alpha_address: str = ""
+    conviction_engine_address: str = ""
     tucana_router_address: str = ""
     enable_payment_gating: bool = True
     free_signals_per_day: int = 3

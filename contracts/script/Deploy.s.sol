@@ -8,6 +8,7 @@ import "../src/SessionVault.sol";
 import "../src/SignalPaymentGateway.sol";
 import "../src/RewardEngine.sol";
 import "../src/ProofOfAlpha.sol";
+import "../src/ConvictionEngine.sol";
 
 contract DeployScript is Script {
     function run() external {
@@ -38,7 +39,12 @@ contract DeployScript is Script {
 
         // Authorize backend as AI agent for signal publishing
         registry.setAuthorizedAgent(deployer, true);
-        console.log("Deployer authorized as agent+operator+minter");
+
+        ConvictionEngine conviction = new ConvictionEngine();
+        conviction.setAuthorizedResolver(deployer, true);
+        console.log("ConvictionEngine:", address(conviction));
+
+        console.log("Deployer authorized as agent+operator+minter+resolver");
 
         vm.stopBroadcast();
     }

@@ -154,6 +154,62 @@ class ChainClient:
             return False
         return ac.functions.hasTier(Web3.to_checksum_address(user), tier).call()
 
+    # ─── ConvictionEngine ─────────────────────────────
+    _CONVICTION_ABI = [
+        {"type":"function","name":"commitConviction","inputs":[{"name":"cardHash","type":"bytes32"},{"name":"score","type":"uint8"},{"name":"isBull","type":"bool"}],"outputs":[{"name":"","type":"uint256"}],"stateMutability":"nonpayable"},
+        {"type":"function","name":"resolveCard","inputs":[{"name":"cardHash","type":"bytes32"},{"name":"outcomePositive","type":"bool"}],"outputs":[],"stateMutability":"nonpayable"},
+        {"type":"function","name":"getReputation","inputs":[{"name":"user","type":"address"}],"outputs":[{"name":"","type":"tuple","components":[{"name":"totalConvictions","type":"uint256"},{"name":"correctCalls","type":"uint256"},{"name":"reputationScore","type":"int256"},{"name":"currentStreak","type":"uint256"},{"name":"bestStreak","type":"uint256"},{"name":"totalConvictionPoints","type":"uint256"}]}],"stateMutability":"view"},
+        {"type":"function","name":"getConvictionCount","inputs":[],"outputs":[{"name":"","type":"uint256"}],"stateMutability":"view"},
+        {"type":"function","name":"getTopUsers","inputs":[{"name":"offset","type":"uint256"},{"name":"limit","type":"uint256"}],"outputs":[{"name":"users","type":"address[]"},{"name":"scores","type":"int256[]"}],"stateMutability":"view"},
+    ]
+
+    def _conviction_contract(self):
+        settings = get_settings()
+        if not settings.conviction_engine_address:
+            return None
+        return self.w3.eth.contract(
+            address=Web3.to_checksum_address(settings.conviction_engine_address),
+            abi=self._CONVICTION_ABI,
+        )
+
+    def commit_conviction(self, card_hash: bytes, score: int, is_bull: bool) -> tuple[int, str]:
+        cc = self._conviction_contract()
+        if not cc:
+            return -1, ""
+        fn = cc.functions.commitConviction(card_hash, score, is_bull)
+        receipt = self._send_tx(fn)
+        logs = cc.events.ConvictionCommitted().process_receipt(receipt)
+        cid = logs[0]["args"]["id"] if logs else -1
+        return cid, receipt["transactionHash"].hex()
+
+    def resolve_card_conviction(self, card_hash: bytes, outcome_positive: bool) -> str:
+        cc = self._conviction_contract()
+        if not cc:
+            return ""
+        fn = cc.functions.resolveCard(card_hash, outcome_positive)
+        receipt = self._send_tx(fn)
+        return receipt["transactionHash"].hex()
+
+    def get_reputation(self, user: str) -> dict:
+        cc = self._conviction_contract()
+        if not cc:
+            return {"totalConvictions": 0, "correctCalls": 0, "reputationScore": 0,
+                    "currentStreak": 0, "bestStreak": 0, "totalConvictionPoints": 0}
+        raw = cc.functions.getReputation(Web3.to_checksum_address(user)).call()
+        return {"totalConvictions": raw[0], "correctCalls": raw[1], "reputationScore": raw[2],
+                "currentStreak": raw[3], "bestStreak": raw[4], "totalConvictionPoints": raw[5]}
+
+    def get_conviction_leaderboard(self, offset: int = 0, limit: int = 50) -> list[dict]:
+        cc = self._conviction_contract()
+        if not cc:
+            return []
+        users, scores = cc.functions.getTopUsers(offset, limit).call()
+        return [{"address": u, "reputationScore": s} for u, s in zip(users, scores)]
+
+    def get_conviction_count(self) -> int:
+        cc = self._conviction_contract()
+        return cc.functions.getConvictionCount().call() if cc else 0
+
     @staticmethod
     def _parse_signal(idx: int, raw) -> dict:
         return {

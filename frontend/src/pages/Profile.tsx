@@ -1,12 +1,14 @@
 import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
-import { config, shareToX, explorerTxUrl } from '../config';
+import { config, shareToX, explorerTxUrl, normalizeAddress } from '../config';
 import { useSession } from '../hooks/useSession';
+import { useConviction } from '../hooks/useConviction';
 
 export default function Profile() {
   const { user } = usePrivy();
-  const address = user?.wallet?.address || '';
-  const { claimFaucet, approveAndDeposit, closeSession, clearSteps, loading, error, steps, iusdBalance } = useSession();
+  const address = normalizeAddress(user?.wallet?.address || '');
+  const { claimFaucet, claimGas, approveAndDeposit, closeSession, clearSteps, loading, error, steps, iusdBalance } = useSession();
+  const { data: convictionData } = useConviction(address);
 
   const { data } = useQuery({
     queryKey: ['profile', address],
@@ -39,6 +41,12 @@ export default function Profile() {
         <div className="font-label text-[10px] text-[#bf81ff] uppercase tracking-widest mb-1">Trading IQ</div>
         <div className="font-headline text-5xl font-black text-[#8eff71]">{iq}</div>
         <div className="font-label text-[10px] text-[#adaaaa] mt-1">{address.slice(0, 6)}...{address.slice(-4)}</div>
+        <button onClick={() => shareToX(
+          `My Trading IQ is ${iq} on @KineticApp 🧠 ${iq >= 300 ? 'Whale status.' : iq >= 150 ? 'Alpha hunter.' : iq >= 50 ? 'Getting dangerous.' : 'Just getting started.'} #ApeOrFade`
+        )} className="mt-3 bg-[#262626] px-4 py-2 rounded-lg text-[#adaaaa] font-label text-xs flex items-center gap-2 mx-auto">
+          <span className="material-symbols-outlined text-sm">share</span>
+          Share Trading IQ
+        </button>
       </div>
 
       {/* Streak */}
@@ -68,6 +76,38 @@ export default function Profile() {
         ))}
       </div>
 
+      {/* On-Chain Reputation */}
+      {convictionData && convictionData.total_convictions > 0 && (
+        <div className="bg-[#131313] rounded-xl p-4 border border-[#bf81ff]/10">
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="font-headline font-bold text-sm text-white">On-Chain Reputation</h2>
+            <span className="text-[9px] font-label text-[#494847]">verified on-chain ✓</span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="text-center">
+              <div className={`font-headline text-xl font-bold ${(convictionData.reputation_score || 0) >= 0 ? 'text-[#bf81ff]' : 'text-[#ff7166]'}`}>
+                {convictionData.reputation_score || 0}
+              </div>
+              <div className="font-label text-[8px] text-[#adaaaa] uppercase">Rep Score</div>
+            </div>
+            <div className="text-center">
+              <div className="font-headline text-xl font-bold text-[#8eff71]">{convictionData.accuracy || 0}%</div>
+              <div className="font-label text-[8px] text-[#adaaaa] uppercase">Accuracy</div>
+            </div>
+            <div className="text-center">
+              <div className="font-headline text-xl font-bold text-white">{convictionData.total_convictions || 0}</div>
+              <div className="font-label text-[8px] text-[#adaaaa] uppercase">Convictions</div>
+            </div>
+          </div>
+          <button onClick={() => shareToX(
+            `My on-chain reputation: ${convictionData.reputation_score} REP | ${convictionData.accuracy}% accuracy | ${convictionData.best_streak} best streak 🧠 Verified on @KineticApp #ProofOfConviction`
+          )} className="w-full bg-[#bf81ff]/10 border border-[#bf81ff]/20 py-2 rounded-lg text-[#bf81ff] font-headline font-bold text-xs flex items-center justify-center gap-2">
+            <span className="material-symbols-outlined text-sm">share</span>
+            Share Reputation
+          </button>
+        </div>
+      )}
+
       {/* Achievements */}
       {(achievements.earned || []).length > 0 && (
         <div>
@@ -77,8 +117,9 @@ export default function Profile() {
               <div key={t.tier} className="bg-[#131313] px-3 py-2 rounded-lg flex items-center gap-2 border border-[#494847]/20">
                 <span className="text-lg">{t.emoji}</span>
                 <span className="font-label text-xs text-white">{t.name}</span>
-                <button onClick={() => shareToX(`I earned ${t.name} ${t.emoji} on @KineticApp — on-chain proof. #ApeOrFade`)} className="ml-1">
-                  <span className="material-symbols-outlined text-[12px] text-[#494847]">share</span>
+                <button onClick={() => shareToX(`I earned ${t.name} ${t.emoji} on @KineticApp — on-chain proof. #ApeOrFade`)}
+                  className="bg-[#262626] px-2 py-1 rounded text-[10px] text-[#adaaaa] flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[12px]">share</span>Share
                 </button>
               </div>
             ))}
@@ -95,6 +136,10 @@ export default function Profile() {
           </div>
         </div>
         <div className="space-y-2">
+          <button onClick={() => { clearSteps(); claimGas(); }} disabled={loading}
+            className="w-full bg-[#262626] text-white font-headline font-bold py-3 rounded-lg disabled:opacity-50 active:scale-95 transition-transform">
+            {loading && steps[0]?.label.includes('INIT') ? 'Requesting...' : 'Get 1 INIT Gas'}
+          </button>
           <button onClick={() => { clearSteps(); claimFaucet(); }} disabled={loading}
             className="w-full bg-[#262626] text-[#8eff71] font-headline font-bold py-3 rounded-lg disabled:opacity-50 active:scale-95 transition-transform">
             {loading && steps[0]?.label.includes('faucet') ? 'Claiming...' : 'Claim 1000 iUSD (Testnet Faucet)'}

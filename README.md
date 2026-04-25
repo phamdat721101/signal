@@ -6,16 +6,16 @@ Generate market signals from real price data, store them immutably on-chain, exe
 
 ## Initia Hackathon Submission
 
-- **Project Name**: Initia Signal
+- **Project Name**: Initia Signal — Ape or Fade
 
 ### Project Overview
 
-Initia Signal is an AI-powered trading intelligence platform that generates verifiable buy/sell signals using technical analysis (EMA crossover + RSI) on real-time market data, stores every signal immutably on-chain via a Solidity smart contract, and lets users execute signals with one-click auto-signing. It solves the problem of unverifiable trading calls — every signal's entry price, target, confidence, and outcome is recorded on-chain, creating transparent and provable track records for signal providers and traders.
+Ape or Fade is a TikTok-style token discovery app where users swipe through AI-generated trading cards — swipe right to **Ape** (buy), swipe left to **Fade** (skip). Each card features a sarcastic AI-written analysis powered by Claude, real market data from CoinGecko, and chart pattern detection. Every decision is recorded on-chain via 7 smart contracts on an Initia EVM appchain, creating verifiable "receipts" for your trading calls. When predictions resolve after 24h, users get a celebration screen ("🧠 CALLED IT" or "😭 REKT") they can share to X — turning every trade into a viral moment.
 
 ### Implementation Detail
 
-- **The Custom Implementation**: An AI signal engine that fetches real prices from Initia's Slinky oracle (with CoinGecko OHLC fallback), runs EMA(5)/EMA(10) crossover detection with RSI(14) confirmation to generate directional signals with confidence scoring, submits them on-chain to a SignalRegistry contract with realistic ±1.5% targets, and auto-resolves after 24h with the actual market price. The frontend reads signals directly from the EVM contract via viem, displays candlestick charts with entry/TP/SL levels, and shows a trader leaderboard with verifiable P&L.
-- **The Native Feature**: **Auto-signing** via InterwovenKit's ghost wallet enables one-click signal execution — users approve a session once and all subsequent `MsgCall` transactions are signed automatically without wallet popups, creating a seamless trading UX. The **Interwoven Bridge** button in the header lets users fund their appchain wallet directly from Initia L1.
+- **The Custom Implementation**: **ConvictionEngine** — a novel on-chain reputation system where users commit conviction scores (1-100) on AI-generated token cards before outcomes are known. When predictions resolve after 24h, the contract computes reputation scores entirely on-chain using conviction-weighted formulas with streak multipliers: correct high-conviction calls earn exponentially more reputation, while wrong calls penalize proportionally. Reputation can go negative. The on-chain leaderboard ranks users by verifiable reputation — no backend computation needed. Additionally, a 5-stage AI content pipeline (Harvest → Analyze → Narrate → Chart → Assemble) generates personality-driven token cards. 7 deployed contracts handle signals (`SignalRegistry`), conviction tracking (`ConvictionEngine`), rewards (3% rebate + streak bonuses via `RewardEngine`), soulbound achievement NFTs (`ProofOfAlpha` — 5 tiers), session-based payments (`SessionVault`), and a mock stablecoin (`MockIUSD`).
+- **The Native Feature**: **Auto-signing** via InterwovenKit's ghost wallet enables one-click conviction commits — users approve a session once and all subsequent conviction transactions are signed automatically without wallet popups. This makes the "swipe → commit conviction on-chain" flow feel as seamless as swiping on TikTok. The **Interwoven Bridge** button lets users fund their appchain wallet from Initia L1.
 
 ### How to Run Locally
 

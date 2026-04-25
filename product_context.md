@@ -81,22 +81,24 @@ Design System: The Kinetic Terminal — #0e0e0e void bg, #8eff71 green (Ape), #f
 4. **Narrate**: Claude Bedrock (Haiku) → sarcastic Gen-Z hook + roast + 3 metrics; template fallback on failure
 5. **Assemble + Quality Gates**: Merge all data, validate (hook ≤80 chars, 3 metrics, valid verdict, volume ≥$5K), store in Supabase
 
-## 5. Working Features (2026-04-22)
+## 5. Working Features (2026-04-23)
 
 - Card generation pipeline (CoinGecko → analyze → Claude/template → chart patterns → Supabase)
+- **On-chain signal anchoring** — every card gets a publishSignal() tx with data hash
+- **Card personality** — emoji avatars (🦍🔥/💀/🚀), AI hook as hero text, sarcastic roast punchline, visual risk meter
+- **Swipe feedback animations** — 🦍 APED! / 💨 FADED overlays with scale-in animation
+- **Resolution celebration modal** — full-screen "🧠 CALLED IT" / "😭 REKT" with funny lines + Share to X
 - Swipe UX (ape/fade with wallet integration + daily limit gating)
 - Trade execution with PnL tracking (auto-resolve after 24h)
 - Leaderboard (PnL-ranked with .init username resolution)
-- Portfolio with trade history
-- Profile with Trading IQ score
+- Portfolio with trade history + share per trade
+- Profile with Trading IQ score, streaks, achievements, wallet management
 - Signal engine (EMA/RSI → dual-write: simulation + Supabase)
-- Rewards/achievements (computed from trades, wired to RewardEngine contract on resolution)
-- Payment verification middleware (MPP)
-- Card SVG generation for sharing
+- Rewards/achievements (wired to RewardEngine + ProofOfAlpha contracts on resolution)
+- Startup card seeding (auto-generates cards if feed is empty)
 - Card expiry enforcement (4h TTL)
-- Chart pattern detection + sparkline data
-- External provider signal API
-- MockIUSD faucet + Privy wallet
+- Chart pattern detection + sparkline data + backfill
+- MockIUSD faucet + Privy wallet + SessionVault deposit/withdraw
 
 ## 6. Deployment
 

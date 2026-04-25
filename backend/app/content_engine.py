@@ -496,6 +496,29 @@ def run_card_generation_cycle():
                 created += 1
                 logger.info(f"Card #{card_id}: ${token['token_symbol']} [{narrative['verdict']}] "
                             f"risk={risk_score} — {narrative['hook']}")
+                # On-chain signal anchoring
+                try:
+                    from app.config import get_settings
+                    s = get_settings()
+                    if s.contract_address:
+                        from app.chain import ChainClient
+                        from web3 import Web3
+                        sym = card["token_symbol"].upper()
+                        sym_map = {"BTC": "0x"+"0"*39+"1", "ETH": "0x"+"0"*39+"2", "INIT": "0x"+"0"*39+"3"}
+                        asset = sym_map.get(sym, "0x" + Web3.keccak(text=sym).hex()[2:42])
+                        is_bull = card.get("verdict", "DYOR") == "APE"
+                        conf = min(95, max(50, card.get("risk_score", 70)))
+                        p = card.get("price", 0)
+                        entry_wei = int(p * 1e18)
+                        target_wei = int(p * (1.015 if is_bull else 0.985) * 1e18)
+                        dh = Web3.keccak(text=json.dumps({"hook": card.get("hook",""), "verdict": card.get("verdict","")}))
+                        chain = ChainClient()
+                        sig_id, tx = chain.publish_signal(asset, is_bull, conf, target_wei, entry_wei, dh)
+                        from app.db import update_card_signal_id
+                        update_card_signal_id(card_id, sig_id)
+                        logger.info(f"Anchored card #{card_id} → signal #{sig_id} tx={tx}")
+                except Exception as e:
+                    logger.warning(f"On-chain anchor failed for card #{card_id}: {e}")
         except Exception as e:
             logger.error(f"Pipeline failed for {token['token_symbol']}: {e}")
 

@@ -26,6 +26,7 @@ export interface Card {
   signals?: { type: string; severity: number; direction: string; finding: string }[];
   sparkline?: number[];
   patterns?: { type: string; direction: string; label: string; description: string; lesson?: string }[];
+  on_chain_signal_id?: number;
 }
 
 async function fetchCards(offset = 0, limit = 20) {

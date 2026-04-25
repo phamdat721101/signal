@@ -1,4 +1,5 @@
 """Scheduler — runs card generation + signal resolution + position monitoring."""
+import json
 import logging
 import time
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -65,7 +66,25 @@ def monitor_positions():
                         prices[id_to_sym[cg_id]] = vals["usd"]
         except Exception as e:
             logger.warning(f"Position monitor price fetch failed: {e}")
-            return
+
+    # Retry once after delay if no prices
+    if not prices and ids_str:
+        time.sleep(2)
+        try:
+            import httpx
+            resp = httpx.get("https://api.coingecko.com/api/v3/simple/price",
+                params={"ids": ids_str, "vs_currencies": "usd"}, timeout=15)
+            if resp.status_code == 200:
+                data = resp.json()
+                id_to_sym = {v: k for k, v in cg_ids.items() if v}
+                for cg_id, vals in data.items():
+                    if cg_id in id_to_sym and "usd" in vals:
+                        prices[id_to_sym[cg_id]] = vals["usd"]
+        except Exception:
+            pass
+
+    if not prices:
+        return
 
     now = time.time()
     updated = 0
@@ -91,16 +110,31 @@ def monitor_positions():
         if resolve:
             try:
                 from app.config import get_settings
+                from app.main import normalize_address
                 settings = get_settings()
                 if settings.contract_address and settings.reward_engine_address:
                     from app.chain import ChainClient
                     chain = ChainClient()
+                    user_addr = normalize_address(t["user_address"])
                     was_profit = pnl_usd > 0
-                    chain.on_trade_resolved(t["user_address"], was_profit, int(t["amount_usd"] * 1e18))
-                    # Task 4: Check achievements
-                    _check_achievements(chain, t["user_address"])
+                    chain.on_trade_resolved(user_addr, was_profit, int(t["amount_usd"] * 1e18))
+                    _check_achievements(chain, user_addr)
+                # ConvictionEngine: resolve card convictions
+                if settings.conviction_engine_address:
+                    import hashlib
+                    from app.db import get_card_by_id
+                    card = get_card_by_id(t["card_id"])
+                    if card:
+                        card_json = json.dumps({"id": t["card_id"], "symbol": card["token_symbol"],
+                                                "hook": card.get("hook", ""), "verdict": card.get("verdict", "")}, sort_keys=True)
+                        card_hash = bytes.fromhex(hashlib.sha256(card_json.encode()).hexdigest())
+                        if not hasattr(self, '_chain_inst'):
+                            from app.chain import ChainClient
+                            chain = ChainClient()
+                        chain.resolve_card_conviction(card_hash, pnl_usd > 0)
+                        logger.info(f"Conviction resolved for card {t['card_id']}")
             except Exception as e:
-                logger.warning(f"RewardEngine call failed for trade {t['id']}: {e}")
+                logger.warning(f"Resolution hooks failed for trade {t['id']}: {e}")
 
     if updated:
         logger.info(f"Position monitor: updated {updated}/{len(trades)} trades")

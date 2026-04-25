@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { createPublicClient, formatEther, http } from 'viem';
 import { usePrivy } from '@privy-io/react-auth';
-import { config } from '../config';
+import { config, normalizeAddress } from '../config';
 
 const BALANCE_OF_ABI = [
   { name: 'balanceOf', type: 'function', inputs: [{ name: 'account', type: 'address' }], outputs: [{ type: 'uint256' }], stateMutability: 'view' },
@@ -13,20 +13,6 @@ const SESSION_VAULT_ABI = [
 ] as const;
 
 const publicClient = createPublicClient({ chain: config.chain, transport: http() });
-
-function bech32ToHex(addr: string): `0x${string}` {
-  const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
-  const data = addr.slice(addr.lastIndexOf('1') + 1);
-  const words = [...data].map(c => CHARSET.indexOf(c)).slice(0, -6);
-  let bits = 0, value = 0;
-  const bytes: number[] = [];
-  for (const w of words) {
-    value = (value << 5) | w;
-    bits += 5;
-    while (bits >= 8) { bits -= 8; bytes.push((value >> bits) & 0xff); }
-  }
-  return `0x${bytes.map(b => b.toString(16).padStart(2, '0')).join('')}` as `0x${string}`;
-}
 
 async function fetchSessionBalance(evmAddress: `0x${string}`): Promise<bigint> {
   const sessionIds = await publicClient.readContract({
@@ -48,7 +34,7 @@ async function fetchSessionBalance(evmAddress: `0x${string}`): Promise<bigint> {
 export function useIUSDBalance() {
   const { user } = usePrivy();
   const initiaAddress = user?.wallet?.address || "";
-  const evmAddress = initiaAddress ? bech32ToHex(initiaAddress) : undefined;
+  const evmAddress = initiaAddress ? normalizeAddress(initiaAddress) as `0x${string}` : undefined;
 
   const { data, isLoading } = useQuery({
     queryKey: ['iusd-balance', evmAddress],

@@ -1,10 +1,10 @@
 import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
-import { config } from '../config';
+import { config, normalizeAddress } from '../config';
 
 export default function History() {
   const { user } = usePrivy();
-  const initiaAddress = user?.wallet?.address || "";
+  const initiaAddress = normalizeAddress(user?.wallet?.address || "");
 
   const { data, isLoading } = useQuery({
     queryKey: ['history', initiaAddress],

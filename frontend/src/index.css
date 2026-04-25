@@ -42,3 +42,8 @@ body {
   50% { opacity: 0.7; }
 }
 .kinetic-pulse { animation: pulse-glow 2s infinite ease-in-out; }
+
+@keyframes scaleIn {
+  0% { transform: scale(0.5); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}

@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { createPublicClient, encodeFunctionData, http, parseEther, formatEther } from 'viem';
-import { config } from '../config';
+import { config, normalizeAddress } from '../config';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 
 const MOCK_IUSD_ABI = [
@@ -31,7 +31,8 @@ export function useSession() {
   const [steps, setSteps] = useState<TxStep[]>([]);
   const { user } = usePrivy();
   const { wallets } = useWallets();
-  const address = user?.wallet?.address || '';
+  const rawAddress = user?.wallet?.address || '';
+  const address = normalizeAddress(rawAddress);
   const queryClient = useQueryClient();
 
   const updateStep = (index: number, update: Partial<TxStep>) => {
@@ -143,5 +144,20 @@ export function useSession() {
 
   const clearSteps = useCallback(() => { setSteps([]); setError(null); }, []);
 
-  return { claimFaucet, approveAndDeposit, closeSession, clearSteps, loading, error, steps, iusdBalance, connected: !!address, address };
+  const claimGas = useCallback(async () => {
+    if (!address) return;
+    setLoading(true); setError(null);
+    setSteps([{ label: 'Requesting 1 INIT gas', status: 'pending' }]);
+    try {
+      const resp = await fetch(`${config.backendUrl}/api/faucet/gas?address=${address}`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || 'Gas faucet failed');
+      updateStep(0, { status: 'success', txHash: data.txHash });
+    } catch (e: any) {
+      setError(e.message);
+      updateStep(0, { status: 'error', error: e.message });
+    } finally { setLoading(false); }
+  }, [address]);
+
+  return { claimFaucet, claimGas, approveAndDeposit, closeSession, clearSteps, loading, error, steps, iusdBalance, connected: !!address, address };
 }

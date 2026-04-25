@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -9,6 +10,31 @@ from app.error_tracker import error_tracker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l'
+
+def normalize_address(addr: str) -> str:
+    """Convert bech32 (init1...) or hex (0x...) address to checksummed 0x hex. Returns '' for empty."""
+    if not addr:
+        return ''
+    if addr.startswith('0x') or addr.startswith('0X'):
+        from web3 import Web3
+        return Web3.to_checksum_address(addr)
+    # bech32 decode
+    pos = addr.rfind('1')
+    if pos < 1:
+        return addr
+    data_part = addr[pos + 1:]
+    words = [_BECH32_CHARSET.index(c) for c in data_part[:-6]]
+    bits, value, out = 0, 0, []
+    for w in words:
+        value = (value << 5) | w
+        bits += 5
+        while bits >= 8:
+            bits -= 8
+            out.append((value >> bits) & 0xff)
+    from web3 import Web3
+    return Web3.to_checksum_address('0x' + bytes(out).hex())
 
 _chain = None
 
@@ -60,6 +86,19 @@ async def lifespan(app: FastAPI):
             logger.warning(f"DB init failed: {e}")
     bootstrap_price_history()
     start_scheduler()
+    # Seed cards on startup if feed is empty
+    if settings.database_url:
+        try:
+            from app.db import get_cards
+            cards, _ = get_cards(0, 3)
+            if len(cards) < 3:
+                logger.info("Feed has < 3 cards — seeding on startup...")
+                from app.content_engine import run_card_generation_cycle
+                run_card_generation_cycle()
+                cards2, _ = get_cards(0, 3)
+                logger.info(f"Seeded {len(cards2)} cards on startup")
+        except Exception as e:
+            logger.warning(f"Startup card seed failed (non-fatal): {e}")
     yield
     from app.scheduler import stop_scheduler
     stop_scheduler()
@@ -482,9 +521,11 @@ async def get_card_image(card_id: int):
     return Response(content=svg, media_type="image/svg+xml",
                     headers={"Cache-Control": "public, max-age=3600"})
 
-@app.post("/api/cards/{card_id}/ape")
 def _is_premium(address: str) -> bool:
     """Check if user has an active SessionVault session (premium)."""
+    address = normalize_address(address)
+    if not address:
+        return False
     settings = get_settings()
     if not settings.session_vault_address or not settings.contract_address:
         return False
@@ -500,14 +541,16 @@ def _is_premium(address: str) -> bool:
             s = vault.functions.getSession(sid).call()
             if s[7] and s[2] > 0:  # active=True and remainingBalance > 0
                 return True
-    except Exception:
-        pass
-    return False
+        return False
+    except Exception as e:
+        logger.warning(f"_is_premium chain check failed for {address}: {e}")
+        return True  # fail-open: don't block users when chain is unreachable
 
 
+@app.post("/api/cards/{card_id}/ape")
 async def ape_card(card_id: int, request: Request):
     body = await request.json()
-    address = body.get("address", "")
+    address = normalize_address(body.get("address", ""))
     amount_usd = float(body.get("amount_usd", 1.0))
     tx_hash = body.get("tx_hash", "")
     from app.db import record_swipe, get_card_by_id, insert_trade, get_daily_swipe_count, increment_daily_swipes
@@ -534,6 +577,24 @@ async def ape_card(card_id: int, request: Request):
     if address:
         increment_daily_swipes(address)
     explorer_url = f"https://scan.testnet.initia.xyz/initia-signal-1/evm-txs/{tx_hash}" if on_chain else None
+
+    # ── ConvictionEngine: commit on-chain conviction ──
+    conviction_data = None
+    try:
+        settings = get_settings()
+        if settings.conviction_engine_address and address:
+            import hashlib
+            card_json = json.dumps({"id": card_id, "symbol": card["token_symbol"],
+                                    "hook": card.get("hook", ""), "verdict": card.get("verdict", "")}, sort_keys=True)
+            card_hash = bytes.fromhex(hashlib.sha256(card_json.encode()).hexdigest())
+            score = min(99, max(1, card.get("risk_score", 70)))
+            is_bull = card.get("verdict", "APE") == "APE"
+            chain = get_chain()
+            cid, ctx = chain.commit_conviction(card_hash, score, is_bull)
+            conviction_data = {"id": cid, "score": score, "tx_hash": ctx}
+    except Exception as e:
+        logger.warning(f"Conviction commit failed (non-fatal): {e}")
+
     return {
         "status": "ok", "action": "ape",
         "trade": {
@@ -543,24 +604,22 @@ async def ape_card(card_id: int, request: Request):
             "tx_hash": tx_hash, "explorer_url": explorer_url,
             "on_chain": on_chain, "trade_type": "futures" if on_chain else "paper",
         },
+        "conviction": conviction_data,
     }
 
 
 @app.post("/api/cards/{card_id}/fade")
 async def fade_card(card_id: int, request: Request):
     body = await request.json()
-    address = body.get("address", "")
-    from app.db import record_swipe, get_daily_swipe_count, increment_daily_swipes
-    if address and get_daily_swipe_count(address) >= 5 and not _is_premium(address):
-        raise HTTPException(status_code=402, detail={"message": "Daily free swipe limit reached", "limit": 5})
+    address = normalize_address(body.get("address", ""))
+    from app.db import record_swipe
     swipe_id = record_swipe(card_id, address, "fade")
-    if address:
-        increment_daily_swipes(address)
     return {"status": "ok", "swipe_id": swipe_id, "action": "fade"}
 
 
 @app.get("/api/cards/user/{address}")
 async def get_user_card_history(address: str, offset: int = 0, limit: int = Query(default=50, le=100)):
+    address = normalize_address(address)
     from app.db import get_user_swipes
     swipes, total = get_user_swipes(address, offset, limit)
     return {"swipes": swipes, "total": total}
@@ -570,6 +629,7 @@ async def get_user_card_history(address: str, offset: int = 0, limit: int = Quer
 
 @app.get("/api/trades/{address}")
 async def get_user_trades_endpoint(address: str, offset: int = 0, limit: int = Query(default=50, le=100)):
+    address = normalize_address(address)
     from app.db import get_user_trades
     trades, total = get_user_trades(address, offset, limit)
     resolved = [t for t in trades if t.get("resolved")]
@@ -612,6 +672,7 @@ async def _resolve_init_username(address: str) -> str:
 
 @app.get("/api/trades/{address}/resolved-recent")
 async def get_resolved_recent(address: str):
+    address = normalize_address(address)
     from app.db import get_recently_resolved_trades
     return {"trades": get_recently_resolved_trades(address)}
 
@@ -669,6 +730,7 @@ async def trigger_card_generation():
 @app.get("/api/profile/{address}")
 async def get_profile(address: str):
     """Aggregated profile: rewards + achievements + trades + trading IQ."""
+    address = normalize_address(address)
     rewards_data = await get_user_rewards(address)
     achievements_data = await get_user_achievements(address)
     from app.db import get_user_trades
@@ -684,13 +746,29 @@ async def get_profile(address: str):
     total = rewards_data.get("totalTrades", 0)
     streak = rewards_data.get("bestStreak", 0)
     earned = len(achievements_data.get("earned", []))
-    iq = max(0, wins * 10 - (total - wins) * 5 + streak * 5 + earned * 25)
+    # On-chain conviction reputation
+    conviction_data = {}
+    try:
+        chain = get_chain()
+        conviction_data = chain.get_reputation(address)
+    except Exception:
+        pass
+    on_chain_rep = conviction_data.get("reputationScore", 0)
+    iq = max(0, wins * 10 - (total - wins) * 5 + streak * 5 + earned * 25 + (on_chain_rep // 10))
     return {
         "address": address,
         "trading_iq": iq,
         "rewards": rewards_data,
         "achievements": achievements_data,
         "summary": trades_data.get("summary", {}),
+        "conviction": {
+            "reputation_score": conviction_data.get("reputationScore", 0),
+            "total_convictions": conviction_data.get("totalConvictions", 0),
+            "correct_calls": conviction_data.get("correctCalls", 0),
+            "current_streak": conviction_data.get("currentStreak", 0),
+            "best_streak": conviction_data.get("bestStreak", 0),
+            "source": "on-chain" if conviction_data else "none",
+        },
     }
 
 
@@ -825,6 +903,48 @@ class ProviderSignal(BaseModel):
     timeframe: str = ""
     stopLoss: str = "0"
     creator: str = ""
+
+
+# ─── Conviction Engine API ──────────────────────────
+
+@app.get("/api/conviction/{address}")
+async def get_user_conviction(address: str):
+    """Get on-chain reputation from ConvictionEngine."""
+    address = normalize_address(address)
+    try:
+        chain = get_chain()
+        rep = chain.get_reputation(address)
+        total = rep["totalConvictions"]
+        return {
+            "address": address,
+            "reputation_score": rep["reputationScore"],
+            "total_convictions": total,
+            "correct_calls": rep["correctCalls"],
+            "accuracy": round(rep["correctCalls"] / total * 100, 1) if total > 0 else 0,
+            "avg_conviction": round(rep["totalConvictionPoints"] / total, 1) if total > 0 else 0,
+            "current_streak": rep["currentStreak"],
+            "best_streak": rep["bestStreak"],
+            "source": "on-chain",
+        }
+    except Exception as e:
+        logger.warning(f"ConvictionEngine read failed: {e}")
+        return {"address": address, "reputation_score": 0, "total_convictions": 0,
+                "accuracy": 0, "source": "fallback"}
+
+
+@app.get("/api/conviction/leaderboard")
+async def get_conviction_leaderboard():
+    """On-chain reputation leaderboard."""
+    try:
+        chain = get_chain()
+        entries = chain.get_conviction_leaderboard(0, 50)
+        entries.sort(key=lambda x: x["reputationScore"], reverse=True)
+        for entry in entries:
+            entry["username"] = await _resolve_init_username(entry["address"])
+        return {"leaderboard": entries, "source": "on-chain"}
+    except Exception as e:
+        logger.warning(f"Conviction leaderboard failed: {e}")
+        return {"leaderboard": [], "source": "fallback"}
 
 
 @app.post("/api/provider/signals")
@@ -1007,6 +1127,9 @@ async def get_pricing():
 
 @app.post("/api/payment/faucet")
 async def claim_faucet(address: str):
+    address = normalize_address(address)
+    if not address:
+        raise HTTPException(status_code=400, detail="Invalid address")
     settings = get_settings()
     if not settings.mock_iusd_address:
         raise HTTPException(status_code=400, detail="MockIUSD not deployed")
@@ -1021,5 +1144,31 @@ async def claim_faucet(address: str):
         fn = iusd.functions.mint(Web3.to_checksum_address(address), int(1000 * 1e18))
         receipt = chain._send_tx(fn)
         return {"status": "ok", "amount": "1000", "token": "iUSD", "recipient": address, "txHash": receipt["transactionHash"].hex()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/faucet/gas")
+async def gas_faucet(address: str):
+    """Send native gas tokens to new user from gas-station account."""
+    address = normalize_address(address)
+    if not address:
+        raise HTTPException(status_code=400, detail="Invalid address")
+    try:
+        chain = get_chain()
+        from web3 import Web3
+        to = Web3.to_checksum_address(address)
+        bal = chain.w3.eth.get_balance(to)
+        if bal > Web3.to_wei(0.1, 'ether'):
+            return {"status": "ok", "message": "Already funded", "balance": str(bal)}
+        tx = {
+            "from": chain.account.address, "to": to,
+            "value": Web3.to_wei(1, 'ether'), "gas": 21000, "gasPrice": 0,
+            "nonce": chain.w3.eth.get_transaction_count(chain.account.address),
+        }
+        signed = chain.account.sign_transaction(tx)
+        tx_hash = chain.w3.eth.send_raw_transaction(signed.raw_transaction)
+        chain.w3.eth.wait_for_transaction_receipt(tx_hash)
+        return {"status": "ok", "txHash": tx_hash.hex(), "amount": "1 INIT"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
