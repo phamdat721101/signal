@@ -3,7 +3,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.error_tracker import error_tracker
@@ -304,20 +304,11 @@ async def trigger_signal_generation(
     target_decimal = target_pct / 100.0  # convert 1.5 → 0.015
 
     if settings.enable_payment_gating and settings.session_vault_address:
-        tx_hash = request.headers.get("X-PAYMENT-TX")
-        if not tx_hash:
-            from app.mpp_middleware import SERVICE_PRICING
-            verifier = _get_payment_verifier()
-            raise HTTPException(status_code=402, detail=verifier.build_402_response(
-                "signal-premium", SERVICE_PRICING["signal-premium"]["price_wei"], settings.mock_iusd_address))
+        from app.x402_payment import require_payment
         from app.mpp_middleware import SERVICE_PRICING
-        verifier = _get_payment_verifier()
-        result = verifier.verify_payment_tx(tx_hash, "signal-premium",
-                                            SERVICE_PRICING["signal-premium"]["price_wei"])
-        if not result["valid"]:
-            raise HTTPException(status_code=402, detail={"error": result["error"]})
-        payment_info = {"status": "paid", "tx_hash": tx_hash,
-                        "session_id": result["session_id"], "amount_paid": str(result["amount"])}
+        payment_info = await require_payment(
+            request, "signal-premium", "$0.01", SERVICE_PRICING["signal-premium"]["price_wei"]
+        )
 
     from app.signal_engine import run_signal_cycle, price_history, recent_signal_txs
     try:
@@ -553,9 +544,7 @@ async def ape_card(card_id: int, request: Request):
     address = normalize_address(body.get("address", ""))
     amount_usd = float(body.get("amount_usd", 1.0))
     tx_hash = body.get("tx_hash", "")
-    from app.db import record_swipe, get_card_by_id, insert_trade, get_daily_swipe_count, increment_daily_swipes
-    if address and get_daily_swipe_count(address) >= 5 and not _is_premium(address):
-        raise HTTPException(status_code=402, detail={"message": "Daily free swipe limit reached", "limit": 5})
+    from app.db import record_swipe, get_card_by_id, insert_trade
     card = get_card_by_id(card_id)
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
@@ -574,8 +563,6 @@ async def ape_card(card_id: int, request: Request):
         "token_amount": token_amount, "tx_hash": tx_hash,
     })
     record_swipe(card_id, address, "ape")
-    if address:
-        increment_daily_swipes(address)
     explorer_url = f"https://scan.testnet.initia.xyz/initia-signal-1/evm-txs/{tx_hash}" if on_chain else None
 
     # ── ConvictionEngine: commit on-chain conviction ──
@@ -675,18 +662,6 @@ async def get_resolved_recent(address: str):
     address = normalize_address(address)
     from app.db import get_recently_resolved_trades
     return {"trades": get_recently_resolved_trades(address)}
-
-
-@app.get("/api/leaderboard")
-async def get_leaderboard_data():
-    from app.db import get_leaderboard_by_pnl, get_leaderboard
-    pnl_lb = get_leaderboard_by_pnl()
-    entries = pnl_lb if pnl_lb else get_leaderboard()
-    for entry in entries:
-        addr = entry.get("user_address", "")
-        if addr:
-            entry["username"] = await _resolve_init_username(addr)
-    return {"leaderboard": entries}
 
 
 @app.get("/api/metrics")
@@ -932,19 +907,7 @@ async def get_user_conviction(address: str):
                 "accuracy": 0, "source": "fallback"}
 
 
-@app.get("/api/conviction/leaderboard")
-async def get_conviction_leaderboard():
-    """On-chain reputation leaderboard."""
-    try:
-        chain = get_chain()
-        entries = chain.get_conviction_leaderboard(0, 50)
-        entries.sort(key=lambda x: x["reputationScore"], reverse=True)
-        for entry in entries:
-            entry["username"] = await _resolve_init_username(entry["address"])
-        return {"leaderboard": entries, "source": "on-chain"}
-    except Exception as e:
-        logger.warning(f"Conviction leaderboard failed: {e}")
-        return {"leaderboard": [], "source": "fallback"}
+
 
 
 @app.post("/api/provider/signals")
@@ -965,8 +928,15 @@ async def provider_submit_signal(signal: ProviderSignal):
     signal_id = insert_signal(row)
     if signal_id < 0:
         raise HTTPException(status_code=500, detail="Failed to store signal")
+    # Auto-generate card from signal
+    card_id = -1
+    try:
+        from app.content_engine import generate_card_from_signal
+        card_id = generate_card_from_signal(signal_id)
+    except Exception as e:
+        logger.warning(f"Card generation from signal #{signal_id} failed (non-fatal): {e}")
     _cache.clear()
-    return {"status": "ok", "signalId": signal_id, "provider": signal.provider}
+    return {"status": "ok", "signalId": signal_id, "cardId": card_id, "provider": signal.provider}
 
 
 @app.post("/api/provider/signals/batch")
@@ -1004,6 +974,21 @@ async def provider_get_signals(
     from app.db import get_signals as db_get_signals
     signals, total = db_get_signals(offset, limit, provider)
     return {"signals": signals, "total": total, "provider": provider}
+
+
+@app.get("/api/provider/{provider_name}/stats")
+async def get_provider_stats_endpoint(provider_name: str):
+    """Get aggregated stats for a signal provider."""
+    from app.db import get_provider_stats
+    stats = get_provider_stats(provider_name)
+    return {"provider": provider_name, **stats}
+
+
+@app.get("/api/providers/leaderboard")
+async def get_providers_leaderboard(limit: int = Query(default=20, le=50)):
+    """Rank signal providers by win rate (min 5 signals)."""
+    from app.db import get_provider_leaderboard
+    return {"leaderboard": get_provider_leaderboard(limit)}
 
 
 @app.get("/api/tx-history")
@@ -1061,26 +1046,20 @@ def _get_payment_verifier():
 @app.get("/api/signals/premium")
 async def get_premium_signals(request: Request, offset: int = 0, limit: int = Query(default=100, le=100)):
     settings = get_settings()
-    if not settings.enable_payment_gating or not settings.session_vault_address:
+    if not settings.enable_payment_gating:
         return await get_signals(offset, limit)
-    tx_hash = request.headers.get("X-PAYMENT-TX")
-    if not tx_hash:
-        from app.mpp_middleware import SERVICE_PRICING
-        verifier = _get_payment_verifier()
-        raise HTTPException(status_code=402, detail=verifier.build_402_response(
-            "signal-premium", SERVICE_PRICING["signal-premium"]["price_wei"], settings.mock_iusd_address))
+    from app.x402_payment import require_payment
     from app.mpp_middleware import SERVICE_PRICING
-    verifier = _get_payment_verifier()
-    result = verifier.verify_payment_tx(tx_hash, "signal-premium",
-                                        SERVICE_PRICING["signal-premium"]["price_wei"])
-    if not result["valid"]:
-        raise HTTPException(status_code=402, detail={"error": result["error"]})
+    payment = await require_payment(request, "signal-premium", "$0.01", SERVICE_PRICING["signal-premium"]["price_wei"])
     try:
+        if settings.database_url:
+            from app.db import get_signals as db_get_signals
+            db_signals, db_total = db_get_signals(offset, limit)
+            return {"signals": db_signals, "total": db_total, "payment": payment}
         chain = get_chain()
         total = chain.get_signal_count()
         signals = chain.get_signals(offset, limit) if total > 0 else []
-        return {"signals": signals, "total": total,
-                "payment": {"status": "paid", "tx_hash": tx_hash, "amount_paid": str(result["amount"])}}
+        return {"signals": signals, "total": total, "payment": payment}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1088,23 +1067,18 @@ async def get_premium_signals(request: Request, offset: int = 0, limit: int = Qu
 @app.get("/api/signals/single/{signal_id}")
 async def get_paid_signal(signal_id: int, request: Request):
     settings = get_settings()
-    if not settings.enable_payment_gating or not settings.session_vault_address:
+    if not settings.enable_payment_gating:
         return await get_signal(signal_id)
-    tx_hash = request.headers.get("X-PAYMENT-TX")
-    if not tx_hash:
-        from app.mpp_middleware import SERVICE_PRICING
-        verifier = _get_payment_verifier()
-        raise HTTPException(status_code=402, detail=verifier.build_402_response(
-            "signal-single", SERVICE_PRICING["signal-single"]["price_wei"], settings.mock_iusd_address))
+    from app.x402_payment import require_payment
     from app.mpp_middleware import SERVICE_PRICING
-    verifier = _get_payment_verifier()
-    result = verifier.verify_payment_tx(tx_hash, "signal-single",
-                                        SERVICE_PRICING["signal-single"]["price_wei"])
-    if not result["valid"]:
-        raise HTTPException(status_code=402, detail={"error": result["error"]})
+    payment = await require_payment(request, "signal-single", "$0.002", SERVICE_PRICING["signal-single"]["price_wei"])
     try:
-        return {"signal": get_chain().get_signal(signal_id),
-                "payment": {"status": "paid", "tx_hash": tx_hash, "amount_paid": str(result["amount"])}}
+        if settings.database_url:
+            from app.db import get_signal_by_id
+            db_signal = get_signal_by_id(signal_id)
+            if db_signal:
+                return {"signal": db_signal, "payment": payment}
+        return {"signal": get_chain().get_signal(signal_id), "payment": payment}
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -1121,8 +1095,17 @@ async def get_session_info(session_id: int):
 @app.get("/api/payment/pricing")
 async def get_pricing():
     from app.mpp_middleware import SERVICE_PRICING
+    from app.x402_payment import build_x402_info
     settings = get_settings()
-    return {"pricing": {k: {"price_iusd": v["price_wei"] / 1e18, "price_wei": str(v["price_wei"]), "description": v["description"]} for k, v in SERVICE_PRICING.items()}, "token": settings.mock_iusd_address, "sessionVault": settings.session_vault_address}
+    result = {
+        "pricing": {k: {"price_iusd": v["price_wei"] / 1e18, "price_wei": str(v["price_wei"]), "description": v["description"]} for k, v in SERVICE_PRICING.items()},
+        "token": settings.mock_iusd_address,
+        "sessionVault": settings.session_vault_address,
+    }
+    x402_info = build_x402_info("$0.01")
+    if x402_info:
+        result["x402"] = x402_info["x402"]
+    return result
 
 
 @app.post("/api/payment/faucet")
@@ -1172,3 +1155,140 @@ async def gas_faucet(address: str):
         return {"status": "ok", "txHash": tx_hash.hex(), "amount": "1 INIT"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Agent Discovery ────────────────────────────────────────
+
+@app.get("/SKILL.md", response_class=PlainTextResponse)
+async def skill_md():
+    """Agent skill description for paid trading signal detail access."""
+    return """---
+name: initia-signal-explorer
+description: Pay to access detailed AI trading signals with entry/target/stop prices, analysis, chart patterns, and on-chain proof. Free signal summaries available without payment.
+metadata:
+  version: 1
+---
+
+# Initia Signal Explorer
+
+## When to use
+- User wants trading signal details (entry price, target, stop loss, analysis)
+- User asks about crypto market signals or trading opportunities
+- User wants to verify on-chain signal proof
+
+## Base URL
+Use the server URL you fetched this SKILL.md from.
+
+## Free Routes (no payment needed)
+
+### `GET /api/signals`
+List all signals with summaries. Returns: id, asset, symbol, is_bull, confidence, timeframe, timestamp, resolved.
+
+### `GET /api/signals/{id}`
+Get one signal summary by ID.
+
+### `GET /api/payment/pricing`
+Get current pricing for paid access including x402 and MPP payment info.
+
+## Paid Routes
+
+### `GET /api/signals/single/{id}` — $0.002
+Full signal detail: entry price, target price, stop loss, analysis, chart patterns, risk score, on-chain tx hash.
+
+### `GET /api/signals/premium` — $0.01
+Batch: all signals with full details. Supports `?offset=0&limit=100`.
+
+## Payment
+Paid routes return HTTP `402` with payment instructions. Two protocols accepted:
+
+### x402 (Base/USDC) — recommended
+Standard x402 flow. Agent receives 402 with payment details, signs USDC payment, retries with `PAYMENT-SIGNATURE` header.
+
+### MPP (Initia SessionVault)
+Send `X-PAYMENT-TX` header with a tx hash containing a `ServicePaid` event from the Initia SessionVault.
+
+## Recommended Flow
+1. Call `GET /api/signals` to browse available signals
+2. Pick a signal ID of interest
+3. Call `GET /api/signals/single/{id}` — receive 402 with payment details
+4. Pay via x402 or MPP
+5. Retry the request with payment proof header
+
+## Examples
+```bash
+# Free: list signals
+curl https://your-server/api/signals
+
+# Paid: get signal detail (will return 402 first)
+curl https://your-server/api/signals/single/42
+```
+"""
+
+
+# ─── Oracle Endpoints ───────────────────────────────────────
+@app.get("/api/oracle/mood")
+def get_oracle_mood():
+    from app.degen_oracle import get_current_mood
+    return get_current_mood()
+
+@app.get("/api/oracle/takes")
+def get_oracle_takes():
+    from app.degen_oracle import get_recent_takes
+    return get_recent_takes(5)
+
+# ─── Challenge Endpoints ────────────────────────────────────
+@app.get("/api/challenges")
+def list_challenges():
+    from app.challenges import get_active_challenges
+    return {"challenges": get_active_challenges()}
+
+@app.post("/api/challenges/{challenge_id}/enter")
+def enter_challenge_endpoint(challenge_id: int, body: dict):
+    from app.challenges import enter_challenge
+    return enter_challenge(challenge_id, body.get("user_address", ""), body.get("answer", ""))
+
+@app.get("/api/challenges/leaderboard")
+def challenge_leaderboard():
+    from app.challenges import get_challenge_leaderboard
+    return {"leaderboard": get_challenge_leaderboard()}
+
+# ─── Share Endpoint ─────────────────────────────────────────
+@app.post("/api/share/generate")
+def generate_share(body: dict):
+    from app.share_engine import generate_share_card
+    return generate_share_card(body.get("trade", {}), body.get("user_address", ""))
+
+# ─── Index Cards Endpoint ───────────────────────────────────
+@app.get("/api/indices")
+def get_index_cards():
+    from app.content_engine import generate_index_cards
+    return {"cards": generate_index_cards()}
+
+
+@app.get("/llms.txt", response_class=PlainTextResponse)
+async def llms_txt():
+    """Machine-readable service description for LLM agent discovery."""
+    return """# Initia Signal Explorer
+> AI trading signal service with on-chain proof. Pay per signal detail via x402 (Base/USDC) or MPP (Initia).
+
+- Skill: /SKILL.md
+- Pricing: /api/payment/pricing
+
+## Free endpoints
+- `GET /api/signals` — signal summaries (id, asset, direction, confidence)
+- `GET /api/signals/{id}` — single signal summary
+- `GET /api/health` — service health check
+
+## Paid endpoints (402 gated)
+- `GET /api/signals/single/{id}` — full signal detail ($0.002)
+- `GET /api/signals/premium` — batch full details ($0.01)
+
+## Payment protocols
+- x402: PAYMENT-SIGNATURE header (Base USDC)
+- MPP: X-PAYMENT-TX header (Initia SessionVault)
+
+## Agent flow
+1. GET /api/signals → pick signal ID
+2. GET /api/signals/single/{id} → 402 with payment info
+3. Pay via x402 or MPP → retry with payment header
+"""

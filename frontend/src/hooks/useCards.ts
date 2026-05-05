@@ -18,6 +18,8 @@ export interface Card {
   market_cap: number;
   status: string;
   created_at: string;
+  card_type?: string;
+  institutional_context?: Array<{emoji: string; label: string; value: string; sentiment: string}>;
   verdict?: string;
   verdict_reason?: string;
   risk_level?: string;

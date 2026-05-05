@@ -22,11 +22,18 @@ class Settings(BaseSettings):
     tucana_router_address: str = ""
     enable_payment_gating: bool = True
     free_signals_per_day: int = 3
+    # x402 Agent Payment (Base/USDC)
+    x402_receiver_address: str = ""
+    x402_facilitator_url: str = "https://x402.org/facilitator"
+    x402_network: str = "eip155:84532"
     # Supabase/Postgres
     database_url: str = ""
     # Claude AI (Bedrock)
     aws_region: str = "us-east-1"
     aws_bedrock_model_id: str = "anthropic.claude-3-haiku-20240307-v1:0"
+
+    # SosoValue
+    sosovalue_api_key: str = ""
 
     @property
     def json_rpc_url(self) -> str:

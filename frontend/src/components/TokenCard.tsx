@@ -154,6 +154,21 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
         )}
       </div>
 
+      {/* Institutional context */}
+      {card.institutional_context && card.institutional_context.length > 0 && (
+        <div className="px-4 pb-2">
+          <div className="mt-3 pt-3 border-t border-gray-800/50">
+            <p className="text-[10px] text-[#bf81ff] uppercase tracking-wider mb-1.5 font-medium">📊 Smart Money Intel</p>
+            {card.institutional_context.map((m, i) => (
+              <div key={i} className="flex justify-between items-center text-xs py-0.5">
+                <span className="text-gray-400">{m.emoji} {m.label}</span>
+                <span className={m.sentiment === 'bullish' ? 'text-[#8eff71]' : m.sentiment === 'bearish' ? 'text-[#ff7166]' : 'text-white'}>{m.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Why verdict */}
       {card.verdict_reason && (
         <div className="px-4 pb-2">

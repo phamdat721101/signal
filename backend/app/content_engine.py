@@ -17,19 +17,31 @@ logger = logging.getLogger(__name__)
 # ─── Stage 1: Data Harvester ────────────────────────────────
 
 def harvest_tokens(limit: int = 10) -> list[dict]:
-    """Fetch token data from CoinGecko markets API."""
-    try:
-        resp = httpx.get(
-            "https://api.coingecko.com/api/v3/coins/markets",
-            params={"vs_currency": "usd", "order": "volume_desc", "per_page": limit,
-                    "page": 1, "sparkline": False, "price_change_percentage": "1h,24h"},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return [_parse_coingecko(c) for c in resp.json()]
-    except Exception as e:
-        logger.error(f"Harvest failed: {e}")
-        return []
+    """Fetch token data from CoinGecko — multiple orderings for diversity."""
+    all_tokens = {}
+    orderings = ["volume_desc", "market_cap_desc", "market_cap_change_24h_desc"]
+    for order in orderings:
+        try:
+            resp = httpx.get(
+                "https://api.coingecko.com/api/v3/coins/markets",
+                params={"vs_currency": "usd", "order": order, "per_page": limit,
+                        "page": 1, "sparkline": False, "price_change_percentage": "1h,24h"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            for c in resp.json():
+                parsed = _parse_coingecko(c)
+                all_tokens[parsed["coingecko_id"]] = parsed
+            time.sleep(2)
+        except Exception as e:
+            logger.warning(f"Harvest ({order}) failed: {e}")
+    tokens = list(all_tokens.values())
+    from app.sosovalue_client import get_full_context
+    sv_ctx = get_full_context()
+    if sv_ctx:
+        for t in tokens:
+            t["sosovalue"] = sv_ctx
+    return tokens
 
 
 def _parse_coingecko(c: dict) -> dict:
@@ -108,6 +120,21 @@ def analyze_signals(token: dict) -> list[dict]:
                         "direction": "neutral", "emoji": "⚠️",
                         "finding": f"Volume ({_fmt(vol)}) exceeds 2x market cap ({_fmt(mcap)})"})
 
+    # SosoValue: ETF flow + macro event signals
+    sv = token.get("sosovalue", {})
+    etf = sv.get("etf_flows", {})
+    if token["token_symbol"] in ("BTC", "ETH"):
+        flow = etf.get(f"{token['token_symbol'].lower()}_net_flow", 0)
+        if flow and abs(flow) > 50_000_000:
+            d = "bullish" if flow > 0 else "bearish"
+            signals.append({"type": "ETF_FLOW", "severity": min(5, int(abs(flow) / 100_000_000) + 2),
+                            "direction": d, "emoji": "🏦",
+                            "finding": f"ETF net flow: ${flow/1e6:+.0f}M today"})
+    for evt in sv.get("macro_events", [])[:1]:
+        signals.append({"type": "MACRO_CATALYST", "severity": 3,
+                        "direction": "neutral", "emoji": "📅",
+                        "finding": f"Macro: {evt.get('name', 'Event')} today"})
+
     return sorted(signals, key=lambda s: s["severity"], reverse=True)
 
 
@@ -165,6 +192,16 @@ def generate_narrative(token: dict, signals: list[dict], risk_score: int) -> dic
 def _narrative_via_bedrock(token: dict, signals: list[dict], verdict: str, risk_level: str) -> dict | None:
     settings = get_settings()
     signal_lines = "\n".join(f"- [{s['severity']}/5 {s['direction']}] {s['finding']}" for s in signals[:5])
+    # SosoValue institutional context for Claude
+    sv = token.get("sosovalue", {})
+    sv_lines = ""
+    etf = sv.get("etf_flows", {})
+    if etf.get("btc_net_flow"):
+        sv_lines += f"BTC ETF flow: ${etf['btc_net_flow']/1e6:+.0f}M. "
+    for n in sv.get("hot_news", [])[:1]:
+        sv_lines += f"News: {n.get('title', '')}. "
+    for m in sv.get("macro_events", [])[:1]:
+        sv_lines += f"Macro: {m.get('name', '')}. "
     prompt = (
         f'You are the AI of "Ape or Fade" — savage, sarcastic, brilliant crypto analyst. '
         f'Gen-Z tone. Never boring. Take a stance.\n\n'
@@ -174,7 +211,8 @@ def _narrative_via_bedrock(token: dict, signals: list[dict], verdict: str, risk_
         f'Vol: ${token["volume_24h"]:,.0f}, MCap: ${token["market_cap"]:,.0f}\n'
         f'Verdict: {verdict}, Risk: {risk_level}\n'
         f'Signals:\n{signal_lines}\n\n'
-        f'Respond ONLY with JSON:\n'
+        + (f'Institutional context: {sv_lines}\n' if sv_lines else '')
+        + f'Respond ONLY with JSON:\n'
         f'{{"hook":"punchy scroll-stopper max 12 words",'
         f'"roast":"1-2 sarcastic sentences with data insights",'
         f'"metrics":[{{"emoji":"X","label":"Y","value":"Z","sentiment":"bullish|bearish|neutral"}},'
@@ -314,7 +352,7 @@ def _svg_escape(s: str) -> str:
 
 def assemble_card(token: dict, signals: list[dict], narrative: dict) -> dict:
     """Merge all pipeline outputs into final card object."""
-    return {
+    card = {
         **token,
         "hook": narrative["hook"],
         "roast": narrative["roast"],
@@ -329,6 +367,26 @@ def assemble_card(token: dict, signals: list[dict], narrative: dict) -> dict:
                      "direction": s["direction"], "finding": s["finding"]}
                     for s in signals[:5]],
     }
+    # Enrich with SoSoValue institutional context
+    sv = token.get("sosovalue", {})
+    if sv:
+        inst = []
+        btc_flow = sv.get("etf_flows", {}).get("btc_net_flow", 0)
+        if btc_flow and abs(btc_flow) > 10_000_000:
+            inst.append({"emoji": "\U0001f3e6", "label": "BTC ETF Flow",
+                         "value": f"${btc_flow/1e6:+.0f}M",
+                         "sentiment": "bullish" if btc_flow > 0 else "bearish"})
+        news = sv.get("hot_news", [])
+        if news:
+            inst.append({"emoji": "\U0001f4f0", "label": "Breaking",
+                         "value": news[0].get("title", "")[:40], "sentiment": "neutral"})
+        macro = sv.get("macro_events", [])
+        if macro:
+            inst.append({"emoji": "\U0001f4c5", "label": "Macro",
+                         "value": macro[0].get("name", "")[:30], "sentiment": "neutral"})
+        if inst:
+            card["institutional_context"] = inst
+    return card
 
 
 # --- Stage 2.5: Chart Analyzer -------------------------------------------
@@ -465,7 +523,7 @@ def run_card_generation_cycle():
         return
 
     created = 0
-    for token in new_tokens[:5]:
+    for token in new_tokens[:8]:
         try:
             # Stage 2: Analyze signals
             signals = analyze_signals(token)
@@ -560,3 +618,130 @@ def _fmt(v: float) -> str:
     if v >= 1e6: return f"${v/1e6:.0f}M"
     if v >= 1e3: return f"${v/1e3:.0f}K"
     return f"${v:.0f}"
+
+
+# ─── Signal-to-Card Bridge ──────────────────────────────────
+
+def _fetch_single_token(symbol: str, coingecko_id: str) -> dict | None:
+    """Fetch data for a single token from CoinGecko."""
+    if not coingecko_id:
+        return None
+    try:
+        resp = httpx.get(
+            "https://api.coingecko.com/api/v3/coins/markets",
+            params={"vs_currency": "usd", "ids": coingecko_id,
+                    "sparkline": False, "price_change_percentage": "1h,24h"},
+            timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        return _parse_coingecko(data[0]) if data else None
+    except Exception as e:
+        logger.warning(f"Single token fetch failed for {symbol}: {e}")
+        return None
+
+
+def generate_card_from_signal(signal_id: int) -> int:
+    """Generate a card from a provider signal. Returns card_id or -1."""
+    from app.db import get_signal_by_id, insert_card
+    from app.signal_engine import COINGECKO_IDS
+
+    signal = get_signal_by_id(signal_id)
+    if not signal:
+        return -1
+
+    sym = (signal.get("symbol", "") or signal.get("asset", "").replace("/USD", "")).upper()
+    cg_id = COINGECKO_IDS.get(f"{sym}/USD", "")
+
+    # Fetch token data or build fallback
+    token = _fetch_single_token(sym, cg_id)
+    if not token:
+        try:
+            price = float(signal["entryPrice"])
+        except (ValueError, TypeError):
+            price = 0
+        token = {"coingecko_id": cg_id, "token_symbol": sym, "token_name": sym,
+                 "price": price, "price_change_1h": 0, "price_change_24h": 0,
+                 "volume_24h": 0, "market_cap": 0, "image_url": "",
+                 "high_24h": 0, "low_24h": 0, "circulating_supply": 0, "total_supply": 0}
+
+    is_bull = signal.get("isBull", True)
+    verdict = "APE" if is_bull else "FADE"
+    risk_score = max(5, 100 - signal.get("confidence", 70))
+
+    # Narrate: full mode (provider analysis) vs quick mode (AI)
+    signals_data = analyze_signals(token)
+    narrative = generate_narrative(token, signals_data, risk_score)
+    narrative["verdict"] = verdict
+
+    if signal.get("analysis", "").strip():
+        narrative["roast"] = signal["analysis"]
+
+    # Inject TP/SL metric
+    try:
+        tp, sl, entry = float(signal["targetPrice"]), float(signal["stopLoss"]), float(signal["entryPrice"])
+        if tp > 0 and sl > 0 and entry > 0:
+            tp_pct = round(abs(tp - entry) / entry * 100, 1)
+            sl_pct = round(abs(entry - sl) / entry * 100, 1)
+            tp_sl_metric = {"emoji": "🎯", "label": "TP/SL",
+                            "value": f"+{tp_pct}% / -{sl_pct}%", "sentiment": "neutral"}
+            metrics = narrative.get("metrics", [])
+            if len(metrics) >= 3:
+                metrics[2] = tp_sl_metric
+            else:
+                metrics.append(tp_sl_metric)
+            narrative["metrics"] = metrics
+    except (ValueError, TypeError):
+        pass
+
+    card = assemble_card(token, signals_data, narrative)
+
+    # Chart data
+    if cg_id:
+        time.sleep(2)
+        chart_prices = fetch_chart_data(cg_id)
+        card["sparkline"] = _build_sparkline(chart_prices) if chart_prices else []
+        card["patterns"] = detect_patterns(chart_prices) if chart_prices else []
+
+    card["source"] = "provider"
+    card["provider"] = signal.get("provider", "")
+    card["signal_id"] = signal_id
+
+    card_id = insert_card(card)
+    if card_id > 0:
+        logger.info(f"Provider card #{card_id} from signal #{signal_id}: ${sym} [{verdict}]")
+    return card_id
+
+
+def generate_index_cards() -> list[dict]:
+    """Generate index-based cards from SosoValue SSI indices."""
+    try:
+        from app.sosovalue_client import get_index_list, get_index_snapshot
+        indices = get_index_list()
+        if not indices:
+            return []
+        cards = []
+        INDEX_NAMES = {"ssimag7": "Magnificent 7", "ssimeme": "Meme Index", "ssidefi": "DeFi Blue Chips",
+                       "ssilayer1": "Layer 1", "ssilayer2": "Layer 2", "ssiai": "AI Tokens",
+                       "ssinft": "NFT Index", "ssigamefi": "GameFi", "ssirwa": "RWA",
+                       "ssisocialfi": "SocialFi", "ssidepin": "DePIN", "ssicefi": "CeFi", "ssipayfi": "PayFi"}
+        for ticker in indices[:5]:
+            name = INDEX_NAMES.get(ticker.lower(), ticker.upper())
+            snap = get_index_snapshot(ticker)
+            pct = float(snap.get("priceChangePercent24h", 0)) if snap else 0
+            price = float(snap.get("price", 0)) if snap else 0
+            direction = "pumping 🚀" if pct > 2 else "dumping 📉" if pct < -2 else "crabbing 🦀"
+            cards.append({
+                "token_symbol": f"{ticker.upper()}.ssi",
+                "token_name": f"{name} Index",
+                "card_type": "index",
+                "hook": f"{name} is {direction}",
+                "roast": f"Basket of top tokens — {pct:+.1f}% today. Diversification isn't a meme.",
+                "metrics": [{"emoji": "📈", "label": "24h", "value": f"{pct:+.1f}%"},
+                            {"emoji": "💰", "label": "Price", "value": f"${price:.2f}"}],
+                "price": price, "price_change_24h": pct, "volume_24h": 0, "market_cap": 0,
+                "status": "active",
+            })
+        return cards
+    except Exception as e:
+        logger.warning(f"Index card generation failed: {e}")
+        return []

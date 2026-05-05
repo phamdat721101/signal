@@ -6,6 +6,8 @@ import { createPublicClient, http } from 'viem';
 import { useCards } from '../hooks/useCards';
 import { config, shareToX, normalizeAddress } from '../config';
 import TokenCard from '../components/TokenCard';
+import { InsightCard } from '../components/InsightCard';
+import { OracleWidget } from '../components/OracleWidget';
 import Onboarding from '../components/Onboarding';
 import Paywall from '../components/Paywall';
 import { useApeTransaction } from '../hooks/useApeTransaction';
@@ -305,6 +307,16 @@ export default function Feed() {
         <button onClick={() => setIndex(0)} className="bg-[#262626] px-6 py-2 rounded-lg text-[#adaaaa] font-label text-sm">
           Refresh Feed
         </button>
+      </div>
+    );
+  }
+
+  // If current card is an insight card, render InsightCard instead
+  if (current && current.card_type === 'insight') {
+    return (
+      <div className="flex flex-col h-full p-4 max-w-md mx-auto">
+        <OracleWidget />
+        <InsightCard card={current as any} onDismiss={() => setIndex(i => i + 1)} />
       </div>
     );
   }

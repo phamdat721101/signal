@@ -6,7 +6,8 @@ import { config } from '../config';
 
 const navItems = [
   { to: '/', icon: 'bolt', label: 'Feed', fill: true },
-  { to: '/leaderboard', icon: 'leaderboard', label: 'Ranks' },
+  { to: '/challenges', icon: 'target', label: 'Challenges' },
+  { to: '/provider', icon: 'signal_cellular_alt', label: 'Signals' },
   { to: '/portfolio', icon: 'account_balance_wallet', label: 'Portfolio' },
   { to: '/profile', icon: 'person', label: 'Profile' },
 ];

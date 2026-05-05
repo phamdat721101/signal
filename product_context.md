@@ -1,6 +1,6 @@
 # Ape or Fade — Product Context & Architecture
 
-Primary context document for AI agents and developers. Updated 2026-04-22.
+Primary context document for AI agents and developers. Updated 2026-04-25.
 
 ## 1. Product Overview
 
@@ -100,13 +100,25 @@ Design System: The Kinetic Terminal — #0e0e0e void bg, #8eff71 green (Ape), #f
 - Chart pattern detection + sparkline data + backfill
 - MockIUSD faucet + Privy wallet + SessionVault deposit/withdraw
 
-## 6. Deployment
+## 6. Live Metrics (2026-04-25)
 
-- **Backend**: FastAPI on VPS (bitnami@13.212.80.72) via deploy-vps.sh — port 8000
-- **Frontend**: Vite build, static hosting or dev server — port 5173
-- **SSH Key**: nim-claw.pem
-- **API URL**: http://13.212.80.72:8000
-- **Frontend env**: VITE_BACKEND_URL=http://13.212.80.72:8000
+| Metric | Count |
+|--------|-------|
+| Signals | 72 |
+| Cards | 342 |
+| Swipes | 182 |
+| Trades | 16 |
+| Unique Users | 8 |
+| Total Transactions | 270 |
+
+## 7. Deployment
+
+- **Backend**: FastAPI on VPS (bitnami@13.212.80.72) — port 8001 internal, Caddy HTTPS reverse proxy
+- **Frontend**: Vite build, served via `npx serve dist` — port 5173
+- **SSH Key**: nim-claw.pem (at `/Users/phamdat/arbitrum/arbi-agent/nim-claw.pem`)
+- **API URL**: `https://13-212-80-72.sslip.io/signal-api`
+- **Frontend env**: `VITE_BACKEND_URL=https://13-212-80-72.sslip.io/signal-api`
+- **Caddy**: strips `/signal-api` prefix → proxies to `localhost:8001`
 
 ---
-*Updated 2026-04-22 — Full codebase analysis with deployment context.*
+*Updated 2026-04-25 — Full codebase analysis with deployment context.*
