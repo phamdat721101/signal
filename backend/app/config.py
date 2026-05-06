@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     aws_bedrock_model_id: str = "anthropic.claude-3-haiku-20240307-v1:0"
 
+    # SoDex DEX integration
+    sodex_enabled: bool = False
+    sodex_private_key: str = ""
+    sodex_account_id: str = ""
+    sodex_chain_id: int = 286623
+    sodex_max_order_usd: float = 100.0
+
     # SosoValue
     sosovalue_api_key: str = ""
 

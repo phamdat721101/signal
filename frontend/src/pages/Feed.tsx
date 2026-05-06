@@ -321,8 +321,26 @@ export default function Feed() {
     );
   }
 
+  // Challenge card — inline
+  if (current && current.card_type === 'challenge') {
+    return (
+      <div className="flex flex-col h-full p-4 max-w-md mx-auto">
+        <OracleWidget />
+        <div className="bg-[#131313] rounded-xl border border-[#bf81ff]/20 p-6 flex flex-col gap-4 items-center text-center">
+          <span className="text-5xl">🏆</span>
+          <h2 className="font-headline text-xl font-black text-[#bf81ff]">{current.hook || 'Challenge'}</h2>
+          <p className="text-[#adaaaa] text-sm">{current.verdict_reason || 'Complete this challenge to earn rewards'}</p>
+          <button onClick={() => setIndex(i => i + 1)} className="bg-[#262626] text-[#adaaaa] font-headline font-bold px-6 py-2 rounded-lg">
+            Next →
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex items-center justify-center h-full p-4">
+    <div className="flex flex-col items-center justify-center h-full p-4">
+      <OracleWidget />
       {showConviction && pendingCard && (
         <ConvictionOverlay card={pendingCard} onConfirm={confirmConviction} onCancel={() => { setShowConviction(false); setPendingCard(null); }} />
       )}

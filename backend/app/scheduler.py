@@ -90,6 +90,35 @@ def monitor_positions():
     updated = 0
     for t in trades:
         sym = t["token_symbol"]
+        entry = t["entry_price"]
+        if entry <= 0:
+            continue
+
+        # SoDex trades: use SoDex ticker + TP/SL close orders
+        if t.get("execution_type") == "sodex":
+            try:
+                from app.sodex_client import get_ticker, place_close_order, map_symbol
+                sodex_sym = map_symbol(sym)
+                ticker = get_ticker(sodex_sym)
+                current_price = float(ticker.get("last_price", 0))
+                if current_price <= 0:
+                    continue
+                pnl_pct = (current_price - entry) / entry * 100
+                pnl_usd = t["amount_usd"] * pnl_pct / 100
+                # TP/SL check (±1.5%)
+                tp_price = entry * 1.015
+                sl_price = entry * 0.985
+                created = t["created_at"]
+                age_hours = (now - created.timestamp()) / 3600 if hasattr(created, "timestamp") else 0
+                should_close = current_price >= tp_price or current_price <= sl_price or age_hours > 24
+                if should_close:
+                    place_close_order(sodex_sym, "sell", t["token_amount"])
+                update_trade_pnl(t["id"], current_price, round(pnl_usd, 4), round(pnl_pct, 2), should_close)
+                updated += 1
+            except Exception as e:
+                logger.warning(f"SoDex position monitor failed for trade {t['id']}: {e}")
+            continue
+
         current_price = prices.get(sym)
         if current_price is None:
             continue
@@ -229,7 +258,7 @@ def resolve_provider_signals():
 
 def start_scheduler():
     from app.content_engine import run_card_generation_cycle
-    from app.signal_engine import run_signal_cycle, resolve_all_signals
+    from app.signal_engine import run_signal_cycle, resolve_all_signals, run_sosovalue_signal_cycle
 
     scheduler.add_job(run_card_generation_cycle, "interval", minutes=5, id="card_gen", max_instances=1)
     scheduler.add_job(monitor_positions, "interval", minutes=5, id="position_monitor", max_instances=1)
@@ -237,6 +266,7 @@ def start_scheduler():
     scheduler.add_job(resolve_all_signals, "cron", hour=23, minute=55, id="resolve_signals", max_instances=1)
     scheduler.add_job(expire_old_cards, 'interval', minutes=10, id='expire_cards', max_instances=1)
     scheduler.add_job(resolve_provider_signals, "interval", minutes=5, id="provider_resolution", max_instances=1)
+    scheduler.add_job(run_sosovalue_signal_cycle, "interval", minutes=30, id="sosovalue_signals", max_instances=1)
     from app.content_engine import backfill_chart_data
     scheduler.add_job(backfill_chart_data, "interval", minutes=30, id="backfill_charts", max_instances=1)
     from app.sosovalue_client import refresh_cache as refresh_sosovalue
@@ -249,7 +279,7 @@ def start_scheduler():
     scheduler.add_job(generate_daily_challenges, "cron", hour=0, minute=5, id="daily_challenges", max_instances=1)
     scheduler.add_job(resolve_challenges, "cron", hour=23, minute=55, id="resolve_challenges", max_instances=1)
     scheduler.start()
-    logger.info("Scheduler started: card_gen(5m) + position_monitor(5m) + signal_cycle(3x/day) + resolve(23:55) + expire_cards(10m) + provider_resolution(5m) + backfill_charts(30m) + sosovalue_cache(5m) + insight_cards(30m) + oracle_refresh(30m) + daily_challenges(00:05) + resolve_challenges(23:55)")
+    logger.info("Scheduler started: card_gen(5m) + position_monitor(5m) + signal_cycle(3x/day) + resolve(23:55) + expire_cards(10m) + provider_resolution(5m) + sosovalue_signals(30m) + backfill_charts(30m) + sosovalue_cache(5m) + insight_cards(30m) + oracle_refresh(30m) + daily_challenges(00:05) + resolve_challenges(23:55)")
 
 
 def stop_scheduler():

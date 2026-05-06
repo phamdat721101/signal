@@ -17,6 +17,7 @@ export default function App() {
         <Route path="/history" element={<History />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/provider" element={<ProviderDashboard />} />
+        <Route path="/provider/:address" element={<ProviderDashboard />} />
         <Route path="/challenges" element={<Challenges />} />
         <Route path="/trade-success/:id" element={<TradeSuccess />} />
         <Route path="*" element={<Navigate to="/" replace />} />

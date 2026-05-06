@@ -143,12 +143,100 @@ def fetch_coingecko_fallback() -> dict[str, float]:
         return {}
 
 
+# Circuit breaker: {source: (fail_count, skip_until_ts)}
+_circuit_breaker: dict[str, tuple[int, float]] = {}
+_CB_THRESHOLD = 3
+_CB_COOLDOWN = 300  # 5 min
+
+
+def _cb_ok(source: str) -> bool:
+    if source not in _circuit_breaker:
+        return True
+    fails, skip_until = _circuit_breaker[source]
+    if time.time() > skip_until:
+        _circuit_breaker.pop(source, None)
+        return True
+    return fails < _CB_THRESHOLD
+
+
+def _cb_fail(source: str):
+    fails, _ = _circuit_breaker.get(source, (0, 0))
+    fails += 1
+    _circuit_breaker[source] = (fails, time.time() + _CB_COOLDOWN if fails >= _CB_THRESHOLD else 0)
+
+
+def _cb_reset(source: str):
+    _circuit_breaker.pop(source, None)
+
+
+def _fetch_sodex_prices() -> dict[str, float]:
+    """Try SoDex tickers as primary price source."""
+    if not _cb_ok("sodex"):
+        return {}
+    try:
+        from app.sodex_client import get_sodex_client
+        client = get_sodex_client()
+        if not client:
+            return {}
+        data = client.get_tickers()
+        if not data:
+            _cb_fail("sodex")
+            return {}
+        prices = {}
+        # Map SoDex symbols (vBTC_vUSDC) → our format (BTC/USD)
+        for ticker in (data if isinstance(data, list) else data.get("tickers", [])):
+            sym = ticker.get("symbol", "")
+            base = sym.split("_")[0].replace("v", "") if "_" in sym else ""
+            key = f"{base}/USD"
+            if key in COINGECKO_IDS and ticker.get("lastPrice"):
+                prices[key] = float(ticker["lastPrice"])
+        if prices:
+            _cb_reset("sodex")
+            logger.info(f"SoDex: {len(prices)} pairs")
+        else:
+            _cb_fail("sodex")
+        return prices
+    except Exception as e:
+        logger.warning(f"SoDex prices failed: {e}")
+        _cb_fail("sodex")
+        return {}
+
+
+def _fetch_sosovalue_prices() -> dict[str, float]:
+    """Try SosoValue index snapshots as secondary source."""
+    if not _cb_ok("sosovalue"):
+        return {}
+    try:
+        from app.sosovalue_client import get_index_snapshot, _is_enabled
+        if not _is_enabled():
+            return {}
+        prices = {}
+        for sym, ticker in [("BTC/USD", "BTC"), ("ETH/USD", "ETH")]:
+            snap = get_index_snapshot(ticker)
+            if snap and snap.get("price"):
+                prices[sym] = float(snap["price"])
+        if prices:
+            _cb_reset("sosovalue")
+        else:
+            _cb_fail("sosovalue")
+        return prices
+    except Exception as e:
+        logger.warning(f"SosoValue prices failed: {e}")
+        _cb_fail("sosovalue")
+        return {}
+
+
 def fetch_prices() -> dict[str, float]:
-    prices = fetch_oracle_prices()
+    # Try sources in priority: SoDex → Oracle → SosoValue → CoinGecko
+    prices = _fetch_sodex_prices()
+    if not prices:
+        prices = fetch_oracle_prices()
+    if not prices:
+        prices = _fetch_sosovalue_prices()
     if not prices:
         prices = fetch_coingecko_fallback()
     if not prices:
-        error_tracker.track("PRICE_FETCH_FAILED", "Both Oracle and CoinGecko price feeds unavailable")
+        error_tracker.track("PRICE_FETCH_FAILED", "All price feeds unavailable")
     return prices
 
 
@@ -281,6 +369,16 @@ def generate_signals(prices: dict[str, float], assets: list[str] | None = None,
         ema_strength = min(abs(curr_diff / current_price) * 2000, 40) if current_price else 0
         rsi_score = abs(rsi_val - 50) / 50 * 30
         confidence = int(min(95, max(50, 25 + ema_strength + rsi_score)))
+
+        # SosoValue confirmation adjustment (±15% max)
+        try:
+            from app.sosovalue_client import get_sosovalue_context
+            sv_ctx = get_sosovalue_context()
+            if sv_ctx:
+                sv = compute_sosovalue_confirmation(symbol, is_bull, sv_ctx)
+                confidence = int(min(95, max(50, confidence + sv["strength"] * 15)))
+        except Exception:
+            pass
 
         # target_pct from user input (default 1.5%)
         target_price = current_price * (1 + target_pct) if is_bull else current_price * (1 - target_pct)
@@ -642,3 +740,121 @@ def resolve_all_signals():
     total = wins + losses
     win_rate = round((wins / total) * 100, 1) if total > 0 else 0
     logger.info(f"EOD resolved {resolved_count} signals: {wins}W/{losses}L ({win_rate}% win rate)")
+
+
+# --- SosoValue Signal Intelligence ---
+
+_BULL_KEYWORDS = {"bullish", "rally", "surge", "breakout", "inflow", "accumulation", "buy"}
+_BEAR_KEYWORDS = {"bearish", "crash", "dump", "outflow", "sell-off", "liquidation", "sell"}
+
+
+def compute_sosovalue_confirmation(symbol: str, is_bull: bool, sv_context: dict) -> dict:
+    """Returns {"strength": -1 to +1, "reason": str}."""
+    strength = 0.0
+    reasons = []
+    base = symbol.split("/")[0].upper()
+
+    # ETF flow alignment (BTC/ETH only)
+    flows = sv_context.get("etf_flows", {})
+    flow_key = f"{base.lower()}_net_flow"
+    flow = flows.get(flow_key, 0)
+    if abs(flow) > 50_000_000:
+        aligned = (flow > 0 and is_bull) or (flow < 0 and not is_bull)
+        strength += 0.3 if aligned else -0.3
+        reasons.append(f"ETF flow ${flow/1e6:.0f}M {'aligned' if aligned else 'opposed'}")
+
+    # Macro event proximity
+    events = sv_context.get("macro_events", [])
+    high_impact = [e for e in events if "rate" in e.get("name", "").lower() or "fomc" in e.get("name", "").lower()]
+    if high_impact:
+        strength -= 0.1
+        reasons.append("high-impact macro event today")
+
+    # News sentiment
+    news = sv_context.get("hot_news", []) + sv_context.get("featured_news", [])
+    bull_hits = sum(1 for n in news if any(k in n.get("title", "").lower() for k in _BULL_KEYWORDS))
+    bear_hits = sum(1 for n in news if any(k in n.get("title", "").lower() for k in _BEAR_KEYWORDS))
+    if bull_hits + bear_hits > 0:
+        sentiment = (bull_hits - bear_hits) / (bull_hits + bear_hits) * 0.2
+        strength += sentiment if is_bull else -sentiment
+        reasons.append(f"news sentiment {sentiment:+.2f}")
+
+    return {"strength": max(-1.0, min(1.0, strength)), "reason": "; ".join(reasons) or "neutral"}
+
+
+def generate_sosovalue_signals() -> list[dict]:
+    """Generate signals from ETF flow momentum and macro events."""
+    from app.sosovalue_client import get_sosovalue_context
+    sv = get_sosovalue_context()
+    if not sv:
+        return []
+    signals = []
+    flows = sv.get("etf_flows", {})
+
+    # ETF momentum signals: >$200M net flow
+    for base in ("BTC", "ETH"):
+        flow = flows.get(f"{base.lower()}_net_flow", 0)
+        if abs(flow) > 200_000_000:
+            is_bull = flow > 0
+            symbol = f"{base}/USD"
+            addr = _symbol_to_address(symbol)
+            prices = fetch_prices()
+            price = prices.get(symbol)
+            if not price:
+                continue
+            confidence = min(85, 60 + int(abs(flow) / 100_000_000 * 5))
+            target = price * (1.02 if is_bull else 0.98)
+            sl = price * (0.98 if is_bull else 1.02)
+            signals.append({
+                "asset": addr, "isBull": is_bull, "confidence": confidence,
+                "targetPrice": int(target * 1e18), "entryPrice": int(price * 1e18),
+                "symbol": symbol, "currentPrice": price, "provider": "sosovalue-etf",
+                "pattern": "ETF Flow Momentum", "stopLoss": int(sl * 1e18),
+                "analysis": f"{'BUY' if is_bull else 'SELL'} {symbol} | ETF net flow ${flow/1e6:.0f}M signals institutional {'accumulation' if is_bull else 'distribution'}.",
+                "timeframe": "1d candles / macro",
+            })
+
+    # Macro event signals: high-impact = reduce exposure
+    events = sv.get("macro_events", [])
+    high_impact = [e for e in events if "rate" in e.get("name", "").lower() or "cpi" in e.get("name", "").lower()]
+    if high_impact:
+        for base in ("BTC", "ETH"):
+            symbol = f"{base}/USD"
+            prices = fetch_prices()
+            price = prices.get(symbol)
+            if not price:
+                continue
+            signals.append({
+                "asset": _symbol_to_address(symbol), "isBull": False, "confidence": 55,
+                "targetPrice": int(price * 0.97 * 1e18), "entryPrice": int(price * 1e18),
+                "symbol": symbol, "currentPrice": price, "provider": "sosovalue-macro",
+                "pattern": "Macro Risk-Off", "stopLoss": int(price * 1.02 * 1e18),
+                "analysis": f"SELL {symbol} | High-impact macro event: {high_impact[0]['name']}. Risk-off positioning.",
+                "timeframe": "event-driven",
+            })
+
+    return signals
+
+
+def run_sosovalue_signal_cycle():
+    """Scheduler job: generate and store SosoValue signals."""
+    logger.info("Running SosoValue signal cycle...")
+    signals = generate_sosovalue_signals()
+    if not signals:
+        logger.info("SosoValue: no signals generated")
+        return
+    for s in signals:
+        try:
+            from app.db import insert_signal
+            insert_signal({
+                "asset": s["asset"], "symbol": s["symbol"], "isBull": s["isBull"],
+                "confidence": s["confidence"], "targetPrice": str(s["targetPrice"]),
+                "entryPrice": str(s["entryPrice"]), "exitPrice": "0",
+                "timestamp": int(time.time()), "resolved": False,
+                "creator": "sosovalue", "provider": s["provider"],
+                "pattern": s["pattern"], "analysis": s["analysis"],
+                "timeframe": s["timeframe"], "stopLoss": str(s["stopLoss"]),
+            })
+        except Exception as e:
+            logger.warning(f"SosoValue signal DB write failed: {e}")
+    logger.info(f"SosoValue: {len(signals)} signals stored")

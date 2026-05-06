@@ -556,12 +556,35 @@ async def ape_card(card_id: int, request: Request):
     if not tx_hash:
         import os
         tx_hash = f"0x{os.urandom(32).hex()}"
+    # SoDex real execution
+    sodex_order_id = None
+    execution_type = "simulated"
+    settings = get_settings()
+    if settings.sodex_enabled and body.get("execute_real"):
+        try:
+            from app.sodex_client import place_market_order, map_symbol
+            sodex_symbol = map_symbol(card["token_symbol"])
+            order = place_market_order(sodex_symbol, "buy", amount_usd)
+            sodex_order_id = order.get("order_id")
+            execution_type = "sodex"
+            if order.get("filled_price"):
+                token_amount = amount_usd / order["filled_price"]
+        except Exception as e:
+            logger.warning(f"SoDex order failed, falling back to simulated: {e}")
     trade_id = insert_trade({
         "card_id": card_id, "user_address": address,
         "token_symbol": card["token_symbol"], "token_name": card.get("token_name", ""),
         "entry_price": price, "amount_usd": amount_usd,
         "token_amount": token_amount, "tx_hash": tx_hash,
     })
+    # Store SoDex metadata
+    if sodex_order_id:
+        from app.db import _get_conn
+        conn = _get_conn()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE trades SET sodex_order_id=%s, execution_type=%s WHERE id=%s",
+                            (sodex_order_id, execution_type, trade_id))
     record_swipe(card_id, address, "ape")
     explorer_url = f"https://scan.testnet.initia.xyz/initia-signal-1/evm-txs/{tx_hash}" if on_chain else None
 
@@ -1263,6 +1286,143 @@ def generate_share(body: dict):
 def get_index_cards():
     from app.content_engine import generate_index_cards
     return {"cards": generate_index_cards()}
+
+
+# ─── SoDex Endpoints ────────────────────────────────────────
+
+@app.get("/api/sodex/symbols")
+async def sodex_symbols():
+    from app.sodex_client import get_symbols
+    try:
+        return {"symbols": get_symbols()}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/sodex/balance/{address}")
+async def sodex_balance(address: str):
+    from app.sodex_client import get_balances
+    try:
+        return get_balances(address)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+# ─── Provider Marketplace Endpoints ─────────────────────────
+
+@app.post("/api/providers/register")
+async def register_provider(request: Request):
+    body = await request.json()
+    address = normalize_address(body.get("address", ""))
+    if not address:
+        raise HTTPException(status_code=400, detail="address required")
+    from app.db import _get_conn
+    conn = _get_conn()
+    if not conn:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO providers (address, name, description, avatar_url)
+               VALUES (%s,%s,%s,%s) ON CONFLICT (address) DO UPDATE
+               SET name=EXCLUDED.name, description=EXCLUDED.description, avatar_url=EXCLUDED.avatar_url""",
+            (address, body.get("name", ""), body.get("description", ""), body.get("avatar_url", "")))
+    return {"status": "ok", "address": address}
+
+
+@app.get("/api/providers/{address}")
+async def get_provider_profile(address: str):
+    address = normalize_address(address)
+    from app.db import _get_conn, get_provider_stats
+    conn = _get_conn()
+    if not conn:
+        return {"address": address, "stats": get_provider_stats(address)}
+    from psycopg2.extras import RealDictCursor
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM providers WHERE address = %s", (address,))
+        row = cur.fetchone()
+    profile = dict(row) if row else {"address": address}
+    profile["stats"] = get_provider_stats(address)
+    return profile
+
+
+@app.post("/api/providers/{address}/follow")
+async def follow_provider(address: str, request: Request):
+    body = await request.json()
+    user = normalize_address(body.get("user_address", ""))
+    provider = normalize_address(address)
+    if not user or not provider:
+        raise HTTPException(status_code=400, detail="addresses required")
+    from app.db import _get_conn
+    conn = _get_conn()
+    if not conn:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO provider_follows (user_address, provider_address) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+            (user, provider))
+    return {"status": "ok"}
+
+
+# ─── Notifications ──────────────────────────────────────────
+
+@app.post("/api/notifications/subscribe")
+async def subscribe_notifications(request: Request):
+    body = await request.json()
+    address = normalize_address(body.get("address", ""))
+    subscription = body.get("subscription")
+    if not address or not subscription:
+        raise HTTPException(status_code=400, detail="address and subscription required")
+    from app.db import _get_conn
+    conn = _get_conn()
+    if not conn:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO push_subscriptions (user_address, subscription)
+               VALUES (%s,%s) ON CONFLICT (user_address) DO UPDATE SET subscription=EXCLUDED.subscription""",
+            (address, json.dumps(subscription)))
+    return {"status": "ok"}
+
+
+# ─── Signal Accuracy & Share ────────────────────────────────
+
+@app.get("/api/signals/accuracy")
+async def signals_accuracy():
+    from app.db import _get_conn
+    conn = _get_conn()
+    if not conn:
+        return {"win_rate": 0, "total": 0}
+    from psycopg2.extras import RealDictCursor
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""SELECT COUNT(*) as total,
+                       COUNT(*) FILTER (WHERE resolved AND pnl_usd > 0) as wins
+                       FROM trades WHERE resolved = TRUE""")
+        row = cur.fetchone()
+    total = row["total"] or 0
+    wins = row["wins"] or 0
+    return {"win_rate": round(wins / total * 100, 1) if total > 0 else 0, "total": total, "wins": wins}
+
+
+@app.get("/api/share/{trade_id}/meta")
+async def share_meta(trade_id: int):
+    from app.db import _get_conn
+    conn = _get_conn()
+    if not conn:
+        raise HTTPException(status_code=404, detail="DB unavailable")
+    from psycopg2.extras import RealDictCursor
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM trades WHERE id = %s", (trade_id,))
+        trade = cur.fetchone()
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    pnl = trade.get("pnl_pct") or 0
+    emoji = "🧠 CALLED IT" if pnl > 0 else "😭 REKT"
+    return {
+        "title": f"{emoji} | {trade['token_symbol']} {pnl:+.1f}%",
+        "description": f"Entry ${trade['entry_price']:.2f} → Exit ${(trade.get('exit_price') or 0):.2f}",
+        "image": f"/api/cards/{trade['card_id']}/image",
+        "trade": dict(trade),
+    }
 
 
 @app.get("/llms.txt", response_class=PlainTextResponse)

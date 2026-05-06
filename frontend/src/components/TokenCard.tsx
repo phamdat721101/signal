@@ -91,6 +91,8 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
               <span className="font-headline font-bold text-lg text-white">${card.token_symbol}</span>
               <span className={`text-[9px] font-label font-bold px-2 py-0.5 rounded border ${verdictStyle[verdict] || verdictStyle.DYOR}`}>{verdict}</span>
               {card.on_chain_signal_id != null && <span className="text-[9px] text-[#494847]">⛓️</span>}
+              {(card as any).provider && <span className="text-[8px] bg-[#bf81ff]/10 text-[#bf81ff] px-1.5 py-0.5 rounded border border-[#bf81ff]/20">{(card as any).provider}</span>}
+              {(card as any).execution_type === 'sodex' && <span className="text-[8px] bg-[#8eff71]/10 text-[#8eff71] px-1.5 py-0.5 rounded">LIVE 🟢</span>}
             </div>
             <div className="font-label text-[10px] text-[#adaaaa]">{card.token_name}</div>
           </div>

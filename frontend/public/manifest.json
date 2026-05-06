@@ -1,0 +1,10 @@
+{
+  "name": "Ape or Fade",
+  "short_name": "ApeOrFade",
+  "description": "TikTok-style crypto trading cards",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0e0e0e",
+  "theme_color": "#0e0e0e",
+  "icons": [{"src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml"}]
+}

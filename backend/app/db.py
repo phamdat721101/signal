@@ -136,6 +136,23 @@ def init_db():
             )
         """)
     logger.info("Trades table ready")
+    # SoDex trade columns
+    with conn.cursor() as cur:
+        for col, defn in [
+            ("sodex_order_id", "TEXT"),
+            ("execution_type", "TEXT DEFAULT 'simulated'"),
+        ]:
+            try:
+                cur.execute(f"ALTER TABLE trades ADD COLUMN IF NOT EXISTS {col} {defn}")
+            except Exception:
+                pass
+    # Provider marketplace tables
+    with conn.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS providers (address TEXT PRIMARY KEY, name TEXT, description TEXT, avatar_url TEXT, win_rate REAL DEFAULT 0, total_signals INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW())""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS provider_follows (id SERIAL PRIMARY KEY, user_address TEXT NOT NULL, provider_address TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(user_address, provider_address))""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS push_subscriptions (id SERIAL PRIMARY KEY, user_address TEXT NOT NULL, subscription JSONB NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(user_address))""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS referrals (id SERIAL PRIMARY KEY, referrer TEXT NOT NULL, referred TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(referred))""")
+    logger.info("Provider marketplace tables ready")
     # Daily swipes table (premium gate)
     with conn.cursor() as cur:
         cur.execute("""
