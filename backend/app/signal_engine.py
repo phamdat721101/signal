@@ -858,3 +858,32 @@ def run_sosovalue_signal_cycle():
         except Exception as e:
             logger.warning(f"SosoValue signal DB write failed: {e}")
     logger.info(f"SosoValue: {len(signals)} signals stored")
+
+
+def compute_confluence(symbol: str) -> dict:
+    """Multi-timeframe confluence: checks if 1h, 4h, 1d trends agree."""
+    history = price_history.get(ORACLE_PAIRS.get(symbol, symbol), [])
+    if len(history) < 24:
+        return {"timeframes": [], "confluence_score": 50}
+    closes = [h[1] for h in history]
+    results = []
+    # Simulate timeframes from available data
+    for label, period in [("1h", min(12, len(closes))), ("4h", min(48, len(closes))), ("1d", len(closes))]:
+        segment = closes[-period:]
+        if len(segment) < 6:
+            continue
+        fast = ema(segment, 5)
+        slow = ema(segment, 10)
+        if not fast or not slow:
+            continue
+        direction = "bullish" if fast[-1] > slow[-1] else "bearish"
+        strength = round(abs(fast[-1] - slow[-1]) / max(segment[-1], 0.0001) * 100, 2)
+        results.append({"period": label, "direction": direction, "strength": strength})
+    if not results:
+        return {"timeframes": [], "confluence_score": 50}
+    # Confluence: percentage of timeframes agreeing with majority
+    bull = sum(1 for r in results if r["direction"] == "bullish")
+    bear = len(results) - bull
+    majority = max(bull, bear)
+    score = int(majority / len(results) * 100)
+    return {"timeframes": results, "confluence_score": score}

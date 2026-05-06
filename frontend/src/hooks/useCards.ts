@@ -28,7 +28,17 @@ export interface Card {
   signals?: { type: string; severity: number; direction: string; finding: string }[];
   sparkline?: number[];
   patterns?: { type: string; direction: string; label: string; description: string; lesson?: string }[];
+  trading_lesson?: string;
+  position_guide?: string;
+  why_now?: string;
+  expected_outcome?: string;
+  pattern_stats?: { pattern: string; win_rate: number; samples: number };
+  risk_breakdown?: { factor: string; impact: string; direction: string }[];
+  confluence?: { timeframes: { period: string; direction: string; strength: number }[]; confluence_score: number };
   on_chain_signal_id?: number;
+  tvl?: number;
+  tvl_change_1d?: number;
+  source?: string;
 }
 
 async function fetchCards(offset = 0, limit = 20) {

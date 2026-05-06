@@ -67,7 +67,6 @@ def set_cache(key: str, value):
 async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info(f"Starting Initia Signal backend | network={settings.network}")
-    from app.signal_engine import bootstrap_price_history
     from app.scheduler import start_scheduler
     if settings.contract_address:
         try:
@@ -84,7 +83,6 @@ async def lifespan(app: FastAPI):
             init_db()
         except Exception as e:
             logger.warning(f"DB init failed: {e}")
-    bootstrap_price_history()
     start_scheduler()
     # Seed cards on startup if feed is empty
     if settings.database_url:
@@ -113,39 +111,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-def _fallback_metadata(signal: dict) -> dict:
-    """Compute metadata for old signals that lack it."""
-    entry = int(signal.get("entryPrice", 0))
-    target = int(signal.get("targetPrice", 0))
-    is_bull = signal.get("isBull", True)
-    price = entry / 1e18 if entry else 0
-    target_price = target / 1e18 if target else 0
-    stop_loss = price * 0.985 if is_bull else price * 1.015
-
-    if is_bull:
-        pattern = "Golden Cross" if target_price > price else "Bullish Momentum"
-    else:
-        pattern = "Death Cross" if target_price < price else "Bearish Momentum"
-
-    from app.signal_engine import TRACKED_ASSETS
-    asset_addr = signal.get("asset", "").lower()
-    symbol = TRACKED_ASSETS.get(asset_addr, TRACKED_ASSETS.get(asset_addr.lower(), "UNKNOWN"))
-    direction = "bullish" if is_bull else "bearish"
-    action = "BUY" if is_bull else "SELL"
-
-    analysis = (
-        f"{action} {symbol} | {pattern} detected on 30-min chart. "
-        f"Signal indicates {direction} momentum. "
-        f"Entry ${price:,.2f} → Target ${target_price:,.2f} / Stop ${stop_loss:,.2f} (1:1 R:R). "
-        f"Confidence {signal.get('confidence', 0)}%. Auto-resolves in 24h."
-    )
-    return {
-        "pattern": pattern,
-        "analysis": analysis,
-        "timeframe": "30m candles / 24h horizon",
-        "stopLoss": str(int(stop_loss * 1e18)),
-    }
 
 
 @app.exception_handler(Exception)
@@ -186,288 +151,7 @@ async def get_errors(code: str | None = Query(default=None)):
     return {"errors": error_tracker.get_recent(), "summary": error_tracker.summary()}
 
 
-@app.get("/api/signals")
-async def get_signals(offset: int = 0, limit: int = Query(default=100, le=100), provider: str | None = Query(default=None)):
-    cache_key = f"signals:{offset}:{limit}:{provider}"
-    data = cached(cache_key)
-    if data:
-        return data
-    settings = get_settings()
 
-    # Primary: read from Supabase
-    if settings.database_url:
-        from app.db import get_signals as db_get_signals
-        db_signals, db_total = db_get_signals(offset, limit, provider)
-        if db_total > 0 or provider:
-            result = {"signals": db_signals, "total": db_total}
-            set_cache(cache_key, result)
-            return result
-
-    # Fallback: simulation mode
-    if not settings.contract_address:
-        from app.signal_engine import sim_signals
-        result = {"signals": sim_signals[offset:offset + limit], "total": len(sim_signals)}
-        set_cache(cache_key, result)
-        return result
-
-    # Fallback: on-chain
-    try:
-        chain = get_chain()
-        total = chain.get_signal_count()
-        signals = chain.get_signals(offset, limit) if total > 0 else []
-        from app.signal_engine import signal_metadata, TRACKED_ASSETS
-        for s in signals:
-            meta = signal_metadata.get(s["id"])
-            if meta:
-                s.update(meta)
-            elif not s.get("pattern"):
-                s.update(_fallback_metadata(s))
-            s.setdefault("symbol", TRACKED_ASSETS.get(s["asset"].lower(), ""))
-        result = {"signals": signals, "total": total}
-        set_cache(cache_key, result)
-        return result
-    except Exception as e:
-        error_tracker.track("SIGNALS_FETCH_ERROR", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/signals/{signal_id}")
-async def get_signal(signal_id: int, source: str = Query(default="auto")):
-    settings = get_settings()
-
-    # Primary: Supabase
-    if settings.database_url and source in ("db", "auto"):
-        from app.db import get_signal_by_id
-        db_signal = get_signal_by_id(signal_id)
-        if db_signal:
-            return db_signal
-
-    # Fallback: simulation mode
-    if not settings.contract_address:
-        from app.signal_engine import sim_signals
-        if 0 <= signal_id < len(sim_signals):
-            return sim_signals[signal_id]
-        raise HTTPException(status_code=404, detail="Signal not found")
-
-    # Fallback: on-chain
-    try:
-        chain = get_chain()
-        signal = chain.get_signal(signal_id)
-        from app.signal_engine import signal_metadata, TRACKED_ASSETS
-        meta = signal_metadata.get(signal_id)
-        if meta:
-            signal.update(meta)
-        elif not signal.get("pattern"):
-            signal.update(_fallback_metadata(signal))
-        signal.setdefault("symbol", TRACKED_ASSETS.get(signal["asset"].lower(), ""))
-        return signal
-    except Exception as e:
-        error_tracker.track("SIGNAL_FETCH_ERROR", str(e), {"signal_id": signal_id})
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@app.get("/api/prices")
-async def get_prices():
-    data = cached("prices", ttl=15)
-    if data:
-        return data
-    from app.signal_engine import get_current_prices, TRACKED_ASSETS
-    prices = get_current_prices()
-    result = {
-        "prices": prices,
-        "assets": {addr: sym for addr, sym in TRACKED_ASSETS.items()},
-    }
-    set_cache("prices", result)
-    return result
-
-
-@app.get("/api/prices/{symbol:path}/history")
-async def get_price_history(symbol: str):
-    from app.signal_engine import get_price_history_for_asset
-    history = get_price_history_for_asset(symbol)
-    return {"symbol": symbol, "history": history}
-
-
-
-
-@app.post("/api/signals/generate")
-async def trigger_signal_generation(
-    request: Request,
-    assets: str | None = Query(default=None),
-    timeframe: str = Query(default="30m"),
-    target_pct: float = Query(default=1.5, ge=0.1, le=20.0),
-):
-    """Generate signals. Params: ?assets=BTC/USD&timeframe=30m&target_pct=1.5"""
-    settings = get_settings()
-    payment_info = None
-    asset_list = [a.strip() for a in assets.split(",") if a.strip()] if assets else None
-    target_decimal = target_pct / 100.0  # convert 1.5 → 0.015
-
-    if settings.enable_payment_gating and settings.session_vault_address:
-        from app.x402_payment import require_payment
-        from app.mpp_middleware import SERVICE_PRICING
-        payment_info = await require_payment(
-            request, "signal-premium", "$0.01", SERVICE_PRICING["signal-premium"]["price_wei"]
-        )
-
-    from app.signal_engine import run_signal_cycle, price_history, recent_signal_txs
-    try:
-        before = len(recent_signal_txs)
-        cycle_result = run_signal_cycle(asset_list, target_decimal, timeframe)
-        after = len(recent_signal_txs)
-        new_signals = after - before
-        history_depth = {k: len(v) for k, v in price_history.items()}
-        _cache.clear()
-        result = {
-            "status": "ok" if cycle_result["success"] else "partial",
-            "newSignals": new_signals,
-            "priceHistory": history_depth,
-            "recentTxs": [t for t in recent_signal_txs[-new_signals:]] if new_signals > 0 else [],
-        }
-        if cycle_result["errors"]:
-            result["errors"] = cycle_result["errors"]
-        if payment_info:
-            result["payment"] = payment_info
-        return result
-    except Exception as e:
-        error_tracker.track("GENERATE_ENDPOINT_ERROR", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-@app.get("/api/signal-options")
-async def get_signal_options():
-    """Available token pairs, timeframes, and default target %."""
-    from app.signal_engine import TRACKED_ASSETS, TIMEFRAMES, DEFAULT_TIMEFRAME, DEFAULT_TARGET_PCT, COINGECKO_IDS
-    return {
-        "assets": [{"address": addr, "symbol": sym} for addr, sym in TRACKED_ASSETS.items()],
-        "availablePairs": sorted(COINGECKO_IDS.keys()),
-        "timeframes": [{"value": k, "label": v["label"]} for k, v in TIMEFRAMES.items()],
-        "defaults": {
-            "timeframe": DEFAULT_TIMEFRAME,
-            "targetPct": DEFAULT_TARGET_PCT * 100,
-        },
-    }
-
-
-@app.post("/api/assets")
-async def add_asset(symbol: str = Query(...)):
-    """Add a custom token pair. Example: ?symbol=SOL/USD or ?symbol=SOL"""
-    from app.signal_engine import add_tracked_asset, COINGECKO_IDS, bootstrap_price_history
-    sym = symbol.upper()
-    if not sym.endswith("/USD"):
-        sym = f"{sym}/USD"
-    if sym not in COINGECKO_IDS:
-        raise HTTPException(status_code=400, detail=f"Unknown pair: {sym}. Available: {sorted(COINGECKO_IDS.keys())}")
-    addr = add_tracked_asset(sym)
-    bootstrap_price_history()
-    _cache.clear()
-    return {"status": "ok", "symbol": sym, "address": addr}
-
-
-@app.delete("/api/assets")
-async def delete_asset(symbol: str = Query(...)):
-    """Remove a token pair from tracking."""
-    from app.signal_engine import remove_tracked_asset
-    if not remove_tracked_asset(symbol):
-        raise HTTPException(status_code=404, detail=f"Asset not found: {symbol}")
-    _cache.clear()
-    return {"status": "ok", "removed": symbol}
-
-
-@app.get("/api/report")
-async def get_report(address: str | None = Query(default=None)):
-    """Performance report. Pass ?address=0x... to filter by user's executed signals."""
-    settings = get_settings()
-    from app.signal_engine import signal_metadata
-
-    # Simulation mode — build report from in-memory signals
-    if not settings.contract_address:
-        from app.signal_engine import sim_signals, TRACKED_ASSETS
-        import time as _time
-        signals = [s for s in sim_signals if not address or s.get("creator", "").lower() == address.lower()]
-        resolved = [s for s in signals if s["resolved"]]
-        wins, losses = [], []
-        per_asset: dict[str, dict] = {}
-        balance = 10_000.0
-        balance_history = [{"trade": 0, "balance": balance}]
-        for s in resolved:
-            entry = int(s["entryPrice"])
-            exit_ = int(s["exitPrice"])
-            pct = ((exit_ - entry) / entry * 100) if entry else 0
-            if not s["isBull"]:
-                pct = -pct
-            profit = 100.0 * (pct / 100)
-            balance += profit
-            balance_history.append({"trade": len(balance_history), "balance": round(balance, 2)})
-            (wins if pct > 0 else losses).append({"id": s["id"], "pct": round(pct, 4)})
-            ak = TRACKED_ASSETS.get(s["asset"].lower(), "OTHER").replace("/USD", "")
-            if ak not in per_asset:
-                per_asset[ak] = {"total": 0, "wins": 0, "losses": 0, "totalPnl": 0.0}
-            pa = per_asset[ak]
-            pa["total"] += 1
-            pa["wins" if pct > 0 else "losses"] += 1
-            pa["totalPnl"] = round(pa["totalPnl"] + pct, 4)
-        for pa in per_asset.values():
-            pa["winRate"] = round((pa["wins"] / pa["total"]) * 100, 1) if pa["total"] > 0 else 0
-        all_pcts = [w["pct"] for w in wins] + [l["pct"] for l in losses]
-        return {
-            "generatedAt": _time.time(), "totalSignals": len(signals), "resolvedSignals": len(resolved),
-            "activeSignals": len(signals) - len(resolved), "wins": len(wins), "losses": len(losses),
-            "winRate": round((len(wins) / len(resolved)) * 100, 1) if resolved else 0,
-            "averageRoi": round(sum(all_pcts) / len(all_pcts), 4) if all_pcts else 0,
-            "bestTrade": max(all_pcts) if all_pcts else 0, "worstTrade": min(all_pcts) if all_pcts else 0,
-            "perAsset": per_asset, "creator": address,
-            "simulation": {"startingBalance": 10000, "tradeSize": 100, "finalBalance": round(balance, 2),
-                           "totalReturn": round(balance - 10000, 2),
-                           "totalReturnPct": round(((balance - 10000) / 10000) * 100, 2),
-                           "balanceHistory": balance_history},
-        }
-
-    try:
-        from app.report import generate_report
-        chain = get_chain()
-        report = generate_report(chain, signal_metadata, creator=address)
-        return report
-    except Exception as e:
-        error_tracker.track("REPORT_ERROR", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/signals/execute")
-async def execute_signal_simulated(
-    asset: str = Query(...),
-    isBull: bool = Query(...),
-    confidence: int = Query(...),
-    targetPrice: str = Query(...),
-    entryPrice: str = Query(...),
-    creator: str = Query(default="0x0000000000000000000000000000000000000000"),
-):
-    """Simulated signal execution — stores in memory, returns fake tx hash."""
-    import os
-    from app.signal_engine import sim_signals, signal_metadata, recent_signal_txs, MAX_RECENT_TXS, TRACKED_ASSETS
-    signal_id = len(sim_signals)
-    tx_hash = f"0x{os.urandom(32).hex()}"
-    entry_val = int(entryPrice)
-    target_val = int(targetPrice)
-    price = entry_val / 1e18
-    is_bull = isBull
-    target_price = target_val / 1e18
-    stop_loss = price * 0.985 if is_bull else price * 1.015
-    symbol = TRACKED_ASSETS.get(asset.lower(), "UNKNOWN")
-    sim_signals.append({
-        "id": signal_id, "asset": asset, "isBull": is_bull, "confidence": confidence,
-        "targetPrice": targetPrice, "entryPrice": entryPrice, "exitPrice": "0",
-        "timestamp": int(time.time()), "resolved": False, "creator": creator, "symbol": symbol,
-    })
-    recent_signal_txs.append({
-        "signalId": signal_id, "txHash": tx_hash, "symbol": symbol,
-        "isBull": is_bull, "confidence": confidence, "price": price, "timestamp": time.time(),
-    })
-    if len(recent_signal_txs) > MAX_RECENT_TXS:
-        recent_signal_txs.pop(0)
-    _cache.clear()
-    return {"status": "ok", "signalId": signal_id, "txHash": tx_hash}
 
 
 # ─── Card API (Ape or Fade) ──────────────────────────────────
@@ -1014,38 +698,7 @@ async def get_providers_leaderboard(limit: int = Query(default=20, le=50)):
     return {"leaderboard": get_provider_leaderboard(limit)}
 
 
-@app.get("/api/tx-history")
-async def get_tx_history():
-    """Return recent AI signal transaction hashes for explorer tracking."""
-    from app.signal_engine import recent_signal_txs
-    chain_id = "initia-signal-1"
-    scan_base = f"https://scan.testnet.initia.xyz/{chain_id}"
-    indexer_base = "http://localhost:8080"
-    return {
-        "transactions": [
-            {
-                **tx,
-                "scanUrl": f"{scan_base}/txs/{tx['txHash']}",
-                "indexerUrl": f"{indexer_base}/indexer/tx/v1/txs/{tx['txHash']}",
-            }
-            for tx in reversed(recent_signal_txs)
-        ],
-        "scanBase": scan_base,
-        "indexerBase": indexer_base,
-    }
 
-
-@app.post("/api/admin/reset")
-async def admin_reset():
-    """Clear all in-memory signal state."""
-    from app.signal_engine import sim_signals, recent_signal_txs, signal_metadata, price_history
-    sim_signals.clear()
-    recent_signal_txs.clear()
-    signal_metadata.clear()
-    price_history.clear()
-    _cache.clear()
-    logger.info("Admin reset: all in-memory signal data cleared")
-    return {"status": "ok", "message": "All in-memory signal data cleared. Restart recommended."}
 
 
 # ─── Payment-gated endpoints ────────────────────────────────
@@ -1066,44 +719,7 @@ def _get_payment_verifier():
     return _payment_verifier
 
 
-@app.get("/api/signals/premium")
-async def get_premium_signals(request: Request, offset: int = 0, limit: int = Query(default=100, le=100)):
-    settings = get_settings()
-    if not settings.enable_payment_gating:
-        return await get_signals(offset, limit)
-    from app.x402_payment import require_payment
-    from app.mpp_middleware import SERVICE_PRICING
-    payment = await require_payment(request, "signal-premium", "$0.01", SERVICE_PRICING["signal-premium"]["price_wei"])
-    try:
-        if settings.database_url:
-            from app.db import get_signals as db_get_signals
-            db_signals, db_total = db_get_signals(offset, limit)
-            return {"signals": db_signals, "total": db_total, "payment": payment}
-        chain = get_chain()
-        total = chain.get_signal_count()
-        signals = chain.get_signals(offset, limit) if total > 0 else []
-        return {"signals": signals, "total": total, "payment": payment}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.get("/api/signals/single/{signal_id}")
-async def get_paid_signal(signal_id: int, request: Request):
-    settings = get_settings()
-    if not settings.enable_payment_gating:
-        return await get_signal(signal_id)
-    from app.x402_payment import require_payment
-    from app.mpp_middleware import SERVICE_PRICING
-    payment = await require_payment(request, "signal-single", "$0.002", SERVICE_PRICING["signal-single"]["price_wei"])
-    try:
-        if settings.database_url:
-            from app.db import get_signal_by_id
-            db_signal = get_signal_by_id(signal_id)
-            if db_signal:
-                return {"signal": db_signal, "payment": payment}
-        return {"signal": get_chain().get_signal(signal_id), "payment": payment}
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/api/payment/session/{session_id}")
@@ -1259,21 +875,7 @@ def get_oracle_takes():
     from app.degen_oracle import get_recent_takes
     return get_recent_takes(5)
 
-# ─── Challenge Endpoints ────────────────────────────────────
-@app.get("/api/challenges")
-def list_challenges():
-    from app.challenges import get_active_challenges
-    return {"challenges": get_active_challenges()}
 
-@app.post("/api/challenges/{challenge_id}/enter")
-def enter_challenge_endpoint(challenge_id: int, body: dict):
-    from app.challenges import enter_challenge
-    return enter_challenge(challenge_id, body.get("user_address", ""), body.get("answer", ""))
-
-@app.get("/api/challenges/leaderboard")
-def challenge_leaderboard():
-    from app.challenges import get_challenge_leaderboard
-    return {"leaderboard": get_challenge_leaderboard()}
 
 # ─── Share Endpoint ─────────────────────────────────────────
 @app.post("/api/share/generate")
@@ -1384,24 +986,7 @@ async def subscribe_notifications(request: Request):
     return {"status": "ok"}
 
 
-# ─── Signal Accuracy & Share ────────────────────────────────
-
-@app.get("/api/signals/accuracy")
-async def signals_accuracy():
-    from app.db import _get_conn
-    conn = _get_conn()
-    if not conn:
-        return {"win_rate": 0, "total": 0}
-    from psycopg2.extras import RealDictCursor
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("""SELECT COUNT(*) as total,
-                       COUNT(*) FILTER (WHERE resolved AND pnl_usd > 0) as wins
-                       FROM trades WHERE resolved = TRUE""")
-        row = cur.fetchone()
-    total = row["total"] or 0
-    wins = row["wins"] or 0
-    return {"win_rate": round(wins / total * 100, 1) if total > 0 else 0, "total": total, "wins": wins}
-
+# ─── Share ───────────────────────────────────────────────────
 
 @app.get("/api/share/{trade_id}/meta")
 async def share_meta(trade_id: int):

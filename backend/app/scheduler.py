@@ -180,106 +180,22 @@ def expire_old_cards():
             logger.info(f"Expired {cur.rowcount} cards")
 
 
-def resolve_provider_signals():
-    """Check provider signals for TP/SL hits. First-hit-wins."""
-    from app.db import get_unresolved_provider_signals, resolve_signal_with_type
-    from app.signal_engine import COINGECKO_IDS
-
-    signals = get_unresolved_provider_signals()
-    if not signals:
-        return
-
-    # Collect unique symbols → CoinGecko IDs
-    cg_map = {}
-    for s in signals:
-        sym = (s.get("symbol", "") or s.get("asset", "").replace("/USD", "")).upper()
-        key = f"{sym}/USD"
-        if key in COINGECKO_IDS:
-            cg_map[sym] = COINGECKO_IDS[key]
-
-    if not cg_map:
-        return
-
-    # Fetch prices
-    prices = {}
-    try:
-        import httpx
-        ids_str = ",".join(cg_map.values())
-        resp = httpx.get("https://api.coingecko.com/api/v3/simple/price",
-                         params={"ids": ids_str, "vs_currencies": "usd"}, timeout=10)
-        if resp.status_code == 200:
-            id_to_sym = {v: k for k, v in cg_map.items()}
-            for cg_id, vals in resp.json().items():
-                if cg_id in id_to_sym and "usd" in vals:
-                    prices[id_to_sym[cg_id]] = vals["usd"]
-    except Exception as e:
-        logger.warning(f"Provider signal price fetch failed: {e}")
-        return
-
-    if not prices:
-        return
-
-    resolved_count = 0
-    for s in signals:
-        sym = (s.get("symbol", "") or s.get("asset", "").replace("/USD", "")).upper()
-        current_price = prices.get(sym)
-        if current_price is None:
-            continue
-
-        try:
-            entry = float(s["entryPrice"])
-            target = float(s["targetPrice"])
-            stop_loss = float(s["stopLoss"])
-        except (ValueError, TypeError):
-            continue
-        if entry <= 0 or target <= 0 or stop_loss <= 0:
-            continue
-
-        resolution = None
-        if s["isBull"]:
-            if current_price >= target:
-                resolution = "TP_HIT"
-            elif current_price <= stop_loss:
-                resolution = "SL_HIT"
-        else:
-            if current_price <= target:
-                resolution = "TP_HIT"
-            elif current_price >= stop_loss:
-                resolution = "SL_HIT"
-
-        if resolution:
-            resolve_signal_with_type(s["id"], str(current_price), resolution)
-            resolved_count += 1
-            logger.info(f"Provider signal #{s['id']} {sym} resolved: {resolution} at ${current_price}")
-
-    if resolved_count:
-        logger.info(f"Provider signal resolution: {resolved_count}/{len(signals)} resolved")
-
-
 def start_scheduler():
     from app.content_engine import run_card_generation_cycle
-    from app.signal_engine import run_signal_cycle, resolve_all_signals, run_sosovalue_signal_cycle
 
     scheduler.add_job(run_card_generation_cycle, "interval", minutes=5, id="card_gen", max_instances=1)
     scheduler.add_job(monitor_positions, "interval", minutes=5, id="position_monitor", max_instances=1)
-    scheduler.add_job(lambda: run_signal_cycle(), "cron", hour="8,14,20", id="signal_cycle", max_instances=1)
-    scheduler.add_job(resolve_all_signals, "cron", hour=23, minute=55, id="resolve_signals", max_instances=1)
     scheduler.add_job(expire_old_cards, 'interval', minutes=10, id='expire_cards', max_instances=1)
-    scheduler.add_job(resolve_provider_signals, "interval", minutes=5, id="provider_resolution", max_instances=1)
-    scheduler.add_job(run_sosovalue_signal_cycle, "interval", minutes=30, id="sosovalue_signals", max_instances=1)
     from app.content_engine import backfill_chart_data
     scheduler.add_job(backfill_chart_data, "interval", minutes=30, id="backfill_charts", max_instances=1)
     from app.sosovalue_client import refresh_cache as refresh_sosovalue
     scheduler.add_job(refresh_sosovalue, "interval", minutes=5, id="sosovalue_cache", max_instances=1)
     from app.insight_engine import generate_and_store_insight_cards
     from app.degen_oracle import refresh_oracle
-    from app.challenges import generate_daily_challenges, resolve_challenges
     scheduler.add_job(generate_and_store_insight_cards, "interval", minutes=30, id="insight_cards", max_instances=1)
     scheduler.add_job(refresh_oracle, "interval", minutes=30, id="oracle_refresh", max_instances=1)
-    scheduler.add_job(generate_daily_challenges, "cron", hour=0, minute=5, id="daily_challenges", max_instances=1)
-    scheduler.add_job(resolve_challenges, "cron", hour=23, minute=55, id="resolve_challenges", max_instances=1)
     scheduler.start()
-    logger.info("Scheduler started: card_gen(5m) + position_monitor(5m) + signal_cycle(3x/day) + resolve(23:55) + expire_cards(10m) + provider_resolution(5m) + sosovalue_signals(30m) + backfill_charts(30m) + sosovalue_cache(5m) + insight_cards(30m) + oracle_refresh(30m) + daily_challenges(00:05) + resolve_challenges(23:55)")
+    logger.info("Scheduler started: card_gen(5m) + position_monitor(5m) + expire_cards(10m) + backfill_charts(30m) + sosovalue_cache(5m) + insight_cards(30m) + oracle_refresh(30m)")
 
 
 def stop_scheduler():

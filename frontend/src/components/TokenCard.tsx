@@ -70,7 +70,7 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
   const [imgError, setImgError] = useState(false);
   const verdict = card.verdict || 'DYOR';
   const pctColor = card.price_change_24h >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]';
-  const emoji = getCardEmoji(verdict, card.risk_level);
+  const emoji = card.card_type === 'pool' ? '🌊💰' : getCardEmoji(verdict, card.risk_level);
   const score = card.risk_score ?? 50;
 
   return (
@@ -177,6 +177,38 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
           <div className="bg-[#262626] p-2 rounded-lg">
             <div className="font-label text-[9px] text-[#bf81ff] uppercase tracking-widest">Why {verdict}</div>
             <div className="text-[#adaaaa] text-xs mt-0.5">{card.verdict_reason}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Trading Education */}
+      {(card.trading_lesson || card.why_now || card.position_guide) && (
+        <div className="px-4 pb-2 space-y-1.5">
+          {card.why_now && (
+            <div className="bg-[#1a1a2e] border border-[#bf81ff]/20 p-2 rounded-lg">
+              <span className="font-label text-[8px] text-[#bf81ff] uppercase">⚡ Why Now</span>
+              <p className="text-[#e0e0e0] text-[11px] mt-0.5">{card.why_now}</p>
+            </div>
+          )}
+          {card.trading_lesson && (
+            <div className="bg-[#0e1a0e] border border-[#8eff71]/20 p-2 rounded-lg">
+              <span className="font-label text-[8px] text-[#8eff71] uppercase">💡 Lesson</span>
+              <p className="text-[#e0e0e0] text-[11px] mt-0.5">{card.trading_lesson}</p>
+            </div>
+          )}
+          <div className="flex gap-1.5">
+            {card.position_guide && (
+              <div className="flex-1 bg-[#262626] p-2 rounded-lg">
+                <div className="font-label text-[8px] text-[#adaaaa] uppercase">📐 Size</div>
+                <div className="text-[10px] text-white">{card.position_guide}</div>
+              </div>
+            )}
+            {card.pattern_stats && (
+              <div className="flex-1 bg-[#262626] p-2 rounded-lg">
+                <div className="font-label text-[8px] text-[#adaaaa] uppercase">📊 History</div>
+                <div className="text-[10px] text-[#8eff71]">{card.pattern_stats.win_rate}% win ({card.pattern_stats.samples} trades)</div>
+              </div>
+            )}
           </div>
         </div>
       )}

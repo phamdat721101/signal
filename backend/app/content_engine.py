@@ -16,6 +16,142 @@ logger = logging.getLogger(__name__)
 
 # ─── Stage 1: Data Harvester ────────────────────────────────
 
+# ─── DeFiLlama Data Sources ─────────────────────────────────
+
+_llama_protocols_cache: dict = {}
+_llama_protocols_ts: float = 0
+_llama_pools_cache: list = []
+_llama_pools_ts: float = 0
+
+
+def _fetch_llama_protocols() -> dict:
+    """Fetch DeFiLlama protocols (TVL data). Cached 15 min."""
+    global _llama_protocols_cache, _llama_protocols_ts
+    if time.time() - _llama_protocols_ts < 900 and _llama_protocols_cache:
+        return _llama_protocols_cache
+    try:
+        resp = httpx.get("https://api.llama.fi/protocols", timeout=15)
+        resp.raise_for_status()
+        protocols = {p.get("symbol", "").upper(): p for p in resp.json() if p.get("symbol")}
+        _llama_protocols_cache = protocols
+        _llama_protocols_ts = time.time()
+        return protocols
+    except Exception as e:
+        logger.warning(f"DeFiLlama protocols fetch failed: {e}")
+        return _llama_protocols_cache
+
+
+def _fetch_llama_pools() -> list:
+    """Fetch top LP pools from DeFiLlama Yields. Cached 10 min."""
+    global _llama_pools_cache, _llama_pools_ts
+    if time.time() - _llama_pools_ts < 600 and _llama_pools_cache:
+        return _llama_pools_cache
+    try:
+        resp = httpx.get("https://yields.llama.fi/pools", timeout=20)
+        resp.raise_for_status()
+        pools = resp.json().get("data", [])
+        # Filter: APY > 5%, TVL > $1M, known chains
+        filtered = [
+            p for p in pools
+            if p.get("apy") and p["apy"] > 5
+            and p.get("tvlUsd") and p["tvlUsd"] > 1_000_000
+            and p.get("symbol")
+            and p.get("project")
+        ]
+        # Sort by attractiveness: high APY + high TVL + low IL
+        for p in filtered:
+            il = abs(p.get("il7d") or 0)
+            apy = p.get("apy", 0)
+            tvl = p.get("tvlUsd", 0)
+            p["_score"] = apy * min(tvl / 10_000_000, 5) / max(il * 10 + 1, 1)
+        filtered.sort(key=lambda p: p["_score"], reverse=True)
+        _llama_pools_cache = filtered[:50]
+        _llama_pools_ts = time.time()
+        return _llama_pools_cache
+    except Exception as e:
+        logger.warning(f"DeFiLlama pools fetch failed: {e}")
+        return _llama_pools_cache
+
+
+def harvest_pools(limit: int = 5) -> list[dict]:
+    """Generate LP pool cards from DeFiLlama yield data."""
+    pools = _fetch_llama_pools()
+    if not pools:
+        return []
+    cards = []
+    for p in pools[:limit]:
+        apy = p.get("apy", 0)
+        apy_base = p.get("apyBase") or 0
+        apy_reward = p.get("apyReward") or 0
+        tvl = p.get("tvlUsd", 0)
+        il = abs(p.get("il7d") or 0)
+        symbol = p.get("symbol", "???")
+        project = p.get("project", "unknown")
+        chain = p.get("chain", "unknown")
+
+        # Risk assessment
+        if il > 2:
+            risk_score, risk_level = 75, "DEGEN"
+        elif il > 0.5:
+            risk_score, risk_level = 55, "MID"
+        else:
+            risk_score, risk_level = 30, "SAFE"
+
+        # Verdict
+        if apy > 20 and il < 1:
+            verdict, verdict_reason = "APE", f"{apy:.1f}% APY with low IL ({il:.2f}%) — strong risk/reward"
+        elif apy > 10 and tvl > 10_000_000:
+            verdict, verdict_reason = "APE", f"Solid {apy:.1f}% yield on ${tvl/1e6:.0f}M TVL — battle-tested pool"
+        elif il > 2 or apy < 5:
+            verdict, verdict_reason = "FADE", f"IL risk ({il:.2f}%) outweighs {apy:.1f}% APY — better options exist"
+        else:
+            verdict, verdict_reason = "DYOR", f"{apy:.1f}% APY but watch IL. Suitable for experienced LPs."
+
+        # Position guide
+        if risk_score <= 35:
+            pos_guide = "Conservative: 5-10% | Aggressive: 15-20% | Low IL risk"
+        elif risk_score <= 60:
+            pos_guide = "Conservative: 2-5% | Aggressive: 8-12% | Monitor IL"
+        else:
+            pos_guide = "Conservative: 1-2% | Aggressive: 3-5% | High IL — hedge or exit early"
+
+        # Trading lesson
+        if il > 1:
+            lesson = f"Impermanent loss: at ±30% price divergence, you lose ~4.4% vs holding. This pool's 7d IL is {il:.2f}% — factor this into your APY calculation."
+        elif apy_reward > apy_base:
+            lesson = f"Reward APY ({apy_reward:.1f}%) > base fees ({apy_base:.1f}%). Reward tokens often dump — consider selling rewards immediately to lock in yield."
+        else:
+            lesson = f"Fee-based yield ({apy_base:.1f}%) is sustainable. Reward-heavy pools ({apy_reward:.1f}%) carry token risk. This pool earns mostly from trading fees — more reliable."
+
+        cards.append({
+            "token_symbol": symbol,
+            "token_name": f"{project.title()} LP",
+            "card_type": "pool",
+            "hook": f"{apy:.0f}% APY on {symbol} — {project} ({chain})",
+            "roast": f"TVL ${tvl/1e6:.0f}M. Base fees {apy_base:.1f}% + rewards {apy_reward:.1f}%. 7d IL: {il:.2f}%.",
+            "metrics": [
+                {"emoji": "💰", "label": "APY", "value": f"{apy:.1f}%", "sentiment": "bullish" if apy > 15 else "neutral"},
+                {"emoji": "🏦", "label": "TVL", "value": f"${tvl/1e6:.0f}M", "sentiment": "bullish" if tvl > 50e6 else "neutral"},
+                {"emoji": "⚠️", "label": "IL 7d", "value": f"{il:.2f}%", "sentiment": "bearish" if il > 1 else "bullish"},
+            ],
+            "verdict": verdict,
+            "verdict_reason": verdict_reason,
+            "risk_level": risk_level,
+            "risk_score": risk_score,
+            "price": apy,  # Use APY as the "price" for display
+            "price_change_24h": 0,
+            "volume_24h": p.get("volumeUsd1d") or 0,
+            "market_cap": tvl,
+            "image_url": "",
+            "trading_lesson": lesson,
+            "position_guide": pos_guide,
+            "why_now": f"{symbol} pool on {project} ({chain}) yielding {apy:.1f}% with ${tvl/1e6:.0f}M liquidity",
+            "status": "active",
+            "source": "defillama",
+        })
+    return cards
+
+
 def harvest_tokens(limit: int = 10) -> list[dict]:
     """Fetch token data from CoinGecko — multiple orderings for diversity."""
     all_tokens = {}
@@ -36,11 +172,30 @@ def harvest_tokens(limit: int = 10) -> list[dict]:
         except Exception as e:
             logger.warning(f"Harvest ({order}) failed: {e}")
     tokens = list(all_tokens.values())
+    # Sort by "interestingness" — anomaly-first, not just volume
+    for t in tokens:
+        score = 0
+        vol_mcap = t["volume_24h"] / max(t["market_cap"], 1)
+        if vol_mcap > 0.3: score += 30
+        if abs(t.get("price_change_1h", 0)) > 5: score += 25
+        if abs(t["price_change_24h"]) > 10: score += 20
+        if t["circulating_supply"] > 0 and t["total_supply"] > 0 and t["circulating_supply"] / t["total_supply"] < 0.5: score += 15
+        t["interest_score"] = score
+    tokens.sort(key=lambda t: t["interest_score"], reverse=True)
     from app.sosovalue_client import get_full_context
     sv_ctx = get_full_context()
     if sv_ctx:
         for t in tokens:
             t["sosovalue"] = sv_ctx
+    # Enrich with DeFiLlama TVL data
+    protocols = _fetch_llama_protocols()
+    if protocols:
+        for t in tokens:
+            proto = protocols.get(t["token_symbol"])
+            if proto:
+                t["tvl"] = proto.get("tvl", 0)
+                t["tvl_change_1d"] = proto.get("change_1d", 0)
+                t["mcap_tvl_ratio"] = round(t["market_cap"] / max(proto.get("tvl", 1), 1), 2)
     return tokens
 
 
@@ -120,6 +275,21 @@ def analyze_signals(token: dict) -> list[dict]:
                         "direction": "neutral", "emoji": "⚠️",
                         "finding": f"Volume ({_fmt(vol)}) exceeds 2x market cap ({_fmt(mcap)})"})
 
+    # DeFiLlama: TVL signals
+    tvl = token.get("tvl", 0)
+    tvl_change = token.get("tvl_change_1d", 0)
+    if tvl > 0 and tvl_change:
+        if tvl_change > 10:
+            signals.append({"type": "TVL_SURGE", "severity": 4, "direction": "bullish", "emoji": "🏦",
+                            "finding": f"TVL up {tvl_change:.0f}% in 24h — capital flowing in"})
+        elif tvl_change < -10:
+            signals.append({"type": "TVL_DRAIN", "severity": 4, "direction": "bearish", "emoji": "🚨",
+                            "finding": f"TVL down {abs(tvl_change):.0f}% in 24h — capital fleeing"})
+    mcap_tvl = token.get("mcap_tvl_ratio", 0)
+    if mcap_tvl > 10:
+        signals.append({"type": "OVERVALUED_VS_TVL", "severity": 3, "direction": "bearish", "emoji": "📊",
+                        "finding": f"MCap/TVL ratio {mcap_tvl:.1f}x — potentially overvalued vs locked value"})
+
     # SosoValue: ETF flow + macro event signals
     sv = token.get("sosovalue", {})
     etf = sv.get("etf_flows", {})
@@ -138,15 +308,20 @@ def analyze_signals(token: dict) -> list[dict]:
     return sorted(signals, key=lambda s: s["severity"], reverse=True)
 
 
-def compute_risk_score(signals: list[dict]) -> int:
-    """0-100. Higher = riskier."""
+def compute_risk_score(signals: list[dict]) -> tuple[int, list[dict]]:
+    """0-100. Higher = riskier. Returns (score, breakdown)."""
     base = 50
+    breakdown = []
     for s in signals:
         if s["direction"] == "bearish":
-            base += s["severity"] * 5
+            delta = s["severity"] * 5
+            base += delta
+            breakdown.append({"factor": s["finding"], "impact": f"+{delta}", "direction": "risk"})
         elif s["direction"] == "bullish":
-            base -= s["severity"] * 3
-    return max(0, min(100, base))
+            delta = s["severity"] * 3
+            base -= delta
+            breakdown.append({"factor": s["finding"], "impact": f"-{delta}", "direction": "safe"})
+    return max(0, min(100, base)), breakdown
 
 
 def compute_verdict(signals: list[dict], risk_score: int) -> tuple[str, str, str]:
@@ -176,7 +351,7 @@ def compute_verdict(signals: list[dict], risk_score: int) -> tuple[str, str, str
 
 # ─── Stage 3: Narrative Writer ──────────────────────────────
 
-def generate_narrative(token: dict, signals: list[dict], risk_score: int) -> dict:
+def generate_narrative(token: dict, signals: list[dict], risk_score: int, risk_breakdown: list[dict] | None = None) -> dict:
     """Try Claude Bedrock, fall back to templates."""
     verdict, verdict_reason, risk_level = compute_verdict(signals, risk_score)
     content = _narrative_via_bedrock(token, signals, verdict, risk_level)
@@ -186,6 +361,7 @@ def generate_narrative(token: dict, signals: list[dict], risk_score: int) -> dic
     content["verdict_reason"] = verdict_reason
     content["risk_level"] = risk_level
     content["risk_score"] = risk_score
+    content["risk_breakdown"] = risk_breakdown or []
     return content
 
 
@@ -212,12 +388,16 @@ def _narrative_via_bedrock(token: dict, signals: list[dict], verdict: str, risk_
         f'Verdict: {verdict}, Risk: {risk_level}\n'
         f'Signals:\n{signal_lines}\n\n'
         + (f'Institutional context: {sv_lines}\n' if sv_lines else '')
+        + f'IMPORTANT: Include a trading_lesson (one specific concept with numbers), why_now (why this token is interesting right now), and position_guide (suggested % of portfolio based on risk {risk_level}).\n'
         + f'Respond ONLY with JSON:\n'
         f'{{"hook":"punchy scroll-stopper max 12 words",'
         f'"roast":"1-2 sarcastic sentences with data insights",'
         f'"metrics":[{{"emoji":"X","label":"Y","value":"Z","sentiment":"bullish|bearish|neutral"}},'
         f'{{"emoji":"X","label":"Y","value":"Z","sentiment":"bullish|bearish|neutral"}},'
         f'{{"emoji":"X","label":"Y","value":"Z","sentiment":"bullish|bearish|neutral"}}],'
+        f'"trading_lesson":"ONE specific trading concept this setup demonstrates with numbers",'
+        f'"why_now":"specific reason this token is interesting RIGHT NOW in 1 sentence",'
+        f'"position_guide":"Conservative: X% | Aggressive: Y% of portfolio",'
         f'"notification_hook":"what to message if they faded and it pumped, max 15 words",'
         f'"ai_image_prompt":"surreal meme scene for this token vibe"}}'
     )
@@ -237,6 +417,46 @@ def _narrative_via_bedrock(token: dict, signals: list[dict], verdict: str, risk_
     except Exception as e:
         logger.warning(f"Bedrock unavailable for {token['token_symbol']}: {e}")
     return None
+
+
+def _position_guide(risk_score: int) -> str:
+    if risk_score <= 30:
+        return "Conservative: 3-5% | Aggressive: 8-10% | Low risk setup"
+    elif risk_score <= 60:
+        return "Conservative: 1-3% | Aggressive: 5-7% | Medium risk"
+    return "Conservative: 0.5-1% | Aggressive: 2-3% | High risk — small size only"
+
+
+def _generate_why_now(token: dict, signals: list) -> str:
+    sym = token['token_symbol']
+    pct = token['price_change_24h']
+    vol_mcap = token['volume_24h'] / max(token['market_cap'], 1)
+    if vol_mcap > 0.3:
+        return f"${sym} volume is {vol_mcap:.1f}x market cap — unusual accumulation/distribution happening now"
+    if abs(token.get('price_change_1h', 0)) > 5:
+        return f"${sym} moved {token['price_change_1h']:+.1f}% in 1 hour — momentum event in progress"
+    if abs(pct) > 10:
+        return f"${sym} {pct:+.1f}% in 24h — strong directional move with follow-through potential"
+    sv = token.get('sosovalue', {})
+    if sv.get('etf_flows', {}).get('btc_net_flow', 0) > 100e6:
+        return f"BTC ETF inflow ${sv['etf_flows']['btc_net_flow']/1e6:.0f}M — institutional buying lifts all boats"
+    return f"${sym} showing {signals[0]['finding'] if signals else 'mixed signals'} — watch for confirmation"
+
+
+def _generate_lesson(signals: list, token: dict) -> str:
+    if not signals:
+        return "No clear setup — patience is a trading edge. Wait for confluence."
+    top = signals[0]
+    lessons = {
+        'VOLUME_SPIKE': f"Volume precedes price. When vol/mcap > 0.3x, expect 5-15% move within 24h.",
+        'PRICE_MOMENTUM': f"Momentum is mean-reverting short-term but trend-following long-term. 1h moves > 5% often retrace 40-60%.",
+        'BUY_SELL_IMBALANCE': f"Price near 24h high = buyers in control. Breakouts above resistance often run 2-5% before pullback.",
+        'HOLDER_CONCENTRATION': f"Low circulating supply (<50%) = unlock risk. Insiders can dump at any time.",
+        'MCAP_TO_VOLUME_RATIO': f"Volume > 2x market cap signals extreme speculation. High reward but expect 30%+ drawdowns.",
+        'ETF_FLOW': f"ETF flows are a leading indicator. $100M+ daily flow historically precedes 3-7% moves within 48h.",
+        'MACRO_CATALYST': f"Macro events (Fed, CPI) cause volatility spikes. Reduce position size 50% before announcements.",
+    }
+    return lessons.get(top['type'], f"Pattern: {top['type']} — {top['finding']}. Track outcomes to build your edge.")
 
 
 def _narrative_fallback(token: dict, signals: list[dict], verdict: str, risk_level: str) -> dict:
@@ -269,7 +489,10 @@ def _narrative_fallback(token: dict, signals: list[dict], verdict: str, risk_lev
 
     return {"hook": hook, "roast": roast, "metrics": metrics[:3],
             "notification_hook": notification,
-            "ai_image_prompt": f"{sym} crypto {'rocket launch' if verdict == 'APE' else 'crash landing' if verdict == 'FADE' else 'foggy crossroads'}"}
+            "ai_image_prompt": f"{sym} crypto {'rocket launch' if verdict == 'APE' else 'crash landing' if verdict == 'FADE' else 'foggy crossroads'}",
+            "trading_lesson": _generate_lesson(signals, token),
+            "why_now": _generate_why_now(token, signals),
+            "position_guide": _position_guide(compute_risk_score(signals)[0])}
 
 
 
@@ -348,6 +571,36 @@ def _svg_escape(s: str) -> str:
     return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
 
 
+_pattern_stats_cache: dict = {}
+_pattern_stats_ts: float = 0
+
+def _get_pattern_stats(signals: list[dict]) -> dict | None:
+    """Get historical outcome stats for the primary signal type."""
+    global _pattern_stats_cache, _pattern_stats_ts
+    import time as _t
+    if _t.time() - _pattern_stats_ts > 3600:  # refresh hourly
+        try:
+            from app.db import _get_conn
+            conn = _get_conn()
+            if conn:
+                with conn.cursor() as cur:
+                    cur.execute("""SELECT pattern, COUNT(*) as n, 
+                        AVG(CASE WHEN resolved AND exit_price::numeric > entry_price::numeric THEN 1.0 ELSE 0.0 END) as win_rate
+                        FROM signals WHERE resolved = true AND pattern IS NOT NULL
+                        GROUP BY pattern HAVING COUNT(*) >= 5""")
+                    _pattern_stats_cache = {r[0]: {"samples": r[1], "win_rate": round(float(r[2] or 0) * 100, 1)} for r in cur.fetchall()}
+                    _pattern_stats_ts = _t.time()
+        except Exception:
+            pass
+    if not signals:
+        return None
+    top_pattern = signals[0].get("type", "")
+    stats = _pattern_stats_cache.get(top_pattern)
+    if stats:
+        return {"pattern": top_pattern, "win_rate": stats["win_rate"], "samples": stats["samples"]}
+    return None
+
+
 # ─── Stage 5: Card Assembler ────────────────────────────────
 
 def assemble_card(token: dict, signals: list[dict], narrative: dict) -> dict:
@@ -366,6 +619,8 @@ def assemble_card(token: dict, signals: list[dict], narrative: dict) -> dict:
         "signals": [{"type": s["type"], "severity": s["severity"],
                      "direction": s["direction"], "finding": s["finding"]}
                     for s in signals[:5]],
+        "pattern_stats": _get_pattern_stats(signals),
+        "risk_breakdown": narrative.get("risk_breakdown", []),
     }
     # Enrich with SoSoValue institutional context
     sv = token.get("sosovalue", {})
@@ -527,7 +782,7 @@ def run_card_generation_cycle():
         try:
             # Stage 2: Analyze signals
             signals = analyze_signals(token)
-            risk_score = compute_risk_score(signals)
+            risk_score, risk_breakdown = compute_risk_score(signals)
 
             # Skip boring tokens (no notable signals)
             if signals and max(s["severity"] for s in signals) < 2:
@@ -540,7 +795,7 @@ def run_card_generation_cycle():
             patterns = detect_patterns(chart_prices) if chart_prices else []
 
             # Stage 3: Narrative
-            narrative = generate_narrative(token, signals, risk_score)
+            narrative = generate_narrative(token, signals, risk_score, risk_breakdown)
 
             # Stage 4: Visual (using CoinGecko logo for now)
             # Stage 5: Assemble
@@ -582,6 +837,18 @@ def run_card_generation_cycle():
 
     elapsed = time.time() - t0
     logger.info(f"Pipeline complete: {created} cards in {elapsed:.1f}s from {len(new_tokens)} candidates")
+
+    # Generate LP pool cards
+    try:
+        pool_cards = harvest_pools(3)
+        for card in pool_cards:
+            try:
+                insert_card(card)
+                logger.info(f"Pool card: {card['token_symbol']} ({card['verdict']})")
+            except Exception as e:
+                logger.warning(f"Pool card insert failed: {e}")
+    except Exception as e:
+        logger.warning(f"Pool card generation failed: {e}")
 
 
 def backfill_chart_data():
@@ -670,7 +937,8 @@ def generate_card_from_signal(signal_id: int) -> int:
 
     # Narrate: full mode (provider analysis) vs quick mode (AI)
     signals_data = analyze_signals(token)
-    narrative = generate_narrative(token, signals_data, risk_score)
+    _, risk_breakdown = compute_risk_score(signals_data)
+    narrative = generate_narrative(token, signals_data, risk_score, risk_breakdown)
     narrative["verdict"] = verdict
 
     if signal.get("analysis", "").strip():
