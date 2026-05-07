@@ -192,8 +192,11 @@ def start_scheduler():
     scheduler.add_job(refresh_sosovalue, "interval", minutes=5, id="sosovalue_cache", max_instances=1)
     from app.insight_engine import generate_and_store_insight_cards
     from app.degen_oracle import refresh_oracle
+    from app.agent_memory import resolve_predictions, ensure_table as ensure_predictions_table
+    ensure_predictions_table()
     scheduler.add_job(generate_and_store_insight_cards, "interval", minutes=30, id="insight_cards", max_instances=1)
     scheduler.add_job(refresh_oracle, "interval", minutes=30, id="oracle_refresh", max_instances=1)
+    scheduler.add_job(resolve_predictions, "interval", minutes=30, id="resolve_predictions", max_instances=1)
     scheduler.start()
     logger.info("Scheduler started: card_gen(5m) + position_monitor(5m) + expire_cards(10m) + backfill_charts(30m) + sosovalue_cache(5m) + insight_cards(30m) + oracle_refresh(30m)")
 

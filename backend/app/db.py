@@ -178,32 +178,7 @@ def init_db():
                 cur.execute(f"ALTER TABLE cards ADD COLUMN IF NOT EXISTS {col} {defn}")
             except Exception:
                 pass
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS challenges (
-                id SERIAL PRIMARY KEY,
-                type TEXT NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT DEFAULT '',
-                emoji TEXT DEFAULT '🎯',
-                options JSONB DEFAULT '[]',
-                correct_answer TEXT,
-                reward_xp INTEGER DEFAULT 100,
-                expires_at TIMESTAMPTZ NOT NULL,
-                resolved BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS challenge_entries (
-                id SERIAL PRIMARY KEY,
-                challenge_id INTEGER REFERENCES challenges(id),
-                user_address TEXT NOT NULL,
-                answer TEXT NOT NULL,
-                score INTEGER DEFAULT 0,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE(challenge_id, user_address)
-            )
-        """)
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS oracle_takes (
                 id SERIAL PRIMARY KEY,
@@ -214,7 +189,7 @@ def init_db():
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
-    logger.info("Challenges + oracle_takes tables ready")
+    logger.info("oracle_takes table ready")
 
 
 def insert_signal(signal: dict) -> int:

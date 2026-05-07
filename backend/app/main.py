@@ -796,72 +796,7 @@ async def gas_faucet(address: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─── Agent Discovery ────────────────────────────────────────
 
-@app.get("/SKILL.md", response_class=PlainTextResponse)
-async def skill_md():
-    """Agent skill description for paid trading signal detail access."""
-    return """---
-name: initia-signal-explorer
-description: Pay to access detailed AI trading signals with entry/target/stop prices, analysis, chart patterns, and on-chain proof. Free signal summaries available without payment.
-metadata:
-  version: 1
----
-
-# Initia Signal Explorer
-
-## When to use
-- User wants trading signal details (entry price, target, stop loss, analysis)
-- User asks about crypto market signals or trading opportunities
-- User wants to verify on-chain signal proof
-
-## Base URL
-Use the server URL you fetched this SKILL.md from.
-
-## Free Routes (no payment needed)
-
-### `GET /api/signals`
-List all signals with summaries. Returns: id, asset, symbol, is_bull, confidence, timeframe, timestamp, resolved.
-
-### `GET /api/signals/{id}`
-Get one signal summary by ID.
-
-### `GET /api/payment/pricing`
-Get current pricing for paid access including x402 and MPP payment info.
-
-## Paid Routes
-
-### `GET /api/signals/single/{id}` — $0.002
-Full signal detail: entry price, target price, stop loss, analysis, chart patterns, risk score, on-chain tx hash.
-
-### `GET /api/signals/premium` — $0.01
-Batch: all signals with full details. Supports `?offset=0&limit=100`.
-
-## Payment
-Paid routes return HTTP `402` with payment instructions. Two protocols accepted:
-
-### x402 (Base/USDC) — recommended
-Standard x402 flow. Agent receives 402 with payment details, signs USDC payment, retries with `PAYMENT-SIGNATURE` header.
-
-### MPP (Initia SessionVault)
-Send `X-PAYMENT-TX` header with a tx hash containing a `ServicePaid` event from the Initia SessionVault.
-
-## Recommended Flow
-1. Call `GET /api/signals` to browse available signals
-2. Pick a signal ID of interest
-3. Call `GET /api/signals/single/{id}` — receive 402 with payment details
-4. Pay via x402 or MPP
-5. Retry the request with payment proof header
-
-## Examples
-```bash
-# Free: list signals
-curl https://your-server/api/signals
-
-# Paid: get signal detail (will return 402 first)
-curl https://your-server/api/signals/single/42
-```
-"""
 
 
 # ─── Oracle Endpoints ───────────────────────────────────────
@@ -1010,30 +945,4 @@ async def share_meta(trade_id: int):
     }
 
 
-@app.get("/llms.txt", response_class=PlainTextResponse)
-async def llms_txt():
-    """Machine-readable service description for LLM agent discovery."""
-    return """# Initia Signal Explorer
-> AI trading signal service with on-chain proof. Pay per signal detail via x402 (Base/USDC) or MPP (Initia).
 
-- Skill: /SKILL.md
-- Pricing: /api/payment/pricing
-
-## Free endpoints
-- `GET /api/signals` — signal summaries (id, asset, direction, confidence)
-- `GET /api/signals/{id}` — single signal summary
-- `GET /api/health` — service health check
-
-## Paid endpoints (402 gated)
-- `GET /api/signals/single/{id}` — full signal detail ($0.002)
-- `GET /api/signals/premium` — batch full details ($0.01)
-
-## Payment protocols
-- x402: PAYMENT-SIGNATURE header (Base USDC)
-- MPP: X-PAYMENT-TX header (Initia SessionVault)
-
-## Agent flow
-1. GET /api/signals → pick signal ID
-2. GET /api/signals/single/{id} → 402 with payment info
-3. Pay via x402 or MPP → retry with payment header
-"""

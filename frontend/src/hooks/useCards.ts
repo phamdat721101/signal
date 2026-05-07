@@ -25,7 +25,6 @@ export interface Card {
   risk_level?: string;
   risk_score?: number;
   notification_hook?: string;
-  signals?: { type: string; severity: number; direction: string; finding: string }[];
   sparkline?: number[];
   patterns?: { type: string; direction: string; label: string; description: string; lesson?: string }[];
   trading_lesson?: string;
@@ -35,7 +34,6 @@ export interface Card {
   pattern_stats?: { pattern: string; win_rate: number; samples: number };
   risk_breakdown?: { factor: string; impact: string; direction: string }[];
   confluence?: { timeframes: { period: string; direction: string; strength: number }[]; confluence_score: number };
-  on_chain_signal_id?: number;
   tvl?: number;
   tvl_change_1d?: number;
   source?: string;

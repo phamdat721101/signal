@@ -794,8 +794,13 @@ def run_card_generation_cycle():
             sparkline = _build_sparkline(chart_prices) if chart_prices else []
             patterns = detect_patterns(chart_prices) if chart_prices else []
 
-            # Stage 3: Narrative
-            narrative = generate_narrative(token, signals, risk_score, risk_breakdown)
+            # Stage 3: Multi-Agent Narrative (fallback to simple narrative)
+            from app.agent_memory import get_accuracy_context
+            memory_ctx = get_accuracy_context(token["token_symbol"])
+            from app.agent_engine import run_multi_agent_analysis
+            narrative = run_multi_agent_analysis(token, signals, chart_prices, token.get("sosovalue", {}), memory_ctx)
+            if not narrative:
+                narrative = generate_narrative(token, signals, risk_score, risk_breakdown)
 
             # Stage 4: Visual (using CoinGecko logo for now)
             # Stage 5: Assemble
@@ -805,6 +810,13 @@ def run_card_generation_cycle():
             if not _passes_quality_gates(card):
                 continue
             card_id = insert_card(card)
+            # Track prediction for accuracy feedback
+            if card_id > 0:
+                try:
+                    from app.agent_memory import store_prediction
+                    store_prediction(card)
+                except Exception:
+                    pass
             if card_id > 0:
                 created += 1
                 logger.info(f"Card #{card_id}: ${token['token_symbol']} [{narrative['verdict']}] "

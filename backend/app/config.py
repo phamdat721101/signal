@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # Claude AI (Bedrock)
     aws_region: str = "us-east-1"
     aws_bedrock_model_id: str = "anthropic.claude-3-haiku-20240307-v1:0"
+    aws_bearer_token_bedrock: str = ""
 
     # SoDex DEX integration
     sodex_enabled: bool = False
