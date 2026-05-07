@@ -96,6 +96,7 @@ def init_db():
             ("on_chain_signal_id", "INTEGER DEFAULT NULL"),
             ("sparkline", "JSONB DEFAULT '[]'"),
             ("patterns", "JSONB DEFAULT '[]'"),
+            ("ohlc", "JSONB DEFAULT '[]'"),
             ("source", "TEXT DEFAULT 'ai'"),
             ("provider", "TEXT DEFAULT ''"),
             ("signal_id", "INTEGER DEFAULT NULL"),
@@ -307,8 +308,8 @@ def insert_card(card: dict) -> int:
                (token_symbol, token_name, chain, hook, roast, metrics, image_url,
                 ai_image_prompt, price, price_change_24h, volume_24h, market_cap, coingecko_id,
                 verdict, verdict_reason, risk_level, risk_score, notification_hook, signals,
-                sparkline, patterns, source, provider, signal_id, institutional_context, card_type)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                sparkline, patterns, ohlc, source, provider, signal_id, institutional_context, card_type)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                RETURNING id""",
             (card.get("token_symbol", ""), card.get("token_name", ""),
              card.get("chain", "initia"), card.get("hook", ""), card.get("roast", ""),
@@ -320,6 +321,7 @@ def insert_card(card: dict) -> int:
              card.get("risk_level", "MID"), card.get("risk_score", 50),
              card.get("notification_hook", ""), json.dumps(card.get("signals", [])),
              json.dumps(card.get("sparkline", [])), json.dumps(card.get("patterns", [])),
+             json.dumps(card.get("ohlc", [])),
              card.get("source", "ai"), card.get("provider", ""),
              card.get("signal_id"),
              json.dumps(card.get("institutional_context", [])),
@@ -528,6 +530,7 @@ def _row_to_card(row: dict) -> dict:
         "expires_at": str(row["expires_at"]) if row.get("expires_at") else None,
         "sparkline": row.get("sparkline", []) if isinstance(row.get("sparkline"), list) else json.loads(row.get("sparkline", "[]")),
         "patterns": row.get("patterns", []) if isinstance(row.get("patterns"), list) else json.loads(row.get("patterns", "[]")),
+        "ohlc": row.get("ohlc", []) if isinstance(row.get("ohlc"), list) else json.loads(row.get("ohlc", "[]")),
         "on_chain_signal_id": row.get("on_chain_signal_id"),
         "source": row.get("source", "ai"),
         "provider": row.get("provider", ""),

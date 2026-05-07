@@ -27,6 +27,11 @@ export interface Card {
   notification_hook?: string;
   sparkline?: number[];
   patterns?: { type: string; direction: string; label: string; description: string; lesson?: string }[];
+  ohlc?: number[][];
+  confidence?: number;
+  debate_summary?: string;
+  agent_reports?: { technical?: string; sentiment?: string; fundamentals?: string };
+  trade_plan?: { entry?: string; target?: string; stop?: string; position_size?: string };
   trading_lesson?: string;
   position_guide?: string;
   why_now?: string;

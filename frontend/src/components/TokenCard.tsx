@@ -14,216 +14,259 @@ function fmtPrice(p: number): string {
   return `$${p.toFixed(6)}`;
 }
 
-function getCardEmoji(verdict: string, riskLevel?: string): string {
-  const r = (riskLevel || '').toUpperCase();
-  if (verdict === 'APE') {
-    if (r === 'DEGEN' || r === 'HIGH') return '🦍🔥';
-    if (r === 'MEDIUM' || r === 'MID') return '🚀';
-    return '💎';
-  }
-  if (verdict === 'FADE') {
-    if (r === 'DEGEN' || r === 'HIGH') return '💀';
-    if (r === 'MEDIUM' || r === 'MID') return '😴';
-    return '🐌';
-  }
-  return '🤔';
+// Yu-Gi-Oh style: confidence → stars (1-8)
+function getStars(confidence?: number): number {
+  const c = confidence ?? 50;
+  if (c >= 90) return 8;
+  if (c >= 80) return 7;
+  if (c >= 70) return 6;
+  if (c >= 60) return 5;
+  if (c >= 50) return 4;
+  if (c >= 40) return 3;
+  if (c >= 30) return 2;
+  return 1;
 }
 
-function riskColor(score: number): string {
-  if (score <= 30) return '#8eff71';
-  if (score <= 60) return '#f0c040';
-  return '#ff7166';
-}
-
-const verdictStyle: Record<string, string> = {
-  APE: 'bg-[#8eff71]/15 text-[#8eff71] border-[#8eff71]/30',
-  FADE: 'bg-[#ff7166]/15 text-[#ff7166] border-[#ff7166]/30',
-  DYOR: 'bg-[#bf81ff]/15 text-[#bf81ff] border-[#bf81ff]/30',
+const verdictConfig: Record<string, { border: string; glow: string; icon: string; label: string }> = {
+  APE: { border: 'from-[#8eff71] via-[#4ade80] to-[#22c55e]', glow: 'shadow-[0_0_20px_rgba(142,255,113,0.3)]', icon: '🔥', label: 'FIRE' },
+  FADE: { border: 'from-[#ff7166] via-[#ef4444] to-[#dc2626]', glow: 'shadow-[0_0_20px_rgba(255,113,102,0.3)]', icon: '💀', label: 'DARK' },
+  DYOR: { border: 'from-[#bf81ff] via-[#a855f7] to-[#7c3aed]', glow: 'shadow-[0_0_20px_rgba(191,129,255,0.3)]', icon: '🔮', label: 'SPELL' },
 };
 
-function Sparkline({ data, color }: { data: number[]; color: string }) {
-  if (data.length < 2) return null;
-  const min = Math.min(...data), max = Math.max(...data), range = max - min || 1;
-  const w = 280, h = 40;
-  const points = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * h}`).join(' ');
-  const last = data[data.length - 1];
-  const entryY = h - ((last - min) / range) * h;
-  const targetY = h - ((last * 1.015 - min) / range) * h;
-  const stopY = h - ((last * 0.985 - min) / range) * h;
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-10">
-      <rect x="0" y={Math.min(targetY, entryY)} width={w} height={Math.abs(entryY - targetY)} fill="#8eff71" opacity="0.08" />
-      <rect x="0" y={Math.min(entryY, stopY)} width={w} height={Math.abs(stopY - entryY)} fill="#ff7166" opacity="0.08" />
-      <line x1="0" y1={entryY} x2={w} y2={entryY} stroke="#494847" strokeWidth="0.5" strokeDasharray="4 2" />
-      <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" />
-    </svg>
-  );
-}
+// SVG Candlestick Chart
+function CandlestickChart({ ohlc, sparkline, price, verdict }: { ohlc?: number[][]; sparkline?: number[]; price: number; verdict: string }) {
+  const color = verdict === 'APE' ? '#8eff71' : verdict === 'FADE' ? '#ff7166' : '#bf81ff';
 
-const patternColor: Record<string, string> = {
-  bullish: 'bg-[#8eff71]/10 text-[#8eff71] border-[#8eff71]/20',
-  bearish: 'bg-[#ff7166]/10 text-[#ff7166] border-[#ff7166]/20',
-  neutral: 'bg-[#bf81ff]/10 text-[#bf81ff] border-[#bf81ff]/20',
-};
+  // Use OHLC if available, otherwise enhanced sparkline
+  if (ohlc && ohlc.length >= 4) {
+    const w = 320, h = 120, pad = 10;
+    const highs = ohlc.map(c => c[2]);
+    const lows = ohlc.map(c => c[3]);
+    const min = Math.min(...lows), max = Math.max(...highs);
+    const range = max - min || 1;
+    const barW = Math.max(4, (w - pad * 2) / ohlc.length - 2);
+
+    const toY = (v: number) => pad + (1 - (v - min) / range) * (h - pad * 2);
+    const entryY = toY(price);
+    const targetY = toY(price * 1.015);
+    const stopY = toY(price * 0.985);
+
+    return (
+      <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-32 rounded-lg">
+        {/* Target/Stop zones */}
+        <rect x={0} y={Math.min(targetY, entryY)} width={w} height={Math.abs(entryY - targetY)} fill="#8eff71" opacity="0.06" />
+        <rect x={0} y={Math.min(entryY, stopY)} width={w} height={Math.abs(stopY - entryY)} fill="#ff7166" opacity="0.06" />
+        {/* Entry line */}
+        <line x1={0} y1={entryY} x2={w} y2={entryY} stroke="#666" strokeWidth="0.5" strokeDasharray="4 2" />
+        <text x={w - 4} y={entryY - 3} fill="#888" fontSize="6" textAnchor="end">ENTRY</text>
+        {/* Candles */}
+        {ohlc.map((candle, i) => {
+          const [, open, high, low, close] = candle;
+          const x = pad + i * ((w - pad * 2) / ohlc.length);
+          const bullish = close >= open;
+          const bodyTop = toY(Math.max(open, close));
+          const bodyBot = toY(Math.min(open, close));
+          const bodyH = Math.max(1, bodyBot - bodyTop);
+          const candleColor = bullish ? '#8eff71' : '#ff7166';
+          return (
+            <g key={i}>
+              <line x1={x + barW / 2} y1={toY(high)} x2={x + barW / 2} y2={toY(low)} stroke={candleColor} strokeWidth="1" />
+              <rect x={x} y={bodyTop} width={barW} height={bodyH} fill={bullish ? candleColor : 'none'} stroke={candleColor} strokeWidth="0.5" rx="0.5" />
+            </g>
+          );
+        })}
+      </svg>
+    );
+  }
+
+  // Fallback: enhanced sparkline
+  if (sparkline && sparkline.length > 2) {
+    const w = 320, h = 120, pad = 10;
+    const min = Math.min(...sparkline), max = Math.max(...sparkline), range = max - min || 1;
+    const toY = (v: number) => pad + (1 - (v - min) / range) * (h - pad * 2);
+    const points = sparkline.map((v, i) => `${pad + (i / (sparkline.length - 1)) * (w - pad * 2)},${toY(v)}`).join(' ');
+    const entryY = toY(price);
+    const gradId = `grad-${Math.random().toString(36).slice(2)}`;
+
+    return (
+      <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-32 rounded-lg">
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.3" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <polygon points={`${pad},${h - pad} ${points} ${w - pad},${h - pad}`} fill={`url(#${gradId})`} />
+        <line x1={0} y1={entryY} x2={w} y2={entryY} stroke="#666" strokeWidth="0.5" strokeDasharray="4 2" />
+        <polyline points={points} fill="none" stroke={color} strokeWidth="2" />
+      </svg>
+    );
+  }
+
+  return <div className="w-full h-32 bg-[#1a1a1a] rounded-lg flex items-center justify-center text-[#494847] text-xs">No chart data</div>;
+}
 
 export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: () => void; onFade: () => void }) {
-  const [imgError, setImgError] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const verdict = card.verdict || 'DYOR';
+  const vCfg = verdictConfig[verdict] || verdictConfig.DYOR;
+  const stars = getStars(card.confidence ?? card.risk_score);
+  const atk = card.confidence ?? Math.max(10, 100 - (card.risk_score ?? 50));
+  const def = 100 - (card.risk_score ?? 50);
   const pctColor = card.price_change_24h >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]';
-  const emoji = card.card_type === 'pool' ? '🌊💰' : getCardEmoji(verdict, card.risk_level);
-  const score = card.risk_score ?? 50;
 
   return (
-    <div className="w-full max-w-md mx-auto bg-[#131313] rounded-xl overflow-hidden flex flex-col border border-[#494847]/10 select-none">
-      {/* Header: emoji + token + verdict + price */}
-      <div className="flex items-center justify-between p-4 pb-2">
-        <div className="flex items-center gap-3">
-          <span className="text-4xl leading-none">{emoji}</span>
-          <div className="w-9 h-9 rounded-full bg-[#262626] overflow-hidden flex-shrink-0">
-            {card.image_url && !imgError ? (
-              <img src={card.image_url} alt={card.token_symbol} className="w-full h-full object-cover" onError={() => setImgError(true)} />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center font-headline font-bold text-xs text-[#adaaaa]">{card.token_symbol.slice(0, 2)}</div>
-            )}
-          </div>
-          <div>
+    <div className={`w-full max-w-sm mx-auto rounded-2xl overflow-hidden select-none ${vCfg.glow}`}>
+      {/* Holographic gradient border */}
+      <div className={`p-[2px] rounded-2xl bg-gradient-to-br ${vCfg.border}`}>
+        <div className="bg-[#0e0e0e] rounded-2xl overflow-hidden">
+
+          {/* === HEADER === */}
+          <div className="flex items-center justify-between px-3 pt-3 pb-1">
+            {/* Attribute icon */}
             <div className="flex items-center gap-2">
-              <span className="font-headline font-bold text-lg text-white">${card.token_symbol}</span>
-              <span className={`text-[9px] font-label font-bold px-2 py-0.5 rounded border ${verdictStyle[verdict] || verdictStyle.DYOR}`}>{verdict}</span>
-              {(card as any).provider && <span className="text-[8px] bg-[#bf81ff]/10 text-[#bf81ff] px-1.5 py-0.5 rounded border border-[#bf81ff]/20">{(card as any).provider}</span>}
-              {(card as any).execution_type === 'sodex' && <span className="text-[8px] bg-[#8eff71]/10 text-[#8eff71] px-1.5 py-0.5 rounded">LIVE 🟢</span>}
+              <span className="text-xl">{vCfg.icon}</span>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-white text-sm">${card.token_symbol}</span>
+                  <span className="text-[9px] text-[#adaaaa]">{card.token_name}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="font-bold text-white text-sm">{fmtPrice(card.price)}</span>
+                  <span className={`text-[10px] ${pctColor}`}>{card.price_change_24h >= 0 ? '+' : ''}{card.price_change_24h.toFixed(1)}%</span>
+                </div>
+              </div>
             </div>
-            <div className="font-label text-[10px] text-[#adaaaa]">{card.token_name}</div>
-          </div>
-        </div>
-        <div className="text-right">
-          <div className="font-headline font-bold text-white">{fmtPrice(card.price)}</div>
-          <div className={`font-label text-xs ${pctColor}`}>{card.price_change_24h >= 0 ? '+' : ''}{card.price_change_24h.toFixed(1)}%</div>
-        </div>
-      </div>
-
-      {/* Hook as HERO — the main attraction */}
-      <div className="px-4 pt-1 pb-1">
-        <p className="text-base font-bold text-white leading-snug">{card.hook}</p>
-        {card.roast && <p className="text-sm italic text-[#bf81ff]/80 mt-1">{card.roast}</p>}
-      </div>
-
-      {/* Sparkline + Patterns */}
-      {card.sparkline && card.sparkline.length > 0 && (
-        <div className="px-4 pb-1">
-          <Sparkline data={card.sparkline} color={card.price_change_24h >= 0 ? '#8eff71' : '#ff7166'} />
-          {card.patterns && card.patterns.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1">
-              {card.patterns.slice(0, 2).map((p: any, i: number) => (
-                <span key={i} className={`text-[9px] px-2 py-0.5 rounded border ${patternColor[p.direction] || patternColor.neutral}`}>
-                  {p.label}
-                </span>
+            {/* Level stars */}
+            <div className="flex items-center gap-0.5">
+              {Array.from({ length: stars }).map((_, i) => (
+                <span key={i} className="text-[10px] text-yellow-400">★</span>
               ))}
             </div>
-          )}
-        </div>
-      )}
-
-      {/* Risk meter */}
-      <div className="px-4 pb-2">
-        <div className="flex items-center gap-2">
-          <span className="font-label text-[9px] text-[#494847] uppercase">Risk</span>
-          <div className="flex-1 h-1.5 bg-[#262626] rounded-full overflow-hidden">
-            <div className="h-full rounded-full transition-all" style={{ width: `${score}%`, backgroundColor: riskColor(score) }} />
           </div>
-          <span className="font-label text-[9px] uppercase" style={{ color: riskColor(score) }}>{card.risk_level || 'MID'}</span>
-        </div>
-      </div>
 
-      {/* Compact metrics row */}
-      <div className="px-4 pb-2 flex gap-2">
-        <div className="flex-1 bg-[#262626] px-3 py-2 rounded-lg">
-          <div className="font-label text-[8px] text-[#adaaaa] uppercase">MCap</div>
-          <div className="font-headline font-bold text-sm text-white">{fmt(card.market_cap)}</div>
-        </div>
-        <div className="flex-1 bg-[#262626] px-3 py-2 rounded-lg">
-          <div className="font-label text-[8px] text-[#adaaaa] uppercase">Vol 24H</div>
-          <div className="font-headline font-bold text-sm text-white">{fmt(card.volume_24h)}</div>
-        </div>
-        {card.metrics.length > 0 && (
-          <div className="flex-1 bg-[#bf81ff]/10 px-3 py-2 rounded-lg border border-[#bf81ff]/20">
-            <div className="font-label text-[8px] text-[#bf81ff] uppercase">AI</div>
-            <div className="font-headline font-bold text-xs text-white truncate">
-              {typeof card.metrics[0] === 'string' ? card.metrics[0] : `${card.metrics[0].emoji} ${card.metrics[0].value}`}
+          {/* === CARD ART: Candlestick Chart === */}
+          <div className="px-2 cursor-pointer" onClick={() => setExpanded(!expanded)}>
+            <div className="bg-[#0a0a0a] rounded-xl border border-[#262626] overflow-hidden">
+              <CandlestickChart ohlc={card.ohlc} sparkline={card.sparkline} price={card.price} verdict={verdict} />
+              {/* Pattern badges overlaid */}
+              {card.patterns && card.patterns.length > 0 && (
+                <div className="flex gap-1 px-2 pb-1.5 -mt-1">
+                  {card.patterns.slice(0, 3).map((p: any, i: number) => (
+                    <span key={i} className={`text-[8px] px-1.5 py-0.5 rounded ${p.direction === 'bullish' ? 'bg-[#8eff71]/10 text-[#8eff71]' : p.direction === 'bearish' ? 'bg-[#ff7166]/10 text-[#ff7166]' : 'bg-[#bf81ff]/10 text-[#bf81ff]'}`}>
+                      {p.label}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-        )}
-      </div>
 
-      {/* Institutional context */}
-      {card.institutional_context && card.institutional_context.length > 0 && (
-        <div className="px-4 pb-2">
-          <div className="mt-3 pt-3 border-t border-gray-800/50">
-            <p className="text-[10px] text-[#bf81ff] uppercase tracking-wider mb-1.5 font-medium">📊 Smart Money Intel</p>
-            {card.institutional_context.map((m, i) => (
-              <div key={i} className="flex justify-between items-center text-xs py-0.5">
-                <span className="text-gray-400">{m.emoji} {m.label}</span>
-                <span className={m.sentiment === 'bullish' ? 'text-[#8eff71]' : m.sentiment === 'bearish' ? 'text-[#ff7166]' : 'text-white'}>{m.value}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Why verdict */}
-      {card.verdict_reason && (
-        <div className="px-4 pb-2">
-          <div className="bg-[#262626] p-2 rounded-lg">
-            <div className="font-label text-[9px] text-[#bf81ff] uppercase tracking-widest">Why {verdict}</div>
-            <div className="text-[#adaaaa] text-xs mt-0.5">{card.verdict_reason}</div>
-          </div>
-        </div>
-      )}
-
-      {/* Trading Education */}
-      {(card.trading_lesson || card.why_now || card.position_guide) && (
-        <div className="px-4 pb-2 space-y-1.5">
-          {card.why_now && (
-            <div className="bg-[#1a1a2e] border border-[#bf81ff]/20 p-2 rounded-lg">
-              <span className="font-label text-[8px] text-[#bf81ff] uppercase">⚡ Why Now</span>
-              <p className="text-[#e0e0e0] text-[11px] mt-0.5">{card.why_now}</p>
+          {/* === STATS BAR (ATK/DEF style) === */}
+          <div className="flex items-center justify-between px-3 py-2">
+            <div className="flex items-center gap-1">
+              <span className="text-[9px] font-bold text-[#8eff71]">ATK</span>
+              <span className="text-xs font-bold text-white">{atk}%</span>
             </div>
-          )}
-          {card.trading_lesson && (
-            <div className="bg-[#0e1a0e] border border-[#8eff71]/20 p-2 rounded-lg">
-              <span className="font-label text-[8px] text-[#8eff71] uppercase">💡 Lesson</span>
-              <p className="text-[#e0e0e0] text-[11px] mt-0.5">{card.trading_lesson}</p>
+            <div className="text-[9px] text-[#494847] uppercase tracking-wider">{card.card_type === 'pool' ? '🌊 POOL' : verdict}</div>
+            <div className="flex items-center gap-1">
+              <span className="text-[9px] font-bold text-[#60a5fa]">DEF</span>
+              <span className="text-xs font-bold text-white">{def}%</span>
             </div>
-          )}
-          <div className="flex gap-1.5">
-            {card.position_guide && (
-              <div className="flex-1 bg-[#262626] p-2 rounded-lg">
-                <div className="font-label text-[8px] text-[#adaaaa] uppercase">📐 Size</div>
-                <div className="text-[10px] text-white">{card.position_guide}</div>
+          </div>
+
+          {/* === FLAVOR TEXT (hook) === */}
+          <div className="px-3 pb-2">
+            <p className="text-xs text-[#e0e0e0] italic leading-snug">{card.hook}</p>
+          </div>
+
+          {/* === EXPANDABLE ANALYSIS === */}
+          <div className={`overflow-hidden transition-all duration-300 ${expanded ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'}`}>
+            <div className="px-3 pb-3 space-y-2 border-t border-[#262626] pt-2">
+              {/* Verdict reason */}
+              {card.verdict_reason && (
+                <div className="bg-[#1a1a1a] p-2 rounded-lg">
+                  <div className="text-[8px] text-[#bf81ff] uppercase font-bold mb-0.5">Analysis</div>
+                  <p className="text-[11px] text-[#ccc]">{card.verdict_reason}</p>
+                  {card.roast && <p className="text-[10px] text-[#bf81ff]/70 italic mt-1">{card.roast}</p>}
+                </div>
+              )}
+
+              {/* AI Prediction / Trade Plan */}
+              {card.trade_plan && (
+                <div className="bg-[#0e1a0e] border border-[#8eff71]/20 p-2 rounded-lg">
+                  <div className="text-[8px] text-[#8eff71] uppercase font-bold mb-1">🎯 AI Prediction</div>
+                  <div className="grid grid-cols-2 gap-1 text-[10px]">
+                    {card.trade_plan.entry && <div><span className="text-[#888]">Entry:</span> <span className="text-white">{card.trade_plan.entry}</span></div>}
+                    {card.trade_plan.target && <div><span className="text-[#888]">Target:</span> <span className="text-[#8eff71]">{card.trade_plan.target}</span></div>}
+                    {card.trade_plan.stop && <div><span className="text-[#888]">Stop:</span> <span className="text-[#ff7166]">{card.trade_plan.stop}</span></div>}
+                    {card.trade_plan.position_size && <div><span className="text-[#888]">Size:</span> <span className="text-white">{card.trade_plan.position_size}</span></div>}
+                  </div>
+                </div>
+              )}
+
+              {/* Why Now */}
+              {card.why_now && (
+                <div className="bg-[#1a1a2e] border border-[#bf81ff]/20 p-2 rounded-lg">
+                  <div className="text-[8px] text-[#bf81ff] uppercase font-bold">⚡ Why Now</div>
+                  <p className="text-[10px] text-[#ccc] mt-0.5">{card.why_now}</p>
+                </div>
+              )}
+
+              {/* Agent Reports */}
+              {card.agent_reports && (
+                <div className="space-y-1">
+                  <div className="text-[8px] text-[#adaaaa] uppercase font-bold">🤖 Agent Reports</div>
+                  {card.agent_reports.technical && <p className="text-[9px] text-[#8eff71]/80 bg-[#0e1a0e] p-1.5 rounded">📊 {card.agent_reports.technical.slice(0, 120)}</p>}
+                  {card.agent_reports.sentiment && <p className="text-[9px] text-[#bf81ff]/80 bg-[#1a1a2e] p-1.5 rounded">💬 {card.agent_reports.sentiment.slice(0, 120)}</p>}
+                  {card.agent_reports.fundamentals && <p className="text-[9px] text-[#60a5fa]/80 bg-[#0e1a2e] p-1.5 rounded">📈 {card.agent_reports.fundamentals.slice(0, 120)}</p>}
+                </div>
+              )}
+
+              {/* Debate summary */}
+              {card.debate_summary && (
+                <p className="text-[9px] text-[#888] italic">⚖️ {card.debate_summary}</p>
+              )}
+
+              {/* Metrics row */}
+              <div className="flex gap-1.5">
+                <div className="flex-1 bg-[#1a1a1a] p-1.5 rounded text-center">
+                  <div className="text-[7px] text-[#888] uppercase">MCap</div>
+                  <div className="text-[10px] text-white font-bold">{fmt(card.market_cap)}</div>
+                </div>
+                <div className="flex-1 bg-[#1a1a1a] p-1.5 rounded text-center">
+                  <div className="text-[7px] text-[#888] uppercase">Vol</div>
+                  <div className="text-[10px] text-white font-bold">{fmt(card.volume_24h)}</div>
+                </div>
+                {card.position_guide && (
+                  <div className="flex-1 bg-[#1a1a1a] p-1.5 rounded text-center">
+                    <div className="text-[7px] text-[#888] uppercase">Size</div>
+                    <div className="text-[9px] text-white">{card.position_guide.slice(0, 20)}</div>
+                  </div>
+                )}
               </div>
-            )}
-            {card.pattern_stats && (
-              <div className="flex-1 bg-[#262626] p-2 rounded-lg">
-                <div className="font-label text-[8px] text-[#adaaaa] uppercase">📊 History</div>
-                <div className="text-[10px] text-[#8eff71]">{card.pattern_stats.win_rate}% win ({card.pattern_stats.samples} trades)</div>
-              </div>
-            )}
+            </div>
+          </div>
+
+          {/* Expand hint */}
+          <div className="text-center pb-1">
+            <button onClick={() => setExpanded(!expanded)} className="text-[9px] text-[#494847] hover:text-[#adaaaa] transition-colors">
+              {expanded ? '▲ collapse' : '▼ tap to analyze'}
+            </button>
+          </div>
+
+          {/* === ACTION BUTTONS === */}
+          <div className="flex gap-2 px-3 pb-3">
+            <button onClick={onFade}
+              className="flex-1 bg-[#1a1a1a] border border-[#ff7166]/40 text-[#ff7166] font-bold py-3 rounded-xl flex items-center justify-center gap-1.5 active:scale-95 transition-transform text-sm">
+              💀 FADE
+            </button>
+            <button onClick={onApe}
+              className="flex-1 bg-gradient-to-r from-[#8eff71] to-[#4ade80] text-[#0b5800] font-black py-3 rounded-xl flex items-center justify-center gap-1.5 active:scale-95 transition-transform text-sm shadow-[0_0_15px_rgba(142,255,113,0.2)]">
+              🔥 APE
+            </button>
           </div>
         </div>
-      )}
-
-      {/* Action buttons */}
-      <div className="flex gap-3 px-4 pb-4">
-        <button onClick={onFade}
-          className="flex-1 bg-[#262626] border border-[#ff7166]/40 text-[#ff7166] font-headline font-bold py-3.5 rounded-lg flex items-center justify-center gap-2 active:scale-95 transition-transform">
-          <span className="material-symbols-outlined">close</span>
-          FADE
-        </button>
-        <button onClick={onApe}
-          className="flex-1 ape-gradient text-[#0b5800] font-headline font-black py-3.5 rounded-lg flex items-center justify-center gap-2 glow-primary active:scale-95 transition-transform">
-          <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>bolt</span>
-          APE
-        </button>
       </div>
     </div>
   );

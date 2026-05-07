@@ -659,6 +659,20 @@ def fetch_chart_data(coingecko_id: str) -> list[float]:
         return []
 
 
+def fetch_ohlc_data(coingecko_id: str) -> list:
+    """Fetch OHLC candles (4h) from CoinGecko."""
+    try:
+        resp = httpx.get(
+            f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/ohlc",
+            params={"vs_currency": "usd", "days": 1}, timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()  # [[timestamp, open, high, low, close], ...]
+    except Exception as e:
+        logger.warning(f"OHLC fetch failed for {coingecko_id}: {e}")
+        return []
+
+
 def _ema(prices: list[float], period: int) -> list[float]:
     k = 2 / (period + 1)
     ema = [prices[0]]
@@ -807,6 +821,7 @@ def run_card_generation_cycle():
             card = assemble_card(token, signals, narrative)
             card["sparkline"] = sparkline
             card["patterns"] = patterns
+            card["ohlc"] = fetch_ohlc_data(token["coingecko_id"]) if token.get("coingecko_id") else []
             if not _passes_quality_gates(card):
                 continue
             card_id = insert_card(card)

@@ -1,4 +1,4 @@
-const CACHE = 'ape-v1';
+const CACHE = 'ape-v2';
 const STATIC = ['/', '/manifest.json', '/favicon.svg'];
 
 self.addEventListener('install', e => {
