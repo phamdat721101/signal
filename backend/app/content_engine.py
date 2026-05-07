@@ -177,7 +177,7 @@ def harvest_tokens(limit: int = 10) -> list[dict]:
         score = 0
         vol_mcap = t["volume_24h"] / max(t["market_cap"], 1)
         if vol_mcap > 0.3: score += 30
-        if abs(t.get("price_change_1h", 0)) > 5: score += 25
+        if abs(t.get("price_change_1h") or 0) > 5: score += 25
         if abs(t["price_change_24h"]) > 10: score += 20
         if t["circulating_supply"] > 0 and t["total_supply"] > 0 and t["circulating_supply"] / t["total_supply"] < 0.5: score += 15
         t["interest_score"] = score
@@ -193,9 +193,9 @@ def harvest_tokens(limit: int = 10) -> list[dict]:
         for t in tokens:
             proto = protocols.get(t["token_symbol"])
             if proto:
-                t["tvl"] = proto.get("tvl", 0)
-                t["tvl_change_1d"] = proto.get("change_1d", 0)
-                t["mcap_tvl_ratio"] = round(t["market_cap"] / max(proto.get("tvl", 1), 1), 2)
+                t["tvl"] = proto.get("tvl") or 0
+                t["tvl_change_1d"] = proto.get("change_1d") or 0
+                t["mcap_tvl_ratio"] = round(t["market_cap"] / max(proto.get("tvl") or 1, 1), 2)
     return tokens
 
 
@@ -433,7 +433,7 @@ def _generate_why_now(token: dict, signals: list) -> str:
     vol_mcap = token['volume_24h'] / max(token['market_cap'], 1)
     if vol_mcap > 0.3:
         return f"${sym} volume is {vol_mcap:.1f}x market cap — unusual accumulation/distribution happening now"
-    if abs(token.get('price_change_1h', 0)) > 5:
+    if abs(token.get('price_change_1h') or 0) > 5:
         return f"${sym} moved {token['price_change_1h']:+.1f}% in 1 hour — momentum event in progress"
     if abs(pct) > 10:
         return f"${sym} {pct:+.1f}% in 24h — strong directional move with follow-through potential"
