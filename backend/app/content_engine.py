@@ -199,9 +199,9 @@ def harvest_tokens(limit: int = 10) -> list[dict]:
     # Per-token SosoValue enrichment for top candidates
     from app.sosovalue_client import get_currency_snapshots_batch, get_analysis, _is_enabled, _rate_limit_remaining
     if _is_enabled():
-        top_ids = [t["coingecko_id"] for t in tokens[:10] if t.get("coingecko_id")]
+        top_ids = [t["coingecko_id"] for t in tokens[:5] if t.get("coingecko_id")]
         snapshots = get_currency_snapshots_batch(top_ids)
-        for t in tokens[:10]:
+        for t in tokens[:5]:
             cg_id = t.get("coingecko_id", "")
             if cg_id in snapshots:
                 t["sv_snapshot"] = snapshots[cg_id]

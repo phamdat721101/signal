@@ -166,6 +166,7 @@ function SwipeFeedback({ type }: { type: 'ape' | 'fade' }) {
 /* ── Main Feed ── */
 export default function Feed() {
   const [showOnboarding, setShowOnboarding] = useState(!localStorage.getItem('kinetic_onboarded'));
+  const [showQuickOnboarding, setShowQuickOnboarding] = useState(() => !localStorage.getItem('onboarded'));
   const [index, setIndex] = useState(0);
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -337,6 +338,17 @@ export default function Feed() {
 
   return (
     <div className="flex flex-col items-center justify-center h-full p-4">
+      {showQuickOnboarding && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6" onClick={() => { localStorage.setItem('onboarded', 'true'); setShowQuickOnboarding(false); }}>
+          <div className="bg-[#131313] border border-[#bf81ff]/30 rounded-2xl p-6 max-w-sm text-center space-y-3" onClick={e => e.stopPropagation()}>
+            <div className="text-4xl">🦍</div>
+            <h2 className="text-xl font-bold text-white">Ape or Fade?</h2>
+            <p className="text-sm text-[#adaaaa]"><span className="text-[#8eff71] font-bold">APE</span> = Going up. Swipe right.<br/><span className="text-[#ff7166] font-bold">FADE</span> = Going down. Swipe left.</p>
+            <p className="text-xs text-[#494847]">Every prediction is tracked on-chain.</p>
+            <button onClick={() => { localStorage.setItem('onboarded', 'true'); setShowQuickOnboarding(false); }} className="mt-2 ape-gradient px-6 py-2 rounded-lg text-[#0b5800] font-bold text-sm">Let's Go 🚀</button>
+          </div>
+        </div>
+      )}
       <OracleWidget />
       {showConviction && pendingCard && (
         <ConvictionOverlay card={pendingCard} onConfirm={confirmConviction} onCancel={() => { setShowConviction(false); setPendingCard(null); }} />

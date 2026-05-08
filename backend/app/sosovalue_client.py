@@ -5,6 +5,7 @@ log = logging.getLogger(__name__)
 _BASE = "https://openapi.sosovalue.com/openapi/v1"
 _cache: dict[str, tuple[float, any]] = {}
 _req_timestamps: list[float] = []
+_analysis_404_cache: set = set()
 
 
 def _rate_limit_remaining() -> int:
@@ -136,7 +137,12 @@ def get_currency_snapshot(currency_id: str) -> dict | None:
 def get_analysis(chart_name: str) -> dict | None:
     if not _is_enabled():
         return None
-    return _get(f"/analyses/{chart_name}", cache_key=f"analysis_{chart_name}", ttl=300)
+    if chart_name in _analysis_404_cache:
+        return None
+    result = _get(f"/analyses/{chart_name}", cache_key=f"analysis_{chart_name}", ttl=300)
+    if result is None:
+        _analysis_404_cache.add(chart_name)
+    return result
 
 
 def get_currency_snapshots_batch(ids: list[str], max_n: int = 10) -> dict[str, dict]:

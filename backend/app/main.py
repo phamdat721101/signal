@@ -812,6 +812,71 @@ def get_oracle_takes():
 
 
 
+# ─── Agent-Optimized Endpoints ────────────────────────────────
+@app.get("/api/agent/signals/active")
+async def agent_signals_active(limit: int = Query(default=10, le=50)):
+    """Machine-optimized active trading signals for AI agents."""
+    from app.db import get_cards
+    cards, _ = get_cards(0, limit)
+    signals = []
+    for c in cards:
+        if c.get("verdict") not in ("APE", "FADE"):
+            continue
+        entry = c.get("price", 0)
+        if entry <= 0:
+            continue
+        is_bull = c["verdict"] == "APE"
+        signals.append({
+            "id": c["id"], "token": c["token_symbol"], "action": c["verdict"],
+            "confidence": max(10, 100 - (c.get("risk_score") or 50)),
+            "entry": round(entry, 6),
+            "target": round(entry * (1.015 if is_bull else 0.985), 6),
+            "stop": round(entry * (0.985 if is_bull else 1.015), 6),
+            "risk_score": c.get("risk_score", 50),
+            "reasoning": c.get("verdict_reason", ""),
+            "signals": c.get("signals", [])[:3],
+            "created_at": c.get("created_at", ""),
+            "source": c.get("source", "ai"),
+        })
+    return {"signals": signals, "total": len(signals), "format": "agent-v1"}
+
+
+@app.get("/api/agent/accuracy")
+async def agent_accuracy():
+    """Historical accuracy stats for agent decision-making."""
+    from app.db import _get_conn
+    conn = _get_conn()
+    if not conn:
+        return {"overall": {"total_trades": 0, "wins": 0, "win_rate": 0}, "per_token": {}}
+    from psycopg2.extras import RealDictCursor
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT COUNT(*) as total, SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END) as wins FROM trades WHERE resolved = true")
+        overall = cur.fetchone()
+        cur.execute("""
+            SELECT token_symbol, COUNT(*) as total,
+                SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END) as wins,
+                ROUND(AVG(pnl_pct)::numeric, 2) as avg_pnl_pct
+            FROM trades WHERE resolved = true
+            GROUP BY token_symbol HAVING COUNT(*) >= 3
+            ORDER BY COUNT(*) DESC LIMIT 20
+        """)
+        rows = cur.fetchall()
+    per_token = {}
+    for r in rows:
+        per_token[r["token_symbol"]] = {
+            "total_trades": r["total"], "wins": r["wins"],
+            "win_rate": round(r["wins"] / r["total"] * 100, 1) if r["total"] > 0 else 0,
+            "avg_pnl_pct": float(r["avg_pnl_pct"] or 0),
+        }
+    return {
+        "overall": {
+            "total_trades": overall["total"] or 0, "wins": overall["wins"] or 0,
+            "win_rate": round((overall["wins"] or 0) / max(overall["total"] or 1, 1) * 100, 1),
+        },
+        "per_token": per_token,
+    }
+
+
 # ─── Share Endpoint ─────────────────────────────────────────
 @app.post("/api/share/generate")
 def generate_share(body: dict):
@@ -946,3 +1011,28 @@ async def share_meta(trade_id: int):
 
 
 
+
+# ─── SKILL.md (Agent Discovery) ─────────────────────────────
+
+@app.get("/SKILL.md")
+async def skill_md():
+    return PlainTextResponse("""# Initia Signal — Ape or Fade
+
+AI-powered on-chain trading signal service on Initia EVM appchain.
+
+## Agent-Optimized Endpoints (Free — no payment needed)
+
+### `GET /api/agent/signals/active`
+Structured trading signals for AI agent consumption. Returns entry/target/stop prices, confidence, reasoning.
+Query: ?limit=10 (max 50)
+Returns: {signals: [{id, token, action, confidence, entry, target, stop, reasoning, risk_score, source}], total, format}
+
+### `GET /api/agent/accuracy`
+Historical accuracy statistics per token and overall win rate.
+Returns: {overall: {total_trades, wins, win_rate}, per_token: {SYMBOL: {total_trades, wins, win_rate, avg_pnl_pct}}}
+
+## Payment
+
+Premium endpoints require an active SessionVault session or x402 payment.
+See GET /api/payment/pricing for details.
+""")

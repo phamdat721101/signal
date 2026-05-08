@@ -238,6 +238,24 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
                 <p className="text-[9px] text-[#888] italic">⚖️ {card.debate_summary}</p>
               )}
 
+              {card.institutional_context && card.institutional_context.length > 0 && (
+                <div className="bg-[#0e1a1a] border border-[#8eff71]/20 p-2 rounded-lg">
+                  <div className="text-[8px] text-[#8eff71] uppercase font-bold mb-1">🏦 Smart Money Intel</div>
+                  <div className="space-y-1">
+                    {card.institutional_context.map((item: any, i: number) => (
+                      <div key={i} className="flex items-center gap-1.5 text-[10px]">
+                        <span>{item.emoji}</span>
+                        <span className="text-[#888]">{item.label}:</span>
+                        <span className="text-white">{item.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="px-3 pb-1">
+                    <a href="https://sosovalue.com" target="_blank" rel="noopener noreferrer" className="text-[7px] text-[#494847] hover:text-[#bf81ff] transition-colors">Powered by SosoValue</a>
+                  </div>
+                </div>
+              )}
+
               {card.research_summary?.summary && (
                 <div className="bg-[#0e0e1a] border border-[#4a3aed]/20 p-2 rounded-lg">
                   <div className="text-[8px] text-[#bf81ff] uppercase font-bold mb-1">🔬 AI Research</div>
@@ -249,6 +267,7 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
                       ))}
                     </div>
                   )}
+                  <a href="https://sosovalue.com/research" target="_blank" rel="noopener noreferrer" className="text-[7px] text-[#494847] hover:text-[#bf81ff] mt-1 block">Full analysis on SosoValue →</a>
                 </div>
               )}
 
