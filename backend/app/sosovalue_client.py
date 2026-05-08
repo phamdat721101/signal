@@ -4,6 +4,13 @@ from app.config import get_settings
 log = logging.getLogger(__name__)
 _BASE = "https://openapi.sosovalue.com/openapi/v1"
 _cache: dict[str, tuple[float, any]] = {}
+_req_timestamps: list[float] = []
+
+
+def _rate_limit_remaining() -> int:
+    now = time.time()
+    _req_timestamps[:] = [t for t in _req_timestamps if now - t < 60]
+    return max(0, 18 - len(_req_timestamps))
 
 
 def _is_enabled() -> bool:
@@ -15,6 +22,7 @@ def _get(path: str, params: dict | None = None, cache_key: str = "", ttl: int = 
     if cache_key and cache_key in _cache and now - _cache[cache_key][0] < ttl:
         return _cache[cache_key][1]
     try:
+        _req_timestamps.append(time.time())
         r = httpx.get(f"{_BASE}{path}", params=params, headers={"x-soso-api-key": get_settings().sosovalue_api_key}, timeout=10)
         body = r.json()
         if body.get("code") != 0:
@@ -47,7 +55,7 @@ def get_etf_flows() -> dict:
 def get_hot_news(limit: int = 5) -> list:
     data = _get("/news/hot", params={"page_size": limit}, cache_key="hot_news", ttl=300)
     items = data.get("list", []) if isinstance(data, dict) else data if isinstance(data, list) else []
-    return [{"title": item.get("title", "")} for item in items[:limit]]
+    return [{"title": item.get("title", ""), "image_url": item.get("coverImage", "") or item.get("thumbnail", "") or item.get("image", "")} for item in items[:limit]]
 
 
 def get_macro_events() -> list:
@@ -117,6 +125,32 @@ def get_sector_spotlight() -> dict | None:
     if not _is_enabled():
         return None
     return _get("/currencies/sector-spotlight", cache_key="sector_spotlight", ttl=600)
+
+
+def get_currency_snapshot(currency_id: str) -> dict | None:
+    if not _is_enabled():
+        return None
+    return _get(f"/currencies/{currency_id}/market-snapshot", cache_key=f"curr_{currency_id}", ttl=60)
+
+
+def get_analysis(chart_name: str) -> dict | None:
+    if not _is_enabled():
+        return None
+    return _get(f"/analyses/{chart_name}", cache_key=f"analysis_{chart_name}", ttl=300)
+
+
+def get_currency_snapshots_batch(ids: list[str], max_n: int = 10) -> dict[str, dict]:
+    if not _is_enabled():
+        return {}
+    results = {}
+    for cid in ids[:max_n]:
+        if _rate_limit_remaining() <= 2:
+            break
+        snap = get_currency_snapshot(cid)
+        if snap:
+            results[cid] = snap
+        time.sleep(0.5)
+    return results
 
 
 def get_full_context() -> dict:

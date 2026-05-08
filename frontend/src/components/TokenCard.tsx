@@ -34,7 +34,7 @@ const verdictConfig: Record<string, { border: string; glow: string; icon: string
 };
 
 // SVG Candlestick Chart
-function CandlestickChart({ ohlc, sparkline, price, verdict }: { ohlc?: number[][]; sparkline?: number[]; price: number; verdict: string }) {
+function CandlestickChart({ ohlc, sparkline, price, verdict, cardType }: { ohlc?: number[][]; sparkline?: number[]; price: number; verdict: string; cardType?: string }) {
   const color = verdict === 'APE' ? '#8eff71' : verdict === 'FADE' ? '#ff7166' : '#bf81ff';
 
   // Use OHLC if available, otherwise enhanced sparkline
@@ -103,7 +103,13 @@ function CandlestickChart({ ohlc, sparkline, price, verdict }: { ohlc?: number[]
     );
   }
 
-  return <div className="w-full h-32 bg-[#1a1a1a] rounded-lg flex items-center justify-center text-[#494847] text-xs">No chart data</div>;
+  const icons: Record<string, string> = { pool: '🌊', index: '📊', insight: '📰', trading: '📈' };
+  return (
+    <div className="w-full h-32 bg-[#0a0a0a] rounded-xl border border-[#262626] flex flex-col items-center justify-center gap-1">
+      <span className="text-3xl">{icons[cardType || 'trading'] || '📈'}</span>
+      <span className="text-[9px] text-[#494847] uppercase">{cardType || 'trading'}</span>
+    </div>
+  );
 }
 
 export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: () => void; onFade: () => void }) {
@@ -148,7 +154,11 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
           {/* === CARD ART: Candlestick Chart === */}
           <div className="px-2 cursor-pointer" onClick={() => setExpanded(!expanded)}>
             <div className="bg-[#0a0a0a] rounded-xl border border-[#262626] overflow-hidden">
-              <CandlestickChart ohlc={card.ohlc} sparkline={card.sparkline} price={card.price} verdict={verdict} />
+              {card.image_url && card.card_type === 'insight' ? (
+                <img src={card.image_url} alt="" className="w-full h-32 object-cover rounded-xl" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+              ) : (
+                <CandlestickChart ohlc={card.ohlc} sparkline={card.sparkline} price={card.price} verdict={verdict} cardType={card.card_type} />
+              )}
               {/* Pattern badges overlaid */}
               {card.patterns && card.patterns.length > 0 && (
                 <div className="flex gap-1 px-2 pb-1.5 -mt-1">
@@ -226,6 +236,20 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
               {/* Debate summary */}
               {card.debate_summary && (
                 <p className="text-[9px] text-[#888] italic">⚖️ {card.debate_summary}</p>
+              )}
+
+              {card.research_summary?.summary && (
+                <div className="bg-[#0e0e1a] border border-[#4a3aed]/20 p-2 rounded-lg">
+                  <div className="text-[8px] text-[#bf81ff] uppercase font-bold mb-1">🔬 AI Research</div>
+                  <p className="text-[10px] text-[#ccc]">{card.research_summary.summary.slice(0, 200)}</p>
+                  {card.research_summary.key_findings?.length > 0 && (
+                    <div className="mt-1 space-y-0.5">
+                      {card.research_summary.key_findings.slice(0, 3).map((f: string, i: number) => (
+                        <p key={i} className="text-[9px] text-[#888]">• {f}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
 
               {/* Metrics row */}

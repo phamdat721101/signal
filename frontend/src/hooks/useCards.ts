@@ -42,6 +42,7 @@ export interface Card {
   tvl?: number;
   tvl_change_1d?: number;
   source?: string;
+  research_summary?: { source: string; summary: string; sentiment: string; key_findings: string[]; chart_url: string };
 }
 
 async function fetchCards(offset = 0, limit = 20) {

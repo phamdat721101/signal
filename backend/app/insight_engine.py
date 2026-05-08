@@ -36,8 +36,8 @@ def generate_and_store_insight_cards():
         log.info("Stored %d insight cards", len(cards))
 
 
-def _make_card(name: str, hook: str, roast: str, metrics: list) -> dict:
-    return {
+def _make_card(name: str, hook: str, roast: str, metrics: list, image_url: str = "") -> dict:
+    card = {
         "token_symbol": "INSIGHT",
         "token_name": name,
         "card_type": "insight",
@@ -49,6 +49,9 @@ def _make_card(name: str, hook: str, roast: str, metrics: list) -> dict:
         "source": "sosovalue",
         "expires_at": (datetime.now(timezone.utc) + timedelta(hours=12)).isoformat(),
     }
+    if image_url:
+        card["image_url"] = image_url
+    return card
 
 
 def _etf_flow_card(ctx: dict) -> dict | None:
@@ -106,8 +109,9 @@ def _hot_news_card(ctx: dict) -> dict | None:
         return None
     item = news[0]
     title = item.get("title", "")[:80]
+    image_url = item.get("image_url", "")
     if not title:
         return None
     hook = f"🔥 {title}"
     roast = "Breaking news that'll be forgotten by tomorrow. Trade accordingly."
-    return _make_card("Hot News", hook, roast, [{"emoji": "🔥", "label": "News", "value": title[:30]}])
+    return _make_card("Hot News", hook, roast, [{"emoji": "🔥", "label": "News", "value": title[:30]}], image_url=image_url)

@@ -100,6 +100,7 @@ def init_db():
             ("source", "TEXT DEFAULT 'ai'"),
             ("provider", "TEXT DEFAULT ''"),
             ("signal_id", "INTEGER DEFAULT NULL"),
+            ("research_summary", "JSONB DEFAULT '{}'"),
         ]:
             try:
                 cur.execute(f"ALTER TABLE cards ADD COLUMN IF NOT EXISTS {col} {defn}")
@@ -308,8 +309,8 @@ def insert_card(card: dict) -> int:
                (token_symbol, token_name, chain, hook, roast, metrics, image_url,
                 ai_image_prompt, price, price_change_24h, volume_24h, market_cap, coingecko_id,
                 verdict, verdict_reason, risk_level, risk_score, notification_hook, signals,
-                sparkline, patterns, ohlc, source, provider, signal_id, institutional_context, card_type)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                sparkline, patterns, ohlc, source, provider, signal_id, institutional_context, card_type, research_summary)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                RETURNING id""",
             (card.get("token_symbol", ""), card.get("token_name", ""),
              card.get("chain", "initia"), card.get("hook", ""), card.get("roast", ""),
@@ -325,7 +326,8 @@ def insert_card(card: dict) -> int:
              card.get("source", "ai"), card.get("provider", ""),
              card.get("signal_id"),
              json.dumps(card.get("institutional_context", [])),
-             card.get("card_type", "trading"))
+             card.get("card_type", "trading"),
+             json.dumps(card.get("research_summary", {})))
         )
         return cur.fetchone()[0]
 

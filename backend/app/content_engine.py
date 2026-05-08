@@ -149,6 +149,15 @@ def harvest_pools(limit: int = 5) -> list[dict]:
             "status": "active",
             "source": "defillama",
         })
+        # Fetch sparkline for primary constituent
+        primary = symbol.split("-")[0].split("/")[0].upper()
+        from app.signal_engine import COINGECKO_IDS
+        cg_id = COINGECKO_IDS.get(f"{primary}/USD", "")
+        if cg_id and len(cards) <= 3:  # limit chart fetches
+            time.sleep(2)
+            chart_prices = fetch_chart_data(cg_id)
+            if chart_prices:
+                cards[-1]["sparkline"] = _build_sparkline(chart_prices)
     return cards
 
 
@@ -160,7 +169,7 @@ def harvest_tokens(limit: int = 10) -> list[dict]:
         try:
             resp = httpx.get(
                 "https://api.coingecko.com/api/v3/coins/markets",
-                params={"vs_currency": "usd", "order": order, "per_page": limit,
+                params={"vs_currency": "usd", "order": order, "per_page": min(limit, 100),
                         "page": 1, "sparkline": False, "price_change_percentage": "1h,24h"},
                 timeout=15,
             )
@@ -187,6 +196,19 @@ def harvest_tokens(limit: int = 10) -> list[dict]:
     if sv_ctx:
         for t in tokens:
             t["sosovalue"] = sv_ctx
+    # Per-token SosoValue enrichment for top candidates
+    from app.sosovalue_client import get_currency_snapshots_batch, get_analysis, _is_enabled, _rate_limit_remaining
+    if _is_enabled():
+        top_ids = [t["coingecko_id"] for t in tokens[:10] if t.get("coingecko_id")]
+        snapshots = get_currency_snapshots_batch(top_ids)
+        for t in tokens[:10]:
+            cg_id = t.get("coingecko_id", "")
+            if cg_id in snapshots:
+                t["sv_snapshot"] = snapshots[cg_id]
+            if _rate_limit_remaining() > 2:
+                research = get_analysis(t["token_symbol"].lower())
+                if research:
+                    t["sv_research"] = research
     # Enrich with DeFiLlama TVL data
     protocols = _fetch_llama_protocols()
     if protocols:
@@ -641,6 +663,14 @@ def assemble_card(token: dict, signals: list[dict], narrative: dict) -> dict:
                          "value": macro[0].get("name", "")[:30], "sentiment": "neutral"})
         if inst:
             card["institutional_context"] = inst
+    if token.get("sv_research"):
+        card["research_summary"] = {
+            "source": "sosovalue",
+            "summary": token["sv_research"].get("summary", ""),
+            "sentiment": token["sv_research"].get("sentiment", ""),
+            "key_findings": (token["sv_research"].get("keyFindings") or [])[:3],
+            "chart_url": token["sv_research"].get("chartUrl", ""),
+        }
     return card
 
 
@@ -779,7 +809,7 @@ def run_card_generation_cycle():
     t0 = time.time()
 
     # Stage 1: Harvest
-    tokens = harvest_tokens(15)
+    tokens = harvest_tokens(100)
     if not tokens:
         logger.warning("No tokens harvested")
         return
@@ -792,7 +822,7 @@ def run_card_generation_cycle():
         return
 
     created = 0
-    for token in new_tokens[:8]:
+    for token in new_tokens[:15]:
         try:
             # Stage 2: Analyze signals
             signals = analyze_signals(token)
@@ -1024,6 +1054,12 @@ def generate_index_cards() -> list[dict]:
             snap = get_index_snapshot(ticker)
             pct = float(snap.get("priceChangePercent24h", 0)) if snap else 0
             price = float(snap.get("price", 0)) if snap else 0
+            # Synthetic sparkline from 24h change
+            if price > 0:
+                base = price / (1 + pct / 100) if pct != -100 else price
+                sparkline = [base + (price - base) * i / 23 for i in range(24)]
+            else:
+                sparkline = []
             direction = "pumping 🚀" if pct > 2 else "dumping 📉" if pct < -2 else "crabbing 🦀"
             cards.append({
                 "token_symbol": f"{ticker.upper()}.ssi",
@@ -1034,6 +1070,7 @@ def generate_index_cards() -> list[dict]:
                 "metrics": [{"emoji": "📈", "label": "24h", "value": f"{pct:+.1f}%"},
                             {"emoji": "💰", "label": "Price", "value": f"${price:.2f}"}],
                 "price": price, "price_change_24h": pct, "volume_24h": 0, "market_cap": 0,
+                "sparkline": sparkline,
                 "status": "active",
             })
         return cards
