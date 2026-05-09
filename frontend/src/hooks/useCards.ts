@@ -39,20 +39,24 @@ export interface Card {
   pattern_stats?: { pattern: string; win_rate: number; samples: number };
   risk_breakdown?: { factor: string; impact: string; direction: string }[];
   confluence?: { timeframes: { period: string; direction: string; strength: number }[]; confluence_score: number };
+  rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
   tvl?: number;
   tvl_change_1d?: number;
   source?: string;
   research_summary?: { source: string; summary: string; sentiment: string; key_findings: string[]; chart_url: string };
 }
 
-async function fetchCards(offset = 0, limit = 20) {
-  const resp = await fetch(`${config.backendUrl}/api/cards?offset=${offset}&limit=${limit}`);
+async function fetchCards(offset = 0, limit = 20, cardType?: string) {
+  const url = cardType
+    ? `${config.backendUrl}/api/cards?offset=${offset}&limit=${limit}&card_type=${cardType}`
+    : `${config.backendUrl}/api/cards?offset=${offset}&limit=${limit}`;
+  const resp = await fetch(url);
   if (!resp.ok) throw new Error('Failed to fetch cards');
   return resp.json() as Promise<{ cards: Card[]; total: number }>;
 }
 
-export function useCards(offset = 0, limit = 20) {
-  return useQuery({ queryKey: ['cards', offset, limit], queryFn: () => fetchCards(offset, limit) });
+export function useCards(offset = 0, limit = 20, cardType?: string) {
+  return useQuery({ queryKey: ['cards', offset, limit, cardType], queryFn: () => fetchCards(offset, limit, cardType) });
 }
 
 function swipeMutation(action: 'ape' | 'fade') {

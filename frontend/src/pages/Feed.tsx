@@ -179,8 +179,9 @@ export default function Feed() {
   const [showConviction, setShowConviction] = useState(false);
   const [pendingCard, setPendingCard] = useState<any>(null);
   const [fundingGas, setFundingGas] = useState(false);
+  const [cardFilter, setCardFilter] = useState<string>('all');
 
-  const { data, isLoading } = useCards(0, 50);
+  const { data, isLoading } = useCards(0, 50, cardFilter === 'all' ? undefined : cardFilter);
   const { user, login } = usePrivy();
   const initiaAddress = user?.wallet?.address || "";
   const navigate = useNavigate();
@@ -350,6 +351,15 @@ export default function Feed() {
         </div>
       )}
       <OracleWidget />
+      <div className="flex gap-2 mb-3 overflow-x-auto px-2">
+        {['all', 'trading', 'pool', 'sector', 'insight'].map(tab => (
+          <button key={tab} onClick={() => { setCardFilter(tab); setIndex(0); }}
+            className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap ${cardFilter === tab ? 'bg-[#8eff71] text-[#0b5800]' : 'bg-[#262626] text-[#adaaaa]'}`}>
+            {tab === 'all' ? '🎴 All' : tab === 'trading' ? '📈 Trading' : tab === 'pool' ? '🌊 Pools' : tab === 'sector' ? '🔥 Sectors' : '📰 Insights'}
+          </button>
+        ))}
+      </div>
+      <div className="text-[10px] text-[#494847] text-center mb-1">{index + 1} / {cards.length}</div>
       {showConviction && pendingCard && (
         <ConvictionOverlay card={pendingCard} onConfirm={confirmConviction} onCancel={() => { setShowConviction(false); setPendingCard(null); }} />
       )}

@@ -15,8 +15,14 @@ function fmtPrice(p: number): string {
 }
 
 // Yu-Gi-Oh style: confidence → stars (1-8)
-function getStars(confidence?: number): number {
-  const c = confidence ?? 50;
+function getStars(card: { rarity?: string; confidence?: number }): number {
+  if (card.rarity === 'legendary') return 8;
+  if (card.rarity === 'epic') return 7;
+  if (card.rarity === 'rare') return 6;
+  if (card.rarity === 'uncommon') return 4;
+  if (card.rarity === 'common') return 2;
+  // fallback to existing confidence-based logic
+  const c = card.confidence ?? 50;
   if (c >= 90) return 8;
   if (c >= 80) return 7;
   if (c >= 70) return 6;
@@ -25,6 +31,13 @@ function getStars(confidence?: number): number {
   if (c >= 40) return 3;
   if (c >= 30) return 2;
   return 1;
+}
+
+function getRarityBadge(rarity?: string): string {
+  if (rarity === 'legendary') return '💎';
+  if (rarity === 'epic') return '🔮';
+  if (rarity === 'rare') return '✨';
+  return '';
 }
 
 const verdictConfig: Record<string, { border: string; glow: string; icon: string; label: string }> = {
@@ -116,13 +129,17 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
   const [expanded, setExpanded] = useState(false);
   const verdict = card.verdict || 'DYOR';
   const vCfg = verdictConfig[verdict] || verdictConfig.DYOR;
-  const stars = getStars(card.confidence ?? card.risk_score);
+  const stars = getStars(card);
+  const rarityBadge = getRarityBadge(card.rarity);
   const atk = card.confidence ?? Math.max(10, 100 - (card.risk_score ?? 50));
   const def = 100 - (card.risk_score ?? 50);
   const pctColor = card.price_change_24h >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]';
+  const glowClass = card.rarity === 'legendary'
+    ? vCfg.glow.replace('0.3)', '0.6)')
+    : vCfg.glow;
 
   return (
-    <div className={`w-full max-w-sm mx-auto rounded-2xl overflow-hidden select-none ${vCfg.glow}`}>
+    <div className={`w-full max-w-sm mx-auto rounded-2xl overflow-hidden select-none ${glowClass}`}>
       {/* Holographic gradient border */}
       <div className={`p-[2px] rounded-2xl bg-gradient-to-br ${vCfg.border}`}>
         <div className="bg-[#0e0e0e] rounded-2xl overflow-hidden">
@@ -145,6 +162,7 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
             </div>
             {/* Level stars */}
             <div className="flex items-center gap-0.5">
+              {rarityBadge && <span className="text-sm mr-0.5">{rarityBadge}</span>}
               {Array.from({ length: stars }).map((_, i) => (
                 <span key={i} className="text-[10px] text-yellow-400">★</span>
               ))}

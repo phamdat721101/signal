@@ -332,16 +332,21 @@ def insert_card(card: dict) -> int:
         return cur.fetchone()[0]
 
 
-def get_cards(offset: int = 0, limit: int = 20, status: str = "active") -> tuple[list[dict], int]:
+def get_cards(offset: int = 0, limit: int = 20, status: str = "active", card_type: str | None = None) -> tuple[list[dict], int]:
     conn = _get_conn()
     if not conn:
         return [], 0
+    where = "WHERE status = %s AND (expires_at > NOW() OR expires_at IS NULL)"
+    params: list = [status]
+    if card_type:
+        where += " AND card_type = %s"
+        params.append(card_type)
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("SELECT COUNT(*) as cnt FROM cards WHERE status = %s AND (expires_at > NOW() OR expires_at IS NULL)", (status,))
+        cur.execute(f"SELECT COUNT(*) as cnt FROM cards {where}", params)
         total = cur.fetchone()["cnt"]
         cur.execute(
-            "SELECT * FROM cards WHERE status = %s AND (expires_at > NOW() OR expires_at IS NULL) ORDER BY created_at DESC LIMIT %s OFFSET %s",
-            (status, limit, offset)
+            f"SELECT * FROM cards {where} ORDER BY created_at DESC LIMIT %s OFFSET %s",
+            (*params, limit, offset)
         )
         rows = cur.fetchall()
     return [_row_to_card(r) for r in rows], total
@@ -537,6 +542,7 @@ def _row_to_card(row: dict) -> dict:
         "source": row.get("source", "ai"),
         "provider": row.get("provider", ""),
         "signal_id": row.get("signal_id"),
+        "card_type": row.get("card_type", "trading"),
     }
 
 

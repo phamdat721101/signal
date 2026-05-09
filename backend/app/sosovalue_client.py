@@ -169,3 +169,42 @@ def get_full_context() -> dict:
     base["featured_news"] = get_featured_news()
     base["sector_spotlight"] = get_sector_spotlight()
     return base
+
+
+def get_sector_tokens(limit: int = 30) -> list[dict]:
+    """Fetch tokens from hot sectors via sector-spotlight + index constituents."""
+    if not _is_enabled():
+        return []
+    spotlight = get_sector_spotlight()
+    if not spotlight:
+        return []
+    sectors = spotlight if isinstance(spotlight, list) else spotlight.get("sectors", [])
+    tokens: list[dict] = []
+    seen: set = set()
+    for sector in sectors[:3]:
+        ticker = sector.get("indexTicker") or sector.get("ticker", "")
+        sector_name = sector.get("name", "")
+        if not ticker or _rate_limit_remaining() < 2:
+            break
+        constituents = get_index_constituents(ticker)
+        for c in constituents:
+            sym = (c.get("symbol") or c.get("ticker", "")).upper()
+            if sym and sym not in seen:
+                seen.add(sym)
+                tokens.append({
+                    "coingecko_id": c.get("coingeckoId", sym.lower()),
+                    "token_symbol": sym,
+                    "token_name": c.get("name", sym),
+                    "price": float(c.get("price", 0) or 0),
+                    "price_change_24h": float(c.get("priceChangePercent24h", 0) or 0),
+                    "price_change_1h": 0,
+                    "volume_24h": float(c.get("volume24h", 0) or 0),
+                    "market_cap": float(c.get("marketCap", 0) or 0),
+                    "image_url": c.get("logoUrl", ""),
+                    "high_24h": 0, "low_24h": 0,
+                    "circulating_supply": 0, "total_supply": 0,
+                    "sector": sector_name,
+                    "index_membership": [ticker],
+                    "interest_score": 20,
+                })
+    return tokens[:limit]

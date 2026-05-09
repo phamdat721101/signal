@@ -111,6 +111,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from app.agent_api import router as agent_v2_router
+app.include_router(agent_v2_router)
+
 
 
 @app.exception_handler(Exception)
@@ -157,12 +160,12 @@ async def get_errors(code: str | None = Query(default=None)):
 # ─── Card API (Ape or Fade) ──────────────────────────────────
 
 @app.get("/api/cards")
-async def get_cards_feed(offset: int = 0, limit: int = Query(default=20, le=50)):
+async def get_cards_feed(offset: int = 0, limit: int = Query(default=20, le=50), card_type: str | None = Query(default=None)):
     settings = get_settings()
     if not settings.database_url:
         return {"cards": [], "total": 0}
     from app.db import get_cards
-    cards, total = get_cards(offset, limit)
+    cards, total = get_cards(offset, limit, card_type=card_type)
     return {"cards": cards, "total": total}
 
 

@@ -625,6 +625,30 @@ def _get_pattern_stats(signals: list[dict]) -> dict | None:
 
 # ─── Stage 5: Card Assembler ────────────────────────────────
 
+
+def compute_rarity(card: dict, signals: list, has_agent_analysis: bool) -> str:
+    """Compute card rarity tier based on data richness."""
+    score = 0
+    score += min(3, len(signals))
+    if has_agent_analysis:
+        score += 2
+    if card.get("institutional_context"):
+        score += 1
+    if card.get("sector"):
+        score += 1
+    if card.get("trade_plan"):
+        score += 1
+    if score >= 7:
+        return "legendary"
+    if score >= 5:
+        return "epic"
+    if score >= 3:
+        return "rare"
+    if score >= 2:
+        return "uncommon"
+    return "common"
+
+
 def assemble_card(token: dict, signals: list[dict], narrative: dict) -> dict:
     """Merge all pipeline outputs into final card object."""
     card = {
@@ -644,6 +668,8 @@ def assemble_card(token: dict, signals: list[dict], narrative: dict) -> dict:
         "pattern_stats": _get_pattern_stats(signals),
         "risk_breakdown": narrative.get("risk_breakdown", []),
     }
+    # Compute rarity
+    card["rarity"] = compute_rarity(card, signals, "research_summary" in narrative or "trade_plan" in narrative)
     # Enrich with SoSoValue institutional context
     sv = token.get("sosovalue", {})
     if sv:
@@ -809,7 +835,8 @@ def run_card_generation_cycle():
     t0 = time.time()
 
     # Stage 1: Harvest
-    tokens = harvest_tokens(100)
+    from app.token_harvester import harvest_all
+    tokens = harvest_all(60)
     if not tokens:
         logger.warning("No tokens harvested")
         return
@@ -906,6 +933,20 @@ def run_card_generation_cycle():
                 logger.warning(f"Pool card insert failed: {e}")
     except Exception as e:
         logger.warning(f"Pool card generation failed: {e}")
+
+    # Generate sector cards
+    try:
+        for card in generate_sector_cards(5):
+            insert_card(card)
+    except Exception as e:
+        logger.warning(f"Sector cards failed: {e}")
+
+    # Generate whale cards
+    try:
+        for card in generate_whale_cards(3):
+            insert_card(card)
+    except Exception as e:
+        logger.warning(f"Whale cards failed: {e}")
 
 
 def backfill_chart_data():
@@ -1076,4 +1117,82 @@ def generate_index_cards() -> list[dict]:
         return cards
     except Exception as e:
         logger.warning(f"Index card generation failed: {e}")
+        return []
+
+
+# ─── Sector & Whale Card Generators ─────────────────────────
+
+
+def generate_sector_cards(limit: int = 5) -> list[dict]:
+    """Generate cards from SoSoValue sector-spotlight data."""
+    try:
+        from app.sosovalue_client import get_sector_spotlight, _is_enabled
+        if not _is_enabled():
+            return []
+        spotlight = get_sector_spotlight()
+        if not spotlight:
+            return []
+        sectors = spotlight if isinstance(spotlight, list) else spotlight.get("sectors", [])
+        cards = []
+        for s in sectors[:limit]:
+            name = s.get("name", "Unknown")
+            pct = float(s.get("priceChangePercent24h", 0) or 0)
+            direction = "pumping 🚀" if pct > 2 else "dumping 📉" if pct < -2 else "flat 🦀"
+            cards.append({
+                "token_symbol": name.upper()[:6],
+                "token_name": f"{name} Sector",
+                "card_type": "sector",
+                "hook": f"{name} sector is {direction}",
+                "roast": f"Sector move {pct:+.1f}% in 24h. Follow the money.",
+                "metrics": [
+                    {"emoji": "📊", "label": "24h", "value": f"{pct:+.1f}%", "sentiment": "bullish" if pct > 0 else "bearish"},
+                    {"emoji": "🔥", "label": "Sector", "value": name, "sentiment": "neutral"},
+                    {"emoji": "📈", "label": "Trend", "value": direction.split()[0], "sentiment": "neutral"},
+                ],
+                "verdict": "APE" if pct > 5 else "FADE" if pct < -5 else "DYOR",
+                "verdict_reason": f"{name} sector {pct:+.1f}% — {'momentum play' if pct > 5 else 'risk off' if pct < -5 else 'watch for breakout'}",
+                "risk_level": "MID", "risk_score": 50,
+                "price": 0, "price_change_24h": pct, "volume_24h": 0, "market_cap": 0,
+                "image_url": "", "rarity": "uncommon", "status": "active", "source": "sosovalue",
+            })
+        return cards
+    except Exception as e:
+        logger.warning(f"Sector card generation failed: {e}")
+        return []
+
+
+def generate_whale_cards(limit: int = 3) -> list[dict]:
+    """Generate cards from BTC treasuries (whale holdings) data."""
+    try:
+        from app.sosovalue_client import get_btc_treasuries, _is_enabled
+        if not _is_enabled():
+            return []
+        treasuries = get_btc_treasuries()
+        if not treasuries:
+            return []
+        cards = []
+        for t in treasuries[:limit]:
+            name = t.get("name", "Unknown")
+            btc_held = float(t.get("totalHoldings", 0) or t.get("btcAmount", 0) or 0)
+            change = float(t.get("changePercent24h", 0) or t.get("change24h", 0) or 0)
+            cards.append({
+                "token_symbol": "BTC",
+                "token_name": f"{name} Treasury",
+                "card_type": "whale",
+                "hook": f"{name} holds {btc_held:,.0f} BTC",
+                "roast": f"Whale watch: {name} {'accumulating' if change > 0 else 'steady'}.",
+                "metrics": [
+                    {"emoji": "🐋", "label": "Holdings", "value": f"{btc_held:,.0f} BTC", "sentiment": "neutral"},
+                    {"emoji": "📊", "label": "Change", "value": f"{change:+.1f}%", "sentiment": "bullish" if change > 0 else "neutral"},
+                    {"emoji": "🏢", "label": "Entity", "value": name[:20], "sentiment": "neutral"},
+                ],
+                "verdict": "APE" if change > 1 else "DYOR",
+                "verdict_reason": f"{name} {'adding BTC — bullish signal' if change > 0 else 'holding steady'}",
+                "risk_level": "SAFE", "risk_score": 30,
+                "price": 0, "price_change_24h": change, "volume_24h": 0, "market_cap": 0,
+                "image_url": "", "rarity": "rare", "status": "active", "source": "sosovalue",
+            })
+        return cards
+    except Exception as e:
+        logger.warning(f"Whale card generation failed: {e}")
         return []
