@@ -60,7 +60,6 @@ def get_x402_middleware_args() -> tuple[dict, x402ResourceServer] | tuple[None, 
         "GET /api/v2/agent/pools": route("$0.005", "LP pool advisory opportunities with yield analysis"),
         "GET /api/v2/agent/track-record": route("$0.01", "Historical prediction accuracy and win rates per token"),
         "GET /api/v2/agent/context": route("$0.01", "Market macro context including ETF flows and sentiment"),
-        "GET /api/cards": route("$0.01", "AI-generated trading cards with sarcastic analysis"),
     }
 
     return (routes, server)
