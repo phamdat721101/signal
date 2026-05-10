@@ -4,9 +4,10 @@ web3==7.6.0
 httpx==0.28.0
 apscheduler==3.10.4
 python-dotenv==1.0.1
-pydantic==2.10.0
-pydantic-settings==2.6.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
 eth-abi
 psycopg2-binary>=2.9.9
 boto3
 x402[fastapi]
+cdp-sdk

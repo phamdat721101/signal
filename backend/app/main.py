@@ -111,6 +111,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# x402 payment middleware (Base/USDC)
+from app.x402_payment import get_x402_middleware_args
+_x402_routes, _x402_server = get_x402_middleware_args()
+if _x402_routes:
+    from x402.http.middleware.fastapi import PaymentMiddlewareASGI
+    app.add_middleware(PaymentMiddlewareASGI, routes=_x402_routes, server=_x402_server)
+
 from app.agent_api import router as agent_v2_router
 app.include_router(agent_v2_router)
 
@@ -1018,6 +1025,7 @@ async def share_meta(trade_id: int):
 # ─── SKILL.md (Agent Discovery) ─────────────────────────────
 
 @app.get("/SKILL.md")
+@app.get("/.well-known/SKILL.md")
 async def skill_md():
     return PlainTextResponse("""# Initia Signal — Ape or Fade
 

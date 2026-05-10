@@ -24,8 +24,10 @@ class Settings(BaseSettings):
     free_signals_per_day: int = 3
     # x402 Agent Payment (Base/USDC)
     x402_receiver_address: str = ""
-    x402_facilitator_url: str = "https://x402.org/facilitator"
+    x402_facilitator_url: str = "https://api.cdp.coinbase.com/platform/v2/x402"
     x402_network: str = "eip155:84532"
+    cdp_api_key_id: str = ""
+    cdp_api_key_secret: str = ""
     # Supabase/Postgres
     database_url: str = ""
     # Claude AI (Bedrock)
