@@ -158,6 +158,42 @@ async def health():
 async def get_errors(code: str | None = Query(default=None)):
     if code:
         return {"errors": error_tracker.get_by_code(code)}
+
+
+_SKILL_MD = """# Signal Trading Intelligence API
+
+## Capabilities
+- Real-time AI-generated trading signals (APE/FADE/DYOR)
+- Multi-agent debate analysis (Technical + Sentiment + Fundamentals)
+- LP advisory with risk scoring
+- Market context (ETF flows, macro events, sector rotation)
+- Verifiable track record with on-chain proof
+
+## Endpoints (x402 paid)
+- GET /api/v2/agent/decisions — $0.001 — Actionable trade decisions
+- GET /api/v2/agent/prices — $0.001 — Real-time aggregated prices
+- GET /api/v2/agent/pools — $0.005 — LP opportunities
+- GET /api/v2/agent/context — $0.01 — Full market context
+- GET /api/v2/agent/track-record — FREE — Historical accuracy
+
+## Payment
+Protocol: x402 | Network: Base (eip155:8453) | Token: USDC
+No API keys. No accounts. Just pay and access.
+
+## Decision Schema
+```json
+{"action": "APE|FADE", "confidence": 1-100, "entry": 0.0, "target": 0.0, "stop": 0.0, "reasoning": "..."}
+```
+
+## Base URL
+https://13-212-80-72.sslip.io/signal-api
+"""
+
+
+@app.get("/.well-known/SKILL.md")
+@app.get("/SKILL.md")
+async def skill_md():
+    return PlainTextResponse(_SKILL_MD, media_type="text/markdown")
     return {"errors": error_tracker.get_recent(), "summary": error_tracker.summary()}
 
 

@@ -327,6 +327,58 @@ def analyze_signals(token: dict) -> list[dict]:
                         "direction": "neutral", "emoji": "📅",
                         "finding": f"Macro: {evt.get('name', 'Event')} today"})
 
+    # Upgrade 1: ETF Flow Momentum (multi-day streak)
+    from app.sosovalue_client import get_etf_momentum
+    momentum = get_etf_momentum()
+    for sym in ("btc", "eth"):
+        streak = momentum.get(f"{sym}_streak", 0)
+        total = momentum.get(f"{sym}_total_3d", 0)
+        if abs(streak) >= 2 and token["token_symbol"] == sym.upper():
+            d = "bullish" if streak > 0 else "bearish"
+            signals.append({"type": "ETF_MOMENTUM", "severity": min(5, abs(streak) + 1),
+                            "direction": d, "emoji": "📊",
+                            "finding": f"ETF {abs(streak)}-day {'inflow' if streak > 0 else 'outflow'} streak (${abs(total)/1e6:.0f}M total)"})
+
+    # Upgrade 2: Sector Rotation Intelligence
+    sector = token.get("sector", "")
+    if sector:
+        from app.sosovalue_client import get_sector_spotlight
+        spotlight = get_sector_spotlight()
+        if spotlight:
+            sectors = spotlight if isinstance(spotlight, list) else spotlight.get("sectors", [])
+            for s in sectors[:5]:
+                if s.get("name", "").lower() == sector.lower():
+                    pct = float(s.get("priceChangePercent24h", 0) or 0)
+                    if abs(pct) > 3:
+                        d = "bullish" if pct > 0 else "bearish"
+                        signals.append({"type": "SECTOR_ROTATION", "severity": min(5, int(abs(pct) / 2)),
+                                        "direction": d, "emoji": "🔄",
+                                        "finding": f"{sector} sector {pct:+.1f}% — capital {'flowing in' if pct > 0 else 'rotating out'}"})
+                    break
+
+    # Upgrade 4: Research Conviction Score
+    from app.sosovalue_client import get_research_conviction
+    conviction = get_research_conviction(token["token_symbol"])
+    if conviction and conviction["score"] != 50:
+        d = "bullish" if conviction["score"] > 60 else "bearish" if conviction["score"] < 40 else "neutral"
+        signals.append({"type": "RESEARCH_CONVICTION", "severity": min(4, abs(conviction["score"] - 50) // 10),
+                        "direction": d, "emoji": "🔬",
+                        "finding": f"SosoValue research conviction: {conviction['score']}/100"})
+
+    # Upgrade 5: Institutional vs Retail Divergence
+    if token["token_symbol"] in ("BTC", "ETH"):
+        etf_flow = etf.get(f"{token['token_symbol'].lower()}_net_flow", 0)
+        retail_bearish = token["price_change_24h"] < -2 or any(
+            s["direction"] == "bearish" and s["type"] in ("PRICE_MOMENTUM", "VOLUME_SPIKE") for s in signals)
+        if etf_flow > 50_000_000 and retail_bearish:
+            signals.append({"type": "SMART_MONEY_DIVERGENCE", "severity": 5,
+                            "direction": "bullish", "emoji": "⚡",
+                            "finding": f"Divergence: Institutions buying (${etf_flow/1e6:+.0f}M) while price drops — historically bullish"})
+        elif etf_flow < -50_000_000 and token["price_change_24h"] > 3:
+            signals.append({"type": "SMART_MONEY_DIVERGENCE", "severity": 4,
+                            "direction": "bearish", "emoji": "⚠️",
+                            "finding": f"Divergence: Institutions selling (${etf_flow/1e6:.0f}M) while price pumps — caution"})
+
     return sorted(signals, key=lambda s: s["severity"], reverse=True)
 
 
@@ -1162,32 +1214,44 @@ def generate_sector_cards(limit: int = 5) -> list[dict]:
 
 
 def generate_whale_cards(limit: int = 3) -> list[dict]:
-    """Generate cards from BTC treasuries (whale holdings) data."""
+    """Generate cards from BTC treasuries (whale holdings) data with delta detection."""
     try:
-        from app.sosovalue_client import get_btc_treasuries, _is_enabled
+        from app.sosovalue_client import get_btc_treasuries, get_whale_deltas, _is_enabled
         if not _is_enabled():
             return []
         treasuries = get_btc_treasuries()
         if not treasuries:
             return []
+        # Upgrade 3: Prioritize whales with detected changes
+        deltas = get_whale_deltas()
+        delta_map = {d["name"]: d for d in deltas}
         cards = []
         for t in treasuries[:limit]:
             name = t.get("name", "Unknown")
             btc_held = float(t.get("totalHoldings", 0) or t.get("btcAmount", 0) or 0)
+            delta = delta_map.get(name)
+            if delta:
+                hook = f"{name} {'added' if delta['change_btc'] > 0 else 'sold'} {abs(delta['change_btc']):,.0f} BTC"
+                roast = f"Whale alert: {name} moved {delta['change_pct']:+.1f}% of holdings. {'Accumulating hard.' if delta['change_btc'] > 0 else 'Taking profits.'}"
+                verdict = "APE" if delta["change_btc"] > 0 else "FADE"
+            else:
+                hook = f"{name} holds {btc_held:,.0f} BTC"
+                roast = f"Whale watch: {name} steady."
+                verdict = "DYOR"
             change = float(t.get("changePercent24h", 0) or t.get("change24h", 0) or 0)
             cards.append({
                 "token_symbol": "BTC",
                 "token_name": f"{name} Treasury",
                 "card_type": "whale",
-                "hook": f"{name} holds {btc_held:,.0f} BTC",
-                "roast": f"Whale watch: {name} {'accumulating' if change > 0 else 'steady'}.",
+                "hook": hook,
+                "roast": roast,
                 "metrics": [
                     {"emoji": "🐋", "label": "Holdings", "value": f"{btc_held:,.0f} BTC", "sentiment": "neutral"},
-                    {"emoji": "📊", "label": "Change", "value": f"{change:+.1f}%", "sentiment": "bullish" if change > 0 else "neutral"},
+                    {"emoji": "📊", "label": "Change", "value": f"{delta['change_pct']:+.1f}%" if delta else f"{change:+.1f}%", "sentiment": "bullish" if (delta and delta["change_btc"] > 0) or change > 0 else "neutral"},
                     {"emoji": "🏢", "label": "Entity", "value": name[:20], "sentiment": "neutral"},
                 ],
-                "verdict": "APE" if change > 1 else "DYOR",
-                "verdict_reason": f"{name} {'adding BTC — bullish signal' if change > 0 else 'holding steady'}",
+                "verdict": verdict,
+                "verdict_reason": f"{name} {'accumulating — bullish signal' if (delta and delta['change_btc'] > 0) else 'holding steady'}",
                 "risk_level": "SAFE", "risk_score": 30,
                 "price": 0, "price_change_24h": change, "volume_24h": 0, "market_cap": 0,
                 "image_url": "", "rarity": "rare", "status": "active", "source": "sosovalue",

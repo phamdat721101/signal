@@ -192,6 +192,7 @@ def init_db():
             )
         """)
     logger.info("oracle_takes table ready")
+    init_user_agents_table()
 
 
 def insert_signal(signal: dict) -> int:
@@ -693,4 +694,136 @@ def get_provider_leaderboard(limit: int = 20) -> list[dict]:
             GROUP BY provider HAVING COUNT(*) >= 5
             ORDER BY win_rate DESC LIMIT %s
         """, (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+# ─── User Agents ─────────────────────────────────────────────
+
+def init_user_agents_table():
+    conn = _get_conn()
+    if not conn:
+        return
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_agents (
+                id SERIAL PRIMARY KEY,
+                user_address TEXT NOT NULL UNIQUE,
+                strategy TEXT DEFAULT 'balanced',
+                max_position_usd DOUBLE PRECISION DEFAULT 50,
+                tokens_whitelist JSONB DEFAULT '[]',
+                tokens_blacklist JSONB DEFAULT '[]',
+                min_confidence INTEGER DEFAULT 60,
+                auto_execute BOOLEAN DEFAULT FALSE,
+                risk_tolerance TEXT DEFAULT 'medium',
+                take_profit_pct DOUBLE PRECISION DEFAULT 3.0,
+                stop_loss_pct DOUBLE PRECISION DEFAULT 2.0,
+                is_active BOOLEAN DEFAULT FALSE,
+                learned_preferences JSONB DEFAULT '{}',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS agent_notifications (
+                id SERIAL PRIMARY KEY,
+                user_address TEXT NOT NULL,
+                card_id INTEGER NOT NULL,
+                message TEXT DEFAULT '',
+                read BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        # Add source column to trades if missing
+        try:
+            cur.execute("ALTER TABLE trades ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'")
+        except Exception:
+            pass
+    logger.info("user_agents table ready")
+
+
+def upsert_user_agent(address: str, config: dict) -> dict:
+    conn = _get_conn()
+    if not conn:
+        return {}
+    fields = ["strategy", "max_position_usd", "tokens_whitelist", "tokens_blacklist",
+              "min_confidence", "auto_execute", "risk_tolerance", "take_profit_pct", "stop_loss_pct", "is_active"]
+    data = {k: config[k] for k in fields if k in config}
+    if not data:
+        return get_user_agent(address) or {}
+    cols = ", ".join(data.keys())
+    vals = ", ".join(["%s"] * len(data))
+    updates = ", ".join(f"{k}=EXCLUDED.{k}" for k in data.keys())
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            f"INSERT INTO user_agents (user_address, {cols}, updated_at) VALUES (%s, {vals}, NOW()) "
+            f"ON CONFLICT (user_address) DO UPDATE SET {updates}, updated_at=NOW() RETURNING *",
+            [address] + [json.dumps(v) if isinstance(v, list) else v for v in data.values()])
+        return dict(cur.fetchone())
+
+
+def get_user_agent(address: str) -> dict | None:
+    conn = _get_conn()
+    if not conn:
+        return None
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM user_agents WHERE user_address=%s", (address,))
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def get_active_user_agents() -> list[dict]:
+    conn = _get_conn()
+    if not conn:
+        return []
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM user_agents WHERE is_active=TRUE")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_recent_cards(minutes: int = 5) -> list[dict]:
+    conn = _get_conn()
+    if not conn:
+        return []
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM cards WHERE created_at > NOW() - INTERVAL '%s minutes' AND status='active'", (minutes,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def compute_preferences_from_swipes(address: str) -> dict:
+    conn = _get_conn()
+    if not conn:
+        return {}
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT c.token_symbol, c.risk_score, c.verdict, s.action
+            FROM swipes s JOIN cards c ON s.card_id = c.id
+            WHERE s.user_address=%s ORDER BY s.created_at DESC LIMIT 100
+        """, (address,))
+        rows = cur.fetchall()
+    if not rows:
+        return {}
+    apes = [r for r in rows if r["action"] == "ape"]
+    if not apes:
+        return {}
+    preferred = list({r["token_symbol"] for r in apes})[:10]
+    avg_risk = sum(r.get("risk_score") or 50 for r in apes) / len(apes)
+    confidence_floor = max(30, 100 - round(avg_risk))
+    return {"preferred_tokens": preferred, "avg_risk_score": round(avg_risk), "confidence_floor": confidence_floor}
+
+
+def insert_agent_notification(address: str, card_id: int, message: str):
+    conn = _get_conn()
+    if not conn:
+        return
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO agent_notifications (user_address, card_id, message) VALUES (%s,%s,%s)",
+                    (address, card_id, message))
+
+
+def get_agent_notifications(address: str, limit: int = 20) -> list[dict]:
+    conn = _get_conn()
+    if not conn:
+        return []
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM agent_notifications WHERE user_address=%s ORDER BY created_at DESC LIMIT %s",
+                    (address, limit))
         return [dict(r) for r in cur.fetchall()]

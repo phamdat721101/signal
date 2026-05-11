@@ -199,8 +199,11 @@ def start_scheduler():
     scheduler.add_job(refresh_oracle, "interval", minutes=30, id="oracle_refresh", max_instances=1)
     scheduler.add_job(resolve_predictions, "interval", minutes=30, id="resolve_predictions", max_instances=1)
     scheduler.add_job(generate_lp_advisories, "interval", minutes=15, id="lp_advisory", max_instances=1)
+    from app.agent_runner import run_user_agents, update_agent_preferences
+    scheduler.add_job(run_user_agents, "interval", minutes=5, id="user_agents", max_instances=1)
+    scheduler.add_job(update_agent_preferences, "interval", minutes=60, id="agent_learn", max_instances=1)
     scheduler.start()
-    logger.info("Scheduler started: card_gen(5m) + position_monitor(5m) + expire_cards(10m) + backfill_charts(30m) + sosovalue_cache(5m) + insight_cards(30m) + oracle_refresh(30m) + lp_advisory(15m)")
+    logger.info("Scheduler started: card_gen(5m) + position_monitor(5m) + expire_cards(10m) + backfill_charts(30m) + sosovalue_cache(5m) + insight_cards(30m) + oracle_refresh(30m) + lp_advisory(15m) + user_agents(5m) + agent_learn(60m)")
 
 
 def stop_scheduler():

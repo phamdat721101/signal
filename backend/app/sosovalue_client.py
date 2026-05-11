@@ -171,6 +171,89 @@ def get_full_context() -> dict:
     return base
 
 
+# ─── Upgrade 1: ETF Flow Momentum (3-day rolling streak) ─────
+
+_etf_history: list[dict] = []  # [{date, btc_flow, eth_flow}]
+
+
+def get_etf_momentum() -> dict:
+    """Detect multi-day ETF flow streaks. Returns momentum signals."""
+    global _etf_history
+    flows = get_etf_flows()
+    if not flows:
+        return {}
+    today = time.strftime("%Y-%m-%d")
+    # Append today's flow if not already recorded
+    if not _etf_history or _etf_history[-1].get("date") != today:
+        _etf_history.append({"date": today, "btc": flows.get("btc_net_flow", 0), "eth": flows.get("eth_net_flow", 0)})
+    _etf_history[:] = _etf_history[-7:]  # keep 7 days max
+    result = {}
+    for sym in ("btc", "eth"):
+        recent = [d[sym] for d in _etf_history[-3:] if d.get(sym)]
+        if len(recent) < 2:
+            continue
+        streak = sum(1 for f in recent if f > 0) if recent[-1] > 0 else -sum(1 for f in recent if f < 0)
+        total = sum(recent)
+        if abs(streak) >= 2:
+            result[f"{sym}_streak"] = streak
+            result[f"{sym}_total_3d"] = total
+            result[f"{sym}_direction"] = "inflow" if streak > 0 else "outflow"
+    return result
+
+
+# ─── Upgrade 3: Whale Accumulation Delta Tracking ────────────
+
+_prev_treasuries: dict[str, float] = {}
+
+
+def get_whale_deltas() -> list[dict]:
+    """Detect BTC treasury changes between refreshes."""
+    global _prev_treasuries
+    treasuries = get_btc_treasuries()
+    if not treasuries:
+        return []
+    deltas = []
+    for t in treasuries[:10]:
+        name = t.get("name", "Unknown")
+        held = float(t.get("totalHoldings", 0) or t.get("btcAmount", 0) or 0)
+        if not held:
+            continue
+        prev = _prev_treasuries.get(name, 0)
+        if prev > 0 and held != prev:
+            change = held - prev
+            pct = (change / prev) * 100
+            if abs(pct) > 0.1:  # >0.1% change is meaningful
+                deltas.append({"name": name, "btc_held": held, "change_btc": change, "change_pct": pct})
+        _prev_treasuries[name] = held
+    return sorted(deltas, key=lambda d: abs(d["change_btc"]), reverse=True)
+
+
+# ─── Upgrade 4: Research Conviction Score ────────────────────
+
+def get_research_conviction(symbol: str) -> dict | None:
+    """Extract quantitative conviction from SosoValue analysis."""
+    analysis = get_analysis(symbol.lower())
+    if not analysis:
+        return None
+    # Extract signals from analysis data
+    score = 50  # neutral baseline
+    factors = []
+    summary = analysis.get("summary", "") or analysis.get("conclusion", "") or ""
+    # Keyword-based scoring from research text
+    bullish_kw = ["strong buy", "bullish", "accumulate", "outperform", "breakout", "uptrend"]
+    bearish_kw = ["sell", "bearish", "avoid", "underperform", "breakdown", "downtrend"]
+    text = (summary + " " + str(analysis.get("keyFindings", ""))).lower()
+    for kw in bullish_kw:
+        if kw in text:
+            score += 8
+            factors.append(f"Research: {kw}")
+    for kw in bearish_kw:
+        if kw in text:
+            score -= 8
+            factors.append(f"Research: {kw}")
+    return {"score": max(0, min(100, score)), "factors": factors[:3], "summary": summary[:200]}
+
+
 def get_sector_tokens(limit: int = 30) -> list[dict]:
     """Fetch tokens from hot sectors via sector-spotlight + index constituents."""
     if not _is_enabled():

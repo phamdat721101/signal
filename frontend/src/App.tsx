@@ -5,6 +5,7 @@ import Portfolio from './pages/Portfolio';
 import History from './pages/History';
 import Profile from './pages/Profile';
 import TradeSuccess from './pages/TradeSuccess';
+import Agent from './pages/Agent';
 
 
 export default function App() {
@@ -12,6 +13,7 @@ export default function App() {
     <Layout>
       <Routes>
         <Route path="/" element={<Feed />} />
+        <Route path="/agent" element={<Agent />} />
         <Route path="/portfolio" element={<Portfolio />} />
         <Route path="/history" element={<History />} />
         <Route path="/profile" element={<Profile />} />

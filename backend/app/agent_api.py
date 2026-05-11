@@ -101,3 +101,76 @@ async def get_context():
     from app.sosovalue_client import get_full_context
     from app.degen_oracle import get_current_mood
     return {"sosovalue": get_full_context(), "oracle_mood": get_current_mood()}
+
+
+# ─── User Agent Config Endpoints ─────────────────────────────
+
+@router.get("/my-agent")
+async def get_my_agent(address: str = Query(...)):
+    """Get user's agent config + learned preferences."""
+    agent = db.get_user_agent(address)
+    if not agent:
+        return {"agent": None, "learned": db.compute_preferences_from_swipes(address)}
+    return {"agent": agent, "learned": agent.get("learned_preferences") or db.compute_preferences_from_swipes(address)}
+
+
+@router.put("/my-agent")
+async def upsert_my_agent(request: dict):
+    """Create or update user's agent config."""
+    address = request.get("address", "")
+    if not address:
+        return {"error": "address required"}
+    config = {k: v for k, v in request.items() if k != "address"}
+    agent = db.upsert_user_agent(address, config)
+    # Auto-compute learned preferences on first create
+    if agent and not agent.get("learned_preferences"):
+        prefs = db.compute_preferences_from_swipes(address)
+        if prefs:
+            conn = db._get_conn()
+            if conn:
+                import json as _json
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE user_agents SET learned_preferences=%s WHERE user_address=%s",
+                                (_json.dumps(prefs), address))
+                agent["learned_preferences"] = prefs
+    return {"agent": agent}
+
+
+@router.post("/my-agent/toggle")
+async def toggle_agent(request: dict):
+    """Activate or deactivate user's agent."""
+    address = request.get("address", "")
+    if not address:
+        return {"error": "address required"}
+    agent = db.get_user_agent(address)
+    if not agent:
+        return {"error": "no agent configured"}
+    new_state = not agent["is_active"]
+    db.upsert_user_agent(address, {"is_active": new_state})
+    return {"is_active": new_state}
+
+
+@router.get("/my-agent/notifications")
+async def get_notifications(address: str = Query(...), limit: int = Query(default=20, le=50)):
+    """Get agent notifications for user."""
+    return {"notifications": db.get_agent_notifications(address, limit)}
+
+
+@router.get("/my-agent/stats")
+async def get_agent_stats(address: str = Query(...)):
+    """Get agent trading stats."""
+    conn = db._get_conn()
+    if not conn:
+        return {"total": 0, "wins": 0, "pnl_usd": 0}
+    from psycopg2.extras import RealDictCursor
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT COUNT(*) as total,
+                   SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END) as wins,
+                   COALESCE(SUM(pnl_usd), 0) as pnl_usd
+            FROM trades WHERE user_address=%s AND source='agent'
+        """, (address,))
+        row = cur.fetchone()
+    total = row["total"] or 0
+    wins = row["wins"] or 0
+    return {"total": total, "wins": wins, "win_rate": round(wins / max(total, 1) * 100, 1), "pnl_usd": round(float(row["pnl_usd"] or 0), 2)}
