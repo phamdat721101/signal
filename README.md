@@ -1,28 +1,8 @@
 # Initia Signal
 
-Open-source AI-powered on-chain trading signal kit for Initia EVM appchains.
+Open-source AI-powered on-chain trading signal kit for EVM appchains.
 
 Generate market signals from real price data, store them immutably on-chain, execute with one-click auto-signing, and track verifiable performance history — all on your own appchain.
-
-## Initia Hackathon Submission
-
-- **Project Name**: Initia Signal — Ape or Fade
-
-### Project Overview
-
-Ape or Fade is a TikTok-style token discovery app where users swipe through AI-generated trading cards — swipe right to **Ape** (buy), swipe left to **Fade** (skip). Each card features a sarcastic AI-written analysis powered by Claude, real market data from CoinGecko, and chart pattern detection. Every decision is recorded on-chain via 7 smart contracts on an Initia EVM appchain, creating verifiable "receipts" for your trading calls. When predictions resolve after 24h, users get a celebration screen ("🧠 CALLED IT" or "😭 REKT") they can share to X — turning every trade into a viral moment.
-
-### Implementation Detail
-
-- **The Custom Implementation**: **ConvictionEngine** — a novel on-chain reputation system where users commit conviction scores (1-100) on AI-generated token cards before outcomes are known. When predictions resolve after 24h, the contract computes reputation scores entirely on-chain using conviction-weighted formulas with streak multipliers: correct high-conviction calls earn exponentially more reputation, while wrong calls penalize proportionally. Reputation can go negative. The on-chain leaderboard ranks users by verifiable reputation — no backend computation needed. Additionally, a 5-stage AI content pipeline (Harvest → Analyze → Narrate → Chart → Assemble) generates personality-driven token cards. 7 deployed contracts handle signals (`SignalRegistry`), conviction tracking (`ConvictionEngine`), rewards (3% rebate + streak bonuses via `RewardEngine`), soulbound achievement NFTs (`ProofOfAlpha` — 5 tiers), session-based payments (`SessionVault`), and a mock stablecoin (`MockIUSD`).
-- **The Native Feature**: **Auto-signing** via InterwovenKit's ghost wallet enables one-click conviction commits — users approve a session once and all subsequent conviction transactions are signed automatically without wallet popups. This makes the "swipe → commit conviction on-chain" flow feel as seamless as swiping on TikTok. The **Interwoven Bridge** button lets users fund their appchain wallet from Initia L1.
-
-### How to Run Locally
-
-1. Launch an EVM appchain: `weave init` (select EVM, enable oracle) → `weave opinit start executor -d` → `weave relayer start -d`
-2. Import keys: `MNEMONIC=$(jq -r '.common.gas_station.mnemonic' ~/.weave/config.json) && minitiad keys add gas-station --recover --keyring-backend test --coin-type 60 --key-type eth_secp256k1 --source <(echo -n "$MNEMONIC")`
-3. Deploy contract: `cd contracts && forge build --via-ir && ./deploy.sh` (or manually via `minitiad tx evm create`)
-4. Start the app: `./start.sh` — backend on http://localhost:8000, frontend on http://localhost:5173
 
 ---
 
