@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Card } from '../hooks/useCards';
+import { shareToX } from '../config';
 
 function fmt(n: number): string {
   if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
@@ -257,8 +258,13 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
               )}
 
               {card.institutional_context && card.institutional_context.length > 0 && (
-                <div className="bg-[#0e1a1a] border border-[#8eff71]/20 p-2 rounded-lg">
-                  <div className="text-[8px] text-[#8eff71] uppercase font-bold mb-1">🏦 Smart Money Intel</div>
+                <div className="bg-[#0e0e1a] border border-[#6366f1]/30 p-2 rounded-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-[8px] text-[#8eff71] uppercase font-bold">🏦 Smart Money Intel</div>
+                    <a href="https://sosovalue.com" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#6366f1]/15 hover:bg-[#6366f1]/25 transition-colors">
+                      <span className="text-[7px] font-bold text-[#a5b4fc]">SoSoValue</span>
+                    </a>
+                  </div>
                   <div className="space-y-1">
                     {card.institutional_context.map((item: any, i: number) => (
                       <div key={i} className="flex items-center gap-1.5 text-[10px]">
@@ -268,15 +274,17 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
                       </div>
                     ))}
                   </div>
-                  <div className="px-3 pb-1">
-                    <a href="https://sosovalue.com" target="_blank" rel="noopener noreferrer" className="text-[7px] text-[#494847] hover:text-[#bf81ff] transition-colors">Powered by SosoValue</a>
-                  </div>
                 </div>
               )}
 
               {card.research_summary?.summary && (
-                <div className="bg-[#0e0e1a] border border-[#4a3aed]/20 p-2 rounded-lg">
-                  <div className="text-[8px] text-[#bf81ff] uppercase font-bold mb-1">🔬 AI Research</div>
+                <div className="bg-[#0e0e1a] border border-[#6366f1]/20 p-2 rounded-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-[8px] text-[#bf81ff] uppercase font-bold">🔬 AI Research</div>
+                    <a href="https://sosovalue.com/research" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#6366f1]/10 hover:bg-[#6366f1]/20 transition-colors">
+                      <span className="text-[7px] font-bold text-[#a5b4fc]">SoSoValue →</span>
+                    </a>
+                  </div>
                   <p className="text-[10px] text-[#ccc]">{card.research_summary.summary.slice(0, 200)}</p>
                   {card.research_summary.key_findings?.length > 0 && (
                     <div className="mt-1 space-y-0.5">
@@ -285,7 +293,6 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
                       ))}
                     </div>
                   )}
-                  <a href="https://sosovalue.com/research" target="_blank" rel="noopener noreferrer" className="text-[7px] text-[#494847] hover:text-[#bf81ff] mt-1 block">Full analysis on SosoValue →</a>
                 </div>
               )}
 
@@ -316,8 +323,17 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
             </button>
           </div>
 
+          {/* Source badge */}
+          {card.source === "sosovalue" && (
+            <div className="flex justify-center pb-1">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#6366f1]/10 border border-[#6366f1]/20">
+                <span className="text-[8px] text-[#a5b4fc] font-medium">Data by SoSoValue</span>
+              </span>
+            </div>
+          )}
+
           {/* === ACTION BUTTONS === */}
-          <div className="flex gap-2 px-3 pb-3">
+          <div className="flex gap-2 px-3 pb-2">
             <button onClick={onFade}
               className="flex-1 bg-[#1a1a1a] border border-[#ff7166]/40 text-[#ff7166] font-bold py-3 rounded-xl flex items-center justify-center gap-1.5 active:scale-95 transition-transform text-sm">
               💀 FADE
@@ -325,6 +341,14 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
             <button onClick={onApe}
               className="flex-1 bg-gradient-to-r from-[#8eff71] to-[#4ade80] text-[#0b5800] font-black py-3 rounded-xl flex items-center justify-center gap-1.5 active:scale-95 transition-transform text-sm shadow-[0_0_15px_rgba(142,255,113,0.2)]">
               🔥 APE
+            </button>
+          </div>
+          {/* Share to X */}
+          <div className="px-3 pb-3">
+            <button onClick={() => shareToX(
+              `${verdict === 'APE' ? '🔥' : '💀'} ${verdict} on $${card.token_symbol} (${atk}% confidence)\n\n"${card.hook}"\n\n#ApeOrFade @KineticApp`
+            )} className="w-full bg-[#1a1a1a] border border-[#494847]/30 text-[#adaaaa] text-xs font-medium py-2 rounded-xl flex items-center justify-center gap-1.5 active:scale-95 transition-transform hover:border-[#6366f1]/40 hover:text-white">
+              𝕏 Share Card
             </button>
           </div>
         </div>

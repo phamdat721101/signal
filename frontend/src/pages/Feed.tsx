@@ -163,6 +163,36 @@ function SwipeFeedback({ type }: { type: 'ape' | 'fade' }) {
   );
 }
 
+/* ── Rare Card Reveal Effect ── */
+const RARE_CAT: Record<string, { emoji: string; text: string; color: string }> = {
+  rare: { emoji: '🐱', text: 'RARE FIND!', color: '#8eff71' },
+  epic: { emoji: '😺', text: 'EPIC DROP!', color: '#bf81ff' },
+  legendary: { emoji: '🙀', text: 'LEGENDARY!', color: '#fbbf24' },
+};
+
+function RareCardReveal({ rarity, onDone }: { rarity: string; onDone: () => void }) {
+  const cfg = RARE_CAT[rarity];
+  if (!cfg) return null;
+  useEffect(() => { const t = setTimeout(onDone, 1800); return () => clearTimeout(t); }, [onDone]);
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center pointer-events-none">
+      <div className="absolute inset-0 bg-black/60 animate-[fadeIn_0.2s_ease-out]" />
+      <div className="relative animate-[scaleIn_0.4s_ease-out] text-center">
+        <div className="absolute inset-0 -m-8 rounded-full blur-3xl animate-pulse" style={{ background: `${cfg.color}20` }} />
+        <div className="text-7xl animate-bounce">{cfg.emoji}</div>
+        <div className="font-headline text-2xl font-black mt-2 tracking-wider" style={{ color: cfg.color }}>
+          {cfg.text}
+        </div>
+        <div className="flex justify-center gap-1 mt-2">
+          {['✨','⭐','✨','⭐','✨'].map((s, i) => (
+            <span key={i} className="text-lg animate-ping" style={{ animationDelay: `${i * 0.15}s`, animationDuration: '1s' }}>{s}</span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Main Feed ── */
 export default function Feed() {
   const [showOnboarding, setShowOnboarding] = useState(!localStorage.getItem('kinetic_onboarded'));
@@ -180,6 +210,7 @@ export default function Feed() {
   const [pendingCard, setPendingCard] = useState<any>(null);
   const [fundingGas, setFundingGas] = useState(false);
   const [cardFilter, setCardFilter] = useState<string>('all');
+  const [showRareReveal, setShowRareReveal] = useState<string | null>(null);
 
   const { data, isLoading } = useCards(0, 50, cardFilter === 'all' ? undefined : cardFilter);
   const { user, login } = usePrivy();
@@ -225,6 +256,15 @@ export default function Feed() {
 
   const cards = data?.cards ?? [];
   const current = cards[index];
+
+  // Rare card reveal trigger
+  useEffect(() => {
+    if (!current) return;
+    const r = current.rarity;
+    if (r === 'rare' || r === 'epic' || r === 'legendary') {
+      setShowRareReveal(r);
+    }
+  }, [index, current?.id]);
 
   if (showOnboarding) {
     return <Onboarding onComplete={() => { localStorage.setItem('kinetic_onboarded', 'true'); setShowOnboarding(false); login(); }} />;
@@ -359,7 +399,14 @@ export default function Feed() {
           </button>
         ))}
       </div>
-      <div className="text-[10px] text-[#494847] text-center mb-1">{index + 1} / {cards.length}</div>
+      <div className="text-[10px] text-[#494847] text-center mb-1">
+        {index + 1} / {cards.length}
+        {(cardFilter === 'sector' || cardFilter === 'insight') && (
+          <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#6366f1]/10">
+            <span className="text-[8px] text-[#a5b4fc]">via SoSoValue</span>
+          </span>
+        )}
+      </div>
       {showConviction && pendingCard && (
         <ConvictionOverlay card={pendingCard} onConfirm={confirmConviction} onCancel={() => { setShowConviction(false); setPendingCard(null); }} />
       )}
@@ -406,6 +453,7 @@ export default function Feed() {
           {dragX < -50 && <div className="absolute inset-0 rounded-xl border-4 border-[#ff7166] bg-[#ff7166]/10 z-10 flex items-center justify-center"><span className="text-[#ff7166] font-headline text-4xl font-black">FADE 💨</span></div>}
           {/* Swipe feedback animation */}
           {swipeFeedback && <SwipeFeedback type={swipeFeedback} />}
+          {showRareReveal && <RareCardReveal rarity={showRareReveal} onDone={() => setShowRareReveal(null)} />}
           <TokenCard card={current} onApe={handleApe} onFade={handleFade} />
         </div>
       </div>

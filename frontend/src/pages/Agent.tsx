@@ -112,11 +112,11 @@ export default function Agent() {
       )}
 
       {/* Notifications */}
-      {notifs?.notifications?.length > 0 && (
+      {(notifs?.notifications?.length ?? 0) > 0 && (
         <div>
           <div className="text-sm text-gray-400 mb-2">Recent signals</div>
           <div className="space-y-2">
-            {notifs.notifications.slice(0, 5).map((n: any) => (
+            {notifs!.notifications.slice(0, 5).map((n: any) => (
               <div key={n.id} className="bg-gray-900 rounded-lg p-3 text-xs">{n.message}</div>
             ))}
           </div>
