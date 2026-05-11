@@ -57,6 +57,139 @@ Ape or Fade is a TikTok-style token discovery app where users swipe through AI-g
 └──────────────────────────────────────────────────────┘
 ```
 
+## SoSoValue Integration
+
+Ape or Fade deeply integrates [SoSoValue](https://sosovalue.com) as its institutional intelligence layer — giving retail traders access to the same data hedge funds use, delivered as swipeable cards.
+
+### Data Flow
+
+```
+SoSoValue API (9 modules, smart-cached, 18 req/min)
+    │
+    ├── ETF Flows ──────→ ETF_FLOW + ETF_MOMENTUM signals on BTC/ETH cards
+    ├── Macro Events ───→ MACRO_CATALYST signals + Insight Cards
+    ├── SSI Indices ────→ Index Cards (DeFi, AI, Meme, L1, L2...)
+    ├── Sector Spotlight → Sector Cards + SECTOR_ROTATION signals
+    ├── BTC Treasuries ─→ Whale Cards with accumulation delta tracking
+    ├── Currency Snapshots → Per-token enrichment for top candidates
+    ├── Analysis Reports → AI Research section + RESEARCH_CONVICTION score
+    └── Full Context ───→ Multi-Agent AI Sentiment Agent + Divergence detection
+```
+
+### SoSoValue-Powered Features
+
+| Feature | Data Source | User Value |
+|---------|-----------|------------|
+| Smart Money Intel | ETF flows + whale treasuries | See what institutions are doing |
+| Sector Rotation | Sector spotlight | Detect capital flowing between sectors |
+| Whale Alerts | BTC treasuries (delta tracking) | Know when whales accumulate |
+| Macro Alerts | Macro events calendar | Never miss FOMC, CPI, employment data |
+| Index Cards | SSI indices (Mag7, DeFi, AI, Meme) | Diversified basket plays |
+| AI Research | Per-token analysis reports | Research-grade conviction scoring |
+| Divergence Signals | ETF flows vs price action | Institutions buying while price drops |
+
+### Signal Types from SoSoValue
+
+| Signal | Trigger |
+|--------|---------|
+| `ETF_FLOW` | BTC/ETH ETF net flow > $50M |
+| `ETF_MOMENTUM` | 2-3 day inflow/outflow streak |
+| `MACRO_CATALYST` | Scheduled macro event today |
+| `SECTOR_ROTATION` | Sector 24h change > ±3% |
+| `RESEARCH_CONVICTION` | Analysis keywords scoring |
+| `SMART_MONEY_DIVERGENCE` | ETF flow contradicts price action |
+
+---
+
+## AI Agent API (x402 Pay-per-Request on Base Bazaar)
+
+The Signal API is published on **Base Bazaar** — AI agents discover and pay for trading intelligence using the x402 protocol. No API keys, no accounts — just USDC on Base.
+
+### Discovery
+
+```bash
+# Bazaar semantic search
+npx awal@latest x402 bazaar search "trading signals"
+
+# Direct SKILL.md
+curl https://13-212-80-72.sslip.io/signal-api/SKILL.md
+```
+
+### Paid Endpoints
+
+| Endpoint | Price | Description |
+|----------|-------|-------------|
+| `GET /api/v2/agent/decisions` | $0.001 | AI trading decisions with confidence + track record |
+| `GET /api/v2/agent/prices` | $0.001 | Real-time aggregated prices |
+| `GET /api/v2/agent/pools` | $0.005 | LP pool advisory with yield analysis |
+| `GET /api/v2/agent/context` | $0.01 | Market macro context (ETF flows, sectors) |
+| `GET /api/v2/agent/track-record` | $0.01 | Historical prediction accuracy per token |
+
+### How Agents Pay (x402 Protocol)
+
+```
+Agent Request ──→ 402 Payment Required (payment options in header)
+       │
+       ├── Agent signs USDC payment on Base
+       │
+       └── Agent retries with X-PAYMENT header ──→ 200 OK + data
+```
+
+**Payment Config:**
+- Network: Base (`eip155:8453`)
+- Token: USDC
+- Facilitator: CDP x402
+- Receiver: `0x100690a32B562fd45e685BC2E63bbfF566d452db`
+
+### Agent Integration Example
+
+```python
+# Using CDP AgentKit with x402
+from cdp_agentkit import Agent
+
+agent = Agent(wallet="base-mainnet")
+response = agent.x402_request(
+    "https://13-212-80-72.sslip.io/signal-api/api/v2/agent/decisions?limit=5"
+)
+# Agent automatically handles 402 → pay → retry flow
+decisions = response.json()["decisions"]
+```
+
+```bash
+# CLI usage
+npx awal@latest x402 pay \
+  "https://13-212-80-72.sslip.io/signal-api/api/v2/agent/decisions?limit=5"
+```
+
+### Response Schema
+
+```json
+{
+  "decisions": [
+    {
+      "token": "BTC",
+      "action": "APE",
+      "confidence": 85,
+      "entry": 104250.5,
+      "target": 105814.3,
+      "stop": 102686.7,
+      "reasoning": "ETF 3-day inflow streak ($450M) + bullish divergence",
+      "track_record": { "win_rate": 68.5, "sample_size": 42 }
+    }
+  ]
+}
+```
+
+### Free Endpoints (No Payment)
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/health` | Service health check |
+| `GET /SKILL.md` | Agent capability discovery |
+| `GET /.well-known/SKILL.md` | Standard discovery path |
+
+---
+
 ## Architecture
 
 ```
