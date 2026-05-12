@@ -14,6 +14,27 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# ─── Global CoinGecko Rate Limiter ───────────────────────────
+_cg_timestamps: list[float] = []
+_CG_MAX_PER_MIN = 25  # conservative: free tier = 30/min
+
+
+def _cg_can_call() -> bool:
+    now = time.time()
+    _cg_timestamps[:] = [t for t in _cg_timestamps if now - t < 60]
+    return len(_cg_timestamps) < _CG_MAX_PER_MIN
+
+
+def _cg_wait_and_record():
+    """Record a CoinGecko call. Sleeps 2s if near limit, skips if over."""
+    if not _cg_can_call():
+        time.sleep(3)
+        if not _cg_can_call():
+            return False
+    _cg_timestamps.append(time.time())
+    return True
+
+
 # ─── Stage 1: Data Harvester ────────────────────────────────
 
 # ─── DeFiLlama Data Sources ─────────────────────────────────
@@ -153,8 +174,8 @@ def harvest_pools(limit: int = 5) -> list[dict]:
         primary = symbol.split("-")[0].split("/")[0].upper()
         from app.signal_engine import COINGECKO_IDS
         cg_id = COINGECKO_IDS.get(f"{primary}/USD", "")
-        if cg_id and len(cards) <= 3:  # limit chart fetches
-            time.sleep(2)
+        if cg_id and len(cards) <= 3 and _cg_can_call():  # limit chart fetches
+            _cg_wait_and_record()
             chart_prices = fetch_chart_data(cg_id)
             if chart_prices:
                 cards[-1]["sparkline"] = _build_sparkline(chart_prices)
@@ -166,7 +187,10 @@ def harvest_tokens(limit: int = 10) -> list[dict]:
     all_tokens = {}
     orderings = ["volume_desc", "market_cap_desc", "market_cap_change_24h_desc"]
     for order in orderings:
+        if not _cg_can_call():
+            break
         try:
+            _cg_wait_and_record()
             resp = httpx.get(
                 "https://api.coingecko.com/api/v3/coins/markets",
                 params={"vs_currency": "usd", "order": order, "per_page": min(limit, 100),
@@ -177,7 +201,6 @@ def harvest_tokens(limit: int = 10) -> list[dict]:
             for c in resp.json():
                 parsed = _parse_coingecko(c)
                 all_tokens[parsed["coingecko_id"]] = parsed
-            time.sleep(2)
         except Exception as e:
             logger.warning(f"Harvest ({order}) failed: {e}")
     tokens = list(all_tokens.values())
@@ -936,8 +959,8 @@ def run_card_generation_cycle():
             if signals and max(s["severity"] for s in signals) < 2:
                 continue
 
-            # Stage 2.5: Chart analysis
-            time.sleep(2)  # Rate-limit: CoinGecko ~30 req/min
+            # Stage 2.5: Chart analysis (rate-limited)
+            _cg_wait_and_record()
             chart_prices = fetch_chart_data(token["coingecko_id"])
             sparkline = _build_sparkline(chart_prices) if chart_prices else []
             patterns = detect_patterns(chart_prices) if chart_prices else []
@@ -955,7 +978,10 @@ def run_card_generation_cycle():
             card = assemble_card(token, signals, narrative)
             card["sparkline"] = sparkline
             card["patterns"] = patterns
-            card["ohlc"] = fetch_ohlc_data(token["coingecko_id"]) if token.get("coingecko_id") else []
+            card["ohlc"] = []
+            if token.get("coingecko_id") and _cg_can_call():
+                _cg_wait_and_record()
+                card["ohlc"] = fetch_ohlc_data(token["coingecko_id"])
             if not _passes_quality_gates(card):
                 continue
             card_id = insert_card(card)
@@ -1041,7 +1067,9 @@ def backfill_chart_data():
         return
     filled = 0
     for row in rows:
-        time.sleep(2)
+        if not _cg_can_call():
+            break
+        _cg_wait_and_record()
         prices = fetch_chart_data(row["coingecko_id"])
         if not prices:
             continue

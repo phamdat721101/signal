@@ -183,13 +183,13 @@ def expire_old_cards():
 def start_scheduler():
     from app.content_engine import run_card_generation_cycle
 
-    scheduler.add_job(run_card_generation_cycle, "interval", minutes=5, id="card_gen", max_instances=1)
-    scheduler.add_job(monitor_positions, "interval", minutes=5, id="position_monitor", max_instances=1)
+    scheduler.add_job(run_card_generation_cycle, "interval", minutes=10, id="card_gen", max_instances=1)
+    scheduler.add_job(monitor_positions, "interval", minutes=10, id="position_monitor", max_instances=1)
     scheduler.add_job(expire_old_cards, 'interval', minutes=10, id='expire_cards', max_instances=1)
     from app.content_engine import backfill_chart_data
     scheduler.add_job(backfill_chart_data, "interval", minutes=30, id="backfill_charts", max_instances=1)
     from app.sosovalue_client import refresh_cache as refresh_sosovalue
-    scheduler.add_job(refresh_sosovalue, "interval", minutes=5, id="sosovalue_cache", max_instances=1)
+    scheduler.add_job(refresh_sosovalue, "interval", minutes=10, id="sosovalue_cache", max_instances=1)
     from app.insight_engine import generate_and_store_insight_cards
     from app.degen_oracle import refresh_oracle
     from app.agent_memory import resolve_predictions, ensure_table as ensure_predictions_table
@@ -200,13 +200,12 @@ def start_scheduler():
     scheduler.add_job(resolve_predictions, "interval", minutes=30, id="resolve_predictions", max_instances=1)
     scheduler.add_job(generate_lp_advisories, "interval", minutes=15, id="lp_advisory", max_instances=1)
     from app.agent_runner import run_user_agents, update_agent_preferences
-    scheduler.add_job(run_user_agents, "interval", minutes=5, id="user_agents", max_instances=1)
+    scheduler.add_job(run_user_agents, "interval", minutes=10, id="user_agents", max_instances=1)
     scheduler.add_job(update_agent_preferences, "interval", minutes=60, id="agent_learn", max_instances=1)
     from app.news_aggregator import refresh_news
-    from app.sentiment_engine import refresh_sentiment, ensure_tables as ensure_sentiment_tables
-    ensure_sentiment_tables()
-    scheduler.add_job(refresh_news, "interval", minutes=5, id="news_refresh", max_instances=1)
-    scheduler.add_job(refresh_sentiment, "interval", minutes=5, id="sentiment_refresh", max_instances=1)
+    from app.sentiment_engine import refresh_sentiment
+    scheduler.add_job(refresh_news, "interval", minutes=10, id="news_refresh", max_instances=1)
+    scheduler.add_job(refresh_sentiment, "interval", minutes=10, id="sentiment_refresh", max_instances=1)
     scheduler.start()
     logger.info("Scheduler started: card_gen(5m) + position_monitor(5m) + expire_cards(10m) + backfill_charts(30m) + sosovalue_cache(5m) + insight_cards(30m) + oracle_refresh(30m) + lp_advisory(15m) + user_agents(5m) + agent_learn(60m)")
 

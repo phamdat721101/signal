@@ -77,27 +77,14 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Chain client init failed: {e}")
     else:
         logger.info("No CONTRACT_ADDRESS — running in simulation mode (in-memory signals)")
-    # Init Supabase DB
+    # DB connection test (no table creation — tables already exist on prod)
     if settings.database_url:
-        from app.db import init_db
-        try:
-            init_db()
-        except Exception as e:
-            logger.warning(f"DB init failed: {e}")
+        from app.db import _get_conn
+        if _get_conn():
+            logger.info("DB connected")
+        else:
+            logger.warning("DB connection failed")
     start_scheduler()
-    # Seed cards on startup if feed is empty
-    if settings.database_url:
-        try:
-            from app.db import get_cards
-            cards, _ = get_cards(0, 3)
-            if len(cards) < 3:
-                logger.info("Feed has < 3 cards — seeding on startup...")
-                from app.content_engine import run_card_generation_cycle
-                run_card_generation_cycle()
-                cards2, _ = get_cards(0, 3)
-                logger.info(f"Seeded {len(cards2)} cards on startup")
-        except Exception as e:
-            logger.warning(f"Startup card seed failed (non-fatal): {e}")
     yield
     from app.scheduler import stop_scheduler
     stop_scheduler()

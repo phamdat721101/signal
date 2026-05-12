@@ -24,6 +24,7 @@ def ensure_tables():
         return
     try:
         with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = '5s'")
             cur.execute("""CREATE TABLE IF NOT EXISTS token_sentiment (
                 id SERIAL PRIMARY KEY,
                 token_symbol TEXT NOT NULL,
@@ -42,8 +43,9 @@ def ensure_tables():
                 was_profitable BOOLEAN,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 resolved_at TIMESTAMPTZ)""")
+            cur.execute("RESET statement_timeout")
     except Exception as e:
-        log.error("ensure_tables: %s", e)
+        log.warning("ensure_tables: %s", e)
 
 
 def compute_sentiment(symbol: str) -> dict:
@@ -176,6 +178,7 @@ def get_event_patterns(symbol: str | None = None) -> dict:
 
 def refresh_sentiment():
     """Called by scheduler. Compute and store sentiment for active tokens."""
+    ensure_tables()
     from app.db import _get_conn
     conn = _get_conn()
     if not conn:

@@ -101,12 +101,22 @@ def _fetch_cryptopanic() -> list[dict]:
 
 
 # ─── Source: cryptocurrency.cv ────────────────────────────────
+_cryptocv_disabled = False  # auto-disable on 402/payment errors
+
+
 def _fetch_cryptocv() -> list[dict]:
+    global _cryptocv_disabled
+    if _cryptocv_disabled:
+        return []
     cached = _cached("cryptocv")
     if cached is not None:
         return cached
     try:
         resp = httpx.get("https://cryptocurrency.cv/api/v1/news?limit=20", timeout=10)
+        if resp.status_code == 402:
+            _cryptocv_disabled = True
+            log.info("cryptocurrency.cv requires payment — disabled")
+            return []
         resp.raise_for_status()
         items = []
         for article in resp.json().get("articles", resp.json() if isinstance(resp.json(), list) else [])[:20]:

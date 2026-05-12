@@ -29,12 +29,21 @@ def _get_conn():
 
 
 def init_db():
-    """Create signals table if not exists."""
+    """Create tables if not exists. Skips if already initialized."""
     conn = _get_conn()
     if not conn:
         logger.warning("DATABASE_URL not set — Supabase disabled")
         return
+    # Fast check: if signals table exists, skip all CREATE statements
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM signals LIMIT 1")
+        logger.info("DB tables already exist — skipping init")
+        return
+    except Exception:
+        pass  # Table doesn't exist, proceed with creation
     with conn.cursor() as cur:
+        cur.execute("SET statement_timeout = '10s'")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS signals (
                 id SERIAL PRIMARY KEY,
@@ -742,6 +751,12 @@ def init_user_agents_table():
         except Exception:
             pass
     logger.info("user_agents table ready")
+    # Reset timeout after init
+    try:
+        with conn.cursor() as cur:
+            cur.execute("RESET statement_timeout")
+    except Exception:
+        pass
 
 
 def upsert_user_agent(address: str, config: dict) -> dict:

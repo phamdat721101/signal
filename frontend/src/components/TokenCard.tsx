@@ -197,7 +197,16 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
               <span className="text-[9px] font-bold text-[#8eff71]">ATK</span>
               <span className="text-xs font-bold text-white">{atk}%</span>
             </div>
-            <div className="text-[9px] text-[#494847] uppercase tracking-wider">{card.card_type === 'pool' ? '🌊 POOL' : verdict}</div>
+            {card.sentiment_score && card.sentiment_score !== 0 ? (
+              <div className="flex items-center gap-1">
+                <span className="text-[9px]">{card.sentiment_score > 20 ? '📈' : card.sentiment_score < -20 ? '📉' : '➡️'}</span>
+                <span className={`text-[10px] font-bold ${card.sentiment_score > 20 ? 'text-[#8eff71]' : card.sentiment_score < -20 ? 'text-[#ff7166]' : 'text-[#adaaaa]'}`}>
+                  {card.sentiment_score > 0 && '+'}{card.sentiment_score}
+                </span>
+              </div>
+            ) : (
+              <div className="text-[9px] text-[#494847] uppercase tracking-wider">{card.card_type === 'pool' ? '🌊 POOL' : verdict}</div>
+            )}
             <div className="flex items-center gap-1">
               <span className="text-[9px] font-bold text-[#60a5fa]">DEF</span>
               <span className="text-xs font-bold text-white">{def}%</span>
@@ -208,6 +217,19 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
           <div className="px-3 pb-2">
             <p className="text-xs text-[#e0e0e0] italic leading-snug">{card.hook}</p>
           </div>
+
+          {/* === SOSOVALUE DATA HIGHLIGHT (always visible) === */}
+          {card.institutional_context && card.institutional_context.length > 0 && (
+            <div className="px-3 pb-2">
+              <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-[#0e0e1a]/80 border border-[#6366f1]/20">
+                <span className="text-[10px]">{card.institutional_context[0].emoji}</span>
+                <span className="text-[9px] text-[#a5b4fc] font-medium truncate flex-1">
+                  {card.institutional_context[0].label}: {card.institutional_context[0].value}
+                </span>
+                <span className="text-[7px] text-[#6366f1] font-bold px-1 py-0.5 rounded bg-[#6366f1]/10">SoSoValue</span>
+              </div>
+            </div>
+          )}
 
           {/* === EXPANDABLE ANALYSIS === */}
           <div className={`overflow-hidden transition-all duration-300 ${expanded ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'}`}>
