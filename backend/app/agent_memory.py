@@ -45,20 +45,69 @@ def resolve_predictions():
                 (cutoff,))
             rows = cur.fetchall()
         if not rows: return
-        symbols = ",".join({r["token_symbol"].lower() for r in rows})
-        prices = httpx.get(
-            f"https://api.coingecko.com/api/v3/simple/price?ids={symbols}&vs_currencies=usd", timeout=10
-        ).json()
+        symbols = {r["token_symbol"] for r in rows}
+        prices = _fetch_resolution_prices(symbols)
         with conn.cursor() as cur:
             for r in rows:
-                current = prices.get(r["token_symbol"].lower(), {}).get("usd")
+                current = prices.get(r["token_symbol"])
                 if not current or not r["entry_price"]: continue
                 pct = (current - r["entry_price"]) / r["entry_price"] * 100
                 correct = (pct > 0) if r["verdict"] == "APE" else (pct < 0)
                 cur.execute("UPDATE agent_predictions SET resolved_at=NOW(),outcome_pct=%s,was_correct=%s WHERE id=%s",
                             (round(pct, 2), correct, r["id"]))
+        # Also resolve event_outcomes from sentiment_engine
+        _resolve_event_outcomes(prices)
     except Exception as e:
         logger.error("resolve_predictions: %s", e)
+
+
+def _fetch_resolution_prices(symbols: set) -> dict[str, float]:
+    """DexScreener first (free), CoinGecko fallback for missing."""
+    prices = {}
+    for sym in symbols:
+        try:
+            resp = httpx.get(f"https://api.dexscreener.com/latest/dex/search?q={sym}", timeout=8)
+            if resp.status_code == 200:
+                pairs = resp.json().get("pairs", [])
+                if pairs:
+                    prices[sym] = float(pairs[0].get("priceUsd", 0))
+        except Exception:
+            pass
+    missing = symbols - set(prices.keys())
+    if missing:
+        try:
+            ids = ",".join(s.lower() for s in missing)
+            data = httpx.get(f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd", timeout=10).json()
+            for sym in missing:
+                p = data.get(sym.lower(), {}).get("usd")
+                if p: prices[sym] = p
+        except Exception:
+            pass
+    return prices
+
+
+def _resolve_event_outcomes(prices: dict[str, float]):
+    """Resolve pending event_outcomes with current prices."""
+    conn = _get_conn()
+    if not conn: return
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, token_symbol, price_at_event FROM event_outcomes "
+                "WHERE resolved_at IS NULL AND created_at < NOW() - INTERVAL '24 hours'")
+            rows = cur.fetchall()
+        if not rows: return
+        with conn.cursor() as cur:
+            for r in rows:
+                current = prices.get(r["token_symbol"])
+                if not current or not r["price_at_event"]: continue
+                pct = (current - r["price_at_event"]) / r["price_at_event"] * 100
+                cur.execute(
+                    "UPDATE event_outcomes SET resolved_at=NOW(), price_after_24h=%s, outcome_pct=%s, was_profitable=%s WHERE id=%s",
+                    (current, round(pct, 2), pct > 0, r["id"]))
+        logger.info("Resolved %d event outcomes", len(rows))
+    except Exception as e:
+        logger.warning("_resolve_event_outcomes: %s", e)
 
 
 def get_accuracy_context(symbol: str) -> str:

@@ -30,6 +30,10 @@ class ChainClient:
         self._nonce = self.w3.eth.get_transaction_count(self.account.address)
 
     def _send_tx(self, fn, _retry: bool = True):
+        breaker = error_tracker.get_breaker("chain_tx", threshold=3, cooldown=300.0)
+        if breaker.is_open:
+            logger.warning("Chain TX circuit open — skipping")
+            return None
         try:
             tx = fn.build_transaction({
                 "from": self.account.address,
@@ -42,14 +46,15 @@ class ChainClient:
             self._nonce += 1
             receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
             logger.info(f"TX {tx_hash.hex()} status={receipt['status']}")
+            breaker.record_success()
             return receipt
         except Exception as e:
             err_str = str(e).lower()
             if _retry and ("nonce" in err_str or "already known" in err_str):
                 logger.warning(f"Nonce error, resyncing: {e}")
                 self._nonce = self.w3.eth.get_transaction_count(self.account.address)
-                error_tracker.track("NONCE_RESYNC", f"Resynced nonce to {self._nonce}", {"error": str(e)})
                 return self._send_tx(fn, _retry=False)
+            breaker.record_failure()
             error_tracker.track("TX_SEND_FAILED", str(e))
             raise
 
@@ -59,6 +64,8 @@ class ChainClient:
             Web3.to_checksum_address(asset), is_bull, confidence, target_price, entry_price
         )
         receipt = self._send_tx(fn)
+        if not receipt:
+            return -1, ""
         logs = self.contract.events.SignalCreated().process_receipt(receipt)
         signal_id = logs[0]["args"]["id"] if logs else -1
         tx_hash = receipt["transactionHash"].hex()
@@ -67,6 +74,8 @@ class ChainClient:
     def resolve_signal(self, signal_id: int, exit_price: int) -> str:
         fn = self.contract.functions.resolveSignal(signal_id, exit_price)
         receipt = self._send_tx(fn)
+        if not receipt:
+            return ""
         return receipt["transactionHash"].hex()
 
     def get_signal(self, signal_id: int) -> dict:
@@ -91,6 +100,8 @@ class ChainClient:
             Web3.to_checksum_address(asset), is_bull, confidence, target_price, entry_price, data_hash
         )
         receipt = self._send_tx(fn)
+        if not receipt:
+            return -1, ""
         logs = self.contract.events.SignalCreated().process_receipt(receipt)
         signal_id = logs[0]["args"]["id"] if logs else -1
         return signal_id, receipt["transactionHash"].hex()

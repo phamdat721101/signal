@@ -2,6 +2,7 @@ from x402.http import HTTPFacilitatorClient, FacilitatorConfig, CreateHeadersAut
 from x402.http.types import PaymentOption, RouteConfig
 from x402.mechanisms.evm.exact import ExactEvmServerScheme
 from x402.server import x402ResourceServer
+from x402.extensions.bazaar import bazaar_resource_server_extension, declare_discovery_extension, OutputConfig
 
 from app.config import get_settings
 
@@ -43,23 +44,48 @@ def get_x402_middleware_args() -> tuple[dict, x402ResourceServer] | tuple[None, 
     ))
     server = x402ResourceServer(facilitator)
     server.register(settings.x402_network, ExactEvmServerScheme())
+    server.register_extension(bazaar_resource_server_extension)
 
     pay_to = settings.x402_receiver_address
     network = settings.x402_network
 
-    def route(price: str, description: str) -> RouteConfig:
+    def route(price: str, description: str, output_example: dict) -> RouteConfig:
         return RouteConfig(
             accepts=[PaymentOption(scheme="exact", pay_to=pay_to, price=price, network=network)],
             mime_type="application/json",
             description=description,
+            extensions=declare_discovery_extension(
+                input={"limit": "10"},
+                output=OutputConfig(example=output_example),
+            ),
         )
 
     routes = {
-        "GET /api/v2/agent/decisions": route("$0.001", "AI trading decisions with confidence scores and track record"),
-        "GET /api/v2/agent/prices": route("$0.001", "Real-time aggregated crypto prices from multiple sources"),
-        "GET /api/v2/agent/pools": route("$0.005", "LP pool advisory opportunities with yield analysis"),
-        "GET /api/v2/agent/track-record": route("$0.01", "Historical prediction accuracy and win rates per token"),
-        "GET /api/v2/agent/context": route("$0.01", "Market macro context including ETF flows and sentiment"),
+        "GET /api/v2/agent/decisions": route(
+            "$0.001",
+            "AI trading decisions with confidence scores and track record",
+            {"decisions": [{"token": "BTC", "action": "APE", "confidence": 85, "entry": 104250.5, "target": 105814.3, "stop": 102686.7, "reasoning": "Bullish EMA crossover + RSI momentum", "track_record": {"win_rate": 68.5, "sample_size": 42}}], "total": 1},
+        ),
+        "GET /api/v2/agent/prices": route(
+            "$0.001",
+            "Real-time aggregated crypto prices from multiple sources",
+            {"prices": [{"symbol": "BTC", "price": 104250.5, "source": "coingecko"}]},
+        ),
+        "GET /api/v2/agent/pools": route(
+            "$0.005",
+            "LP pool advisory opportunities with yield analysis",
+            {"pools": [{"pair": "ETH/USDC", "apy": 12.5, "tvl": 5000000, "risk_score": 35}], "total": 1},
+        ),
+        "GET /api/v2/agent/track-record": route(
+            "$0.01",
+            "Historical prediction accuracy and win rates per token",
+            {"overall": {"total": 150, "wins": 102, "win_rate": 68.0}, "per_token": {"BTC": {"total": 42, "wins": 29, "win_rate": 69.0}}},
+        ),
+        "GET /api/v2/agent/context": route(
+            "$0.01",
+            "Market macro context including ETF flows and sentiment",
+            {"sosovalue": {"etf_flows": {"btc_net_flow_24h": 150000000}}, "oracle_mood": "bullish"},
+        ),
     }
 
     return (routes, server)

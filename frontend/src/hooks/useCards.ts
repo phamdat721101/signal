@@ -43,6 +43,8 @@ export interface Card {
   tvl?: number;
   tvl_change_1d?: number;
   source?: string;
+  sentiment_score?: number;
+  sentiment_direction?: 'bullish' | 'bearish' | 'neutral';
   research_summary?: { source: string; summary: string; sentiment: string; key_findings: string[]; chart_url: string };
 }
 

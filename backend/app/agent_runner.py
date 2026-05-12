@@ -53,6 +53,11 @@ def _matches(card: dict, agent: dict) -> bool:
     blacklist = agent.get("tokens_blacklist") or []
     if symbol in blacklist:
         return False
+    # Sentiment filter: low-risk agents skip negative sentiment tokens
+    if agent["risk_tolerance"] == "low":
+        sentiment = card.get("sentiment_score", 0)
+        if sentiment < -20:
+            return False
     return True
 
 

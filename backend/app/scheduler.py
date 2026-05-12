@@ -202,6 +202,11 @@ def start_scheduler():
     from app.agent_runner import run_user_agents, update_agent_preferences
     scheduler.add_job(run_user_agents, "interval", minutes=5, id="user_agents", max_instances=1)
     scheduler.add_job(update_agent_preferences, "interval", minutes=60, id="agent_learn", max_instances=1)
+    from app.news_aggregator import refresh_news
+    from app.sentiment_engine import refresh_sentiment, ensure_tables as ensure_sentiment_tables
+    ensure_sentiment_tables()
+    scheduler.add_job(refresh_news, "interval", minutes=5, id="news_refresh", max_instances=1)
+    scheduler.add_job(refresh_sentiment, "interval", minutes=5, id="sentiment_refresh", max_instances=1)
     scheduler.start()
     logger.info("Scheduler started: card_gen(5m) + position_monitor(5m) + expire_cards(10m) + backfill_charts(30m) + sosovalue_cache(5m) + insight_cards(30m) + oracle_refresh(30m) + lp_advisory(15m) + user_agents(5m) + agent_learn(60m)")
 

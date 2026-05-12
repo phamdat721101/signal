@@ -40,7 +40,18 @@ def _run_technical(token: dict, signals: list, chart_data: list) -> str:
 
 def _run_sentiment(token: dict, sv_context: dict) -> str:
     system = "You are a crypto sentiment/news analyst. Assess ETF flows, breaking news, macro events, social mood. Be concise. Max 150 words."
-    user = f"${token.get('token_symbol','?')}\nSosoValue context: {json.dumps(sv_context)}"
+    # Inject structured sentiment + event patterns
+    extra = ""
+    try:
+        from app.sentiment_engine import compute_sentiment, get_event_patterns
+        sentiment = compute_sentiment(token.get("token_symbol", ""))
+        patterns = get_event_patterns(token.get("token_symbol"))
+        extra = f"\nSentiment score: {sentiment['score']}/100 ({sentiment['direction']}), components: {sentiment['components']}"
+        if patterns:
+            extra += f"\nEvent patterns (historical): {patterns}"
+    except Exception:
+        pass
+    user = f"${token.get('token_symbol','?')}\nSosoValue context: {json.dumps(sv_context)}{extra}"
     return _call_bedrock(system, user)
 
 

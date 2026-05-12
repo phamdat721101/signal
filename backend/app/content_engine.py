@@ -379,6 +379,18 @@ def analyze_signals(token: dict) -> list[dict]:
                             "direction": "bearish", "emoji": "⚠️",
                             "finding": f"Divergence: Institutions selling (${etf_flow/1e6:.0f}M) while price pumps — caution"})
 
+    # News sentiment from multi-source aggregator
+    try:
+        from app.sentiment_engine import compute_sentiment
+        sentiment = compute_sentiment(token["token_symbol"])
+        if abs(sentiment["score"]) > 30:
+            d = "bullish" if sentiment["score"] > 0 else "bearish"
+            signals.append({"type": "NEWS_SENTIMENT", "severity": min(5, abs(sentiment["score"]) // 20),
+                            "direction": d, "emoji": "📰",
+                            "finding": f"Multi-source sentiment: {sentiment['score']:+d}/100 ({sentiment['direction']})"})
+    except Exception:
+        pass
+
     return sorted(signals, key=lambda s: s["severity"], reverse=True)
 
 
@@ -749,6 +761,19 @@ def assemble_card(token: dict, signals: list[dict], narrative: dict) -> dict:
             "key_findings": (token["sv_research"].get("keyFindings") or [])[:3],
             "chart_url": token["sv_research"].get("chartUrl", ""),
         }
+    # Sentiment score from sentiment_engine
+    try:
+        from app.sentiment_engine import compute_sentiment, record_event
+        sentiment = compute_sentiment(token["token_symbol"])
+        card["sentiment_score"] = sentiment["score"]
+        card["sentiment_direction"] = sentiment["direction"]
+        # Record events for outcome tracking
+        if sentiment["events"] and token.get("price", 0) > 0:
+            for evt in sentiment["events"]:
+                record_event(token["token_symbol"], evt, sentiment["score"], token["price"])
+    except Exception:
+        card["sentiment_score"] = 0
+        card["sentiment_direction"] = "neutral"
     return card
 
 

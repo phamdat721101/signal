@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # SosoValue
     sosovalue_api_key: str = ""
 
+    # News sources
+    cryptopanic_api_key: str = ""
+
     @property
     def json_rpc_url(self) -> str:
         return self.testnet_json_rpc_url if self.network == "testnet" else self.local_json_rpc_url
