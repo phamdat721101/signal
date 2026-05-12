@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+import traceback
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -129,7 +130,11 @@ async def global_exception_handler(request: Request, exc: Exception):
     message = str(exc)
     if isinstance(exc, HTTPException):
         return JSONResponse(status_code=exc.status_code, content={"error": {"code": code, "message": exc.detail}})
-    error_tracker.track(code, message)
+    error_tracker.track(code, message, context={
+        "path": request.url.path,
+        "method": request.method,
+        "trace": traceback.format_exc()[-1000:],
+    })
     return JSONResponse(status_code=500, content={"error": {"code": code, "message": message}})
 
 
@@ -158,6 +163,17 @@ async def health():
 async def get_errors(code: str | None = Query(default=None)):
     if code:
         return {"errors": error_tracker.get_by_code(code)}
+
+
+@app.get("/api/crash-logs")
+async def get_crash_logs(lines: int = Query(default=50, le=200)):
+    """Read persistent crash logs (survives restarts)."""
+    from app.error_tracker import _LOG_DIR
+    log_file = _LOG_DIR / "crash.log"
+    if not log_file.exists():
+        return {"logs": [], "summary": error_tracker.summary()}
+    tail = log_file.read_text().strip().split("\n")[-lines:]
+    return {"logs": tail, "summary": error_tracker.summary()}
 
 
 _SKILL_MD = """# Signal Trading Intelligence API

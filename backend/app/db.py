@@ -17,10 +17,14 @@ def _get_conn():
         settings = get_settings()
         if not settings.database_url:
             return None
-        # Strip pgbouncer param not supported by psycopg2
         url = settings.database_url.split("?")[0]
-        _conn = psycopg2.connect(url)
-        _conn.autocommit = True
+        try:
+            _conn = psycopg2.connect(url, connect_timeout=5)
+            _conn.autocommit = True
+        except psycopg2.OperationalError as e:
+            logger.warning(f"DB connection failed (will retry next call): {e}")
+            _conn = None
+            return None
     return _conn
 
 

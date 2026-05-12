@@ -1,8 +1,23 @@
-"""Error tracker with circuit breaker and auto-fix capabilities."""
+"""Error tracker with circuit breaker, persistent crash logging, and auto-fix capabilities."""
+import json
+import logging
+import os
 import time
 import traceback
 from collections import deque
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Callable, Any
+
+# Persistent crash log — survives restarts
+_LOG_DIR = Path(os.environ.get("LOG_DIR", "/tmp/signal-logs"))
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+_crash_logger = logging.getLogger("signal.crash")
+_crash_logger.setLevel(logging.ERROR)
+_handler = RotatingFileHandler(_LOG_DIR / "crash.log", maxBytes=5_000_000, backupCount=3)
+_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+_crash_logger.addHandler(_handler)
 
 
 class CircuitBreaker:
@@ -54,14 +69,18 @@ class ErrorTracker:
         self._breakers: dict[str, CircuitBreaker] = {}
 
     def track(self, code: str, message: str, context: dict | None = None):
+        stack = "".join(traceback.format_stack()[-3:])[:1000]
         entry = {
             "code": code,
             "message": message[:500],
             "context": context or {},
-            "stack": "".join(traceback.format_stack()[-3:])[:1000],
+            "stack": stack,
             "timestamp": time.time(),
             "count": 1,
         }
+        # Persist to file (survives restarts)
+        _crash_logger.error(json.dumps({"code": code, "message": message[:300],
+                                         "context": context or {}, "stack": stack[:500]}))
         if self._errors and self._errors[-1]["code"] == code:
             self._errors[-1]["count"] += 1
             self._errors[-1]["timestamp"] = entry["timestamp"]
