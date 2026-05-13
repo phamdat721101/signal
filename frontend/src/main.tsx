@@ -20,7 +20,7 @@ import './index.css';
 const wagmiConfig = createConfig({
   connectors: [initiaPrivyWalletConnector],
   chains: [config.chain],
-  transports: { [config.chain.id]: http() },
+  transports: { [config.chain.id]: http() } as any,
 });
 
 const queryClient = new QueryClient({
