@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { usePrivy } from '@privy-io/react-auth';
+// import { usePrivy } from '@privy-io/react-auth';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createPublicClient, http } from 'viem';
 import { useCards } from '../hooks/useCards';
@@ -12,6 +12,7 @@ import Onboarding from '../components/Onboarding';
 import Paywall from '../components/Paywall';
 import { useApeTransaction } from '../hooks/useApeTransaction';
 import { useSession } from '../hooks/useSession';
+import { useWallet } from '../hooks/useWallet';
 
 const publicClient = createPublicClient({ chain: config.chain, transport: http() });
 
@@ -213,8 +214,7 @@ export default function Feed() {
   const [showRareReveal, setShowRareReveal] = useState<string | null>(null);
 
   const { data, isLoading } = useCards(0, 50, cardFilter === 'all' ? undefined : cardFilter);
-  const { user, login } = usePrivy();
-  const initiaAddress = user?.wallet?.address || "";
+  const { address: initiaAddress, login } = useWallet();
   const navigate = useNavigate();
   const { apeOnChain } = useApeTransaction();
   const { claimGas } = useSession();

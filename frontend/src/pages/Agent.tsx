@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { usePrivy } from '@privy-io/react-auth';
+// import { usePrivy } from '@privy-io/react-auth';
 import { useAgent, useAgentStats, useAgentNotifications, useSaveAgent, useToggleAgent } from '../hooks/useAgent';
 import { normalizeAddress } from '../config';
+import { useWallet } from '../hooks/useWallet';
 
 const STRATEGIES = [
   { id: 'conservative', label: '🛡️ Conservative', desc: 'Low risk, high confidence only' },
@@ -10,8 +11,8 @@ const STRATEGIES = [
 ] as const;
 
 export default function Agent() {
-  const { user } = usePrivy();
-  const address = user?.wallet?.address ? normalizeAddress(user.wallet.address) : undefined;
+  const { address: walletAddr } = useWallet();
+  const address = walletAddr ? normalizeAddress(walletAddr) : undefined;
   const { data } = useAgent(address);
   const { data: stats } = useAgentStats(address);
   const { data: notifs } = useAgentNotifications(address);

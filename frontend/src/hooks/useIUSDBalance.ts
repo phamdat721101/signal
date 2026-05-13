@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { createPublicClient, formatEther, http } from 'viem';
-import { usePrivy } from '@privy-io/react-auth';
+// import { usePrivy } from '@privy-io/react-auth';
 import { config, normalizeAddress } from '../config';
+import { useWallet } from './useWallet';
 
 const BALANCE_OF_ABI = [
   { name: 'balanceOf', type: 'function', inputs: [{ name: 'account', type: 'address' }], outputs: [{ type: 'uint256' }], stateMutability: 'view' },
@@ -32,9 +33,8 @@ async function fetchSessionBalance(evmAddress: `0x${string}`): Promise<bigint> {
 }
 
 export function useIUSDBalance() {
-  const { user } = usePrivy();
-  const initiaAddress = user?.wallet?.address || "";
-  const evmAddress = initiaAddress ? normalizeAddress(initiaAddress) as `0x${string}` : undefined;
+  const { address: walletAddr } = useWallet();
+  const evmAddress = walletAddr ? normalizeAddress(walletAddr) as `0x${string}` : undefined;
 
   const { data, isLoading } = useQuery({
     queryKey: ['iusd-balance', evmAddress],

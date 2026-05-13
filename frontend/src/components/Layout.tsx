@@ -1,8 +1,9 @@
 import { NavLink } from 'react-router-dom';
 import type { ReactNode } from 'react';
-import { usePrivy } from '@privy-io/react-auth';
+// import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
 import { config } from '../config';
+import { useWallet } from '../hooks/useWallet';
 
 const navItems = [
   { to: '/', icon: 'bolt', label: 'Feed', fill: true },
@@ -12,8 +13,7 @@ const navItems = [
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
-  const { user, login, logout, authenticated } = usePrivy();
-  const walletAddress = user?.wallet?.address || "";
+  const { address: walletAddress, isConnected: authenticated, login, logout } = useWallet();
   const { data: rewardsData } = useQuery({
     queryKey: ['rewards', walletAddress],
     queryFn: async () => {

@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { encodeFunctionData, keccak256, toHex } from 'viem';
-import { useWallets } from '@privy-io/react-auth';
+// import { useWallets } from '@privy-io/react-auth';
+import { useWallet } from './useWallet';
 import { config } from '../config';
 import type { Card } from './useCards';
 
@@ -33,19 +34,16 @@ function symbolToAddress(symbol: string): `0x${string}` {
 }
 
 export function useApeTransaction() {
-  const { wallets } = useWallets();
+  const { sendTx, isConnected } = useWallet();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const apeOnChain = useCallback(async (card: Card): Promise<string | null> => {
-    const wallet = wallets.find(w => w.walletClientType === 'privy');
-    if (!wallet || config.contractAddress === '0x0000000000000000000000000000000000000000') return null;
+    if (!isConnected || config.contractAddress === '0x0000000000000000000000000000000000000000') return null;
 
     setIsLoading(true);
     setError(null);
     try {
-      try { await wallet.switchChain(config.chain.id); } catch { /* already on chain */ }
-      const provider = await wallet.getEthereumProvider();
       const isBull = card.verdict === 'APE';
       const confidence = Math.min(95, Math.max(50, card.risk_score || 70));
       const entryWei = BigInt(Math.round(card.price * 1e18));
@@ -59,11 +57,7 @@ export function useApeTransaction() {
         args: [symbolToAddress(card.token_symbol), isBull, confidence, targetWei, entryWei],
       });
 
-      const txHash = await provider.request({
-        method: 'eth_sendTransaction',
-        params: [{ from: wallet.address, to: config.contractAddress, data, gas: '0x7A120', gasPrice: '0x0' }],
-      }) as string;
-
+      const txHash = await sendTx(config.contractAddress, data);
       setIsLoading(false);
       return txHash;
     } catch (e: any) {
@@ -71,7 +65,7 @@ export function useApeTransaction() {
       setIsLoading(false);
       return null;
     }
-  }, [wallets]);
+  }, [sendTx, isConnected]);
 
   return { apeOnChain, isLoading, error };
 }

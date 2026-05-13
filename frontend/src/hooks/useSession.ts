@@ -1,8 +1,9 @@
 import { useState, useCallback } from 'react';
-import { usePrivy, useWallets } from '@privy-io/react-auth';
+// import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { createPublicClient, encodeFunctionData, http, parseEther, formatEther } from 'viem';
 import { config, normalizeAddress } from '../config';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
+import { useWallet } from './useWallet';
 
 const MOCK_IUSD_ABI = [
   { name: 'approve', type: 'function', inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [{ type: 'bool' }], stateMutability: 'nonpayable' },
@@ -29,9 +30,7 @@ export function useSession() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [steps, setSteps] = useState<TxStep[]>([]);
-  const { user } = usePrivy();
-  const { wallets } = useWallets();
-  const rawAddress = user?.wallet?.address || '';
+  const { address: rawAddress, sendTx } = useWallet();
   const address = normalizeAddress(rawAddress);
   const queryClient = useQueryClient();
 
@@ -54,19 +53,7 @@ export function useSession() {
     staleTime: 10_000,
   });
 
-  // Send tx via Privy wallet with chain switch
-  const sendTx = useCallback(async (contractAddr: string, data: string): Promise<string> => {
-    const wallet = wallets.find(w => w.walletClientType === 'privy') || wallets[0];
-    if (!wallet) throw new Error('No wallet connected');
-    // Switch to correct chain
-    try { await wallet.switchChain(config.chain.id); } catch { /* already on chain */ }
-    const provider = await wallet.getEthereumProvider();
-    const hash = await provider.request({
-      method: 'eth_sendTransaction',
-      params: [{ from: wallet.address, to: contractAddr, data, gas: '0x7A120', gasPrice: '0x0' }],
-    });
-    return hash as string;
-  }, [wallets]);
+  // Send tx via wagmi (provided by useWallet hook)
 
   // Faucet: use backend endpoint (deployer mints to user — most reliable)
   const claimFaucet = useCallback(async () => {

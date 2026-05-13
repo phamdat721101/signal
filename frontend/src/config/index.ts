@@ -12,7 +12,7 @@ const localChain = defineChain({
 });
 
 const testnetChain = defineChain({
-  id: 7891,
+  id: 2124225178762456,
   name: 'Initia Testnet',
   nativeCurrency: { name: 'INIT', symbol: 'INIT', decimals: 18 },
   rpcUrls: {

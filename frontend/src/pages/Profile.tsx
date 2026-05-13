@@ -1,12 +1,13 @@
-import { usePrivy } from '@privy-io/react-auth';
+// import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
 import { config, shareToX, explorerTxUrl, normalizeAddress } from '../config';
 import { useSession } from '../hooks/useSession';
 import { useConviction } from '../hooks/useConviction';
+import { useWallet } from '../hooks/useWallet';
 
 export default function Profile() {
-  const { user } = usePrivy();
-  const address = normalizeAddress(user?.wallet?.address || '');
+  const { address: walletAddr } = useWallet();
+  const address = normalizeAddress(walletAddr);
   const { claimFaucet, claimGas, approveAndDeposit, closeSession, clearSteps, loading, error, steps, iusdBalance } = useSession();
   const { data: convictionData } = useConviction(address);
 
