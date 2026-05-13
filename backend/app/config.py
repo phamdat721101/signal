@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     # News sources
     cryptopanic_api_key: str = ""
 
+    # Stellar / Trustless Work
+    trustless_api_key: str = ""
+    trustless_api_url: str = "https://dev.api.trustlesswork.com"
+    stellar_network: str = "testnet"
+    stellar_platform_address: str = ""
+    stellar_platform_secret: str = ""
+    stellar_fee_address: str = ""
+    stellar_admin_address: str = ""
+
     @property
     def json_rpc_url(self) -> str:
         return self.testnet_json_rpc_url if self.network == "testnet" else self.local_json_rpc_url

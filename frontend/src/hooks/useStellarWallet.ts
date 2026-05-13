@@ -1,34 +1,40 @@
-import { useState, useCallback } from 'react';
-
-declare global {
-  interface Window { freighterApi?: any; }
-}
+import { useState, useCallback, useEffect } from 'react';
+import { isConnected, requestAccess, getAddress, signTransaction } from '@stellar/freighter-api';
 
 /**
- * Stellar wallet hook (Freighter extension).
- * Used for funding escrows on the Signal Marketplace.
+ * Stellar wallet hook using @stellar/freighter-api.
+ * Handles connection, address retrieval, and XDR signing for escrow funding.
  */
 export function useStellarWallet() {
   const [address, setAddress] = useState('');
   const [connected, setConnected] = useState(false);
+  const [installed, setInstalled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    isConnected().then(({ isConnected: ok }) => {
+      setInstalled(ok);
+      if (ok) {
+        getAddress().then(({ address: addr }) => {
+          if (addr) { setAddress(addr); setConnected(true); }
+        });
+      }
+    });
+  }, []);
 
   const connect = useCallback(async () => {
-    const freighter = window.freighterApi;
-    if (!freighter) {
+    const { isConnected: ok } = await isConnected();
+    if (!ok) {
       window.open('https://www.freighter.app/', '_blank');
       return;
     }
-    const { address: addr } = await freighter.getAddress();
-    if (addr) {
-      setAddress(addr);
-      setConnected(true);
-    }
+    const { address: addr, error } = await requestAccess();
+    if (error) throw new Error(error);
+    if (addr) { setAddress(addr); setConnected(true); }
   }, []);
 
   const signXdr = useCallback(async (xdr: string): Promise<string> => {
-    const freighter = window.freighterApi;
-    if (!freighter) throw new Error('Freighter not installed');
-    const { signedTxXdr } = await freighter.signTransaction(xdr, { networkPassphrase: 'Test SDF Network ; September 2015' });
+    const { signedTxXdr, error } = await signTransaction(xdr, { network: 'TESTNET' });
+    if (error) throw new Error(error);
     return signedTxXdr;
   }, []);
 
@@ -37,5 +43,5 @@ export function useStellarWallet() {
     setConnected(false);
   }, []);
 
-  return { address, connected, connect, disconnect, signXdr };
+  return { address, connected, installed, connect, disconnect, signXdr };
 }
