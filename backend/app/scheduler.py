@@ -180,10 +180,60 @@ def expire_old_cards():
             logger.info(f"Expired {cur.rowcount} cards")
 
 
+def resolve_expired_escrows():
+    """Auto-resolve escrows older than 24h based on price outcome."""
+    from app.db import _get_conn
+    conn = _get_conn()
+    if not conn:
+        return
+    try:
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT e.id, e.signal_id, e.escrow_contract, e.amount_usdc,
+                       c.token_symbol, c.price as entry_price, c.verdict
+                FROM signal_escrows e
+                JOIN cards c ON c.id = e.signal_id
+                WHERE e.status = 'funded' AND e.created_at < NOW() - INTERVAL '24 hours'
+                LIMIT 10
+            """)
+            rows = cur.fetchall()
+        if not rows:
+            return
+        from app.price_feed import get_prices
+        import asyncio
+        from app.trustless_escrow import resolve_signal_escrow
+        for row in rows:
+            try:
+                prices = get_prices([row["token_symbol"]])
+                current_price = prices.get(row["token_symbol"], {}).get("price", 0)
+                if not current_price or not row["entry_price"]:
+                    continue
+                is_bull = row["verdict"] == "APE"
+                pnl_pct = (current_price - row["entry_price"]) / row["entry_price"] * 100
+                profitable = (pnl_pct > 0) if is_bull else (pnl_pct < 0)
+                evidence = f"{row['token_symbol']}: entry={row['entry_price']:.4f} current={current_price:.4f} pnl={pnl_pct:.2f}%"
+                asyncio.get_event_loop().run_until_complete(
+                    resolve_signal_escrow(row["escrow_contract"], profitable, evidence)
+                )
+                with conn.cursor() as cur2:
+                    cur2.execute(
+                        "UPDATE signal_escrows SET status=%s, profitable=%s, evidence=%s, resolved_at=NOW() WHERE id=%s",
+                        ("resolved" if profitable else "refunded", profitable, evidence, row["id"]))
+                logger.info(f"Escrow {row['escrow_contract']} resolved: profitable={profitable}")
+            except Exception as e:
+                logger.warning(f"Escrow resolution failed for {row['id']}: {e}")
+    except Exception as e:
+        logger.warning(f"resolve_expired_escrows error: {e}")
+
+
 def start_scheduler():
+    from datetime import datetime, timedelta
     from app.content_engine import run_card_generation_cycle
 
-    scheduler.add_job(run_card_generation_cycle, "interval", minutes=10, id="card_gen", max_instances=1)
+    # Delay first run by 60s so uvicorn starts accepting connections immediately
+    first_run = datetime.now() + timedelta(seconds=60)
+    scheduler.add_job(run_card_generation_cycle, "interval", minutes=10, id="card_gen", max_instances=1, next_run_time=first_run)
     scheduler.add_job(monitor_positions, "interval", minutes=10, id="position_monitor", max_instances=1)
     scheduler.add_job(expire_old_cards, 'interval', minutes=10, id='expire_cards', max_instances=1)
     from app.content_engine import backfill_chart_data
@@ -206,8 +256,9 @@ def start_scheduler():
     from app.sentiment_engine import refresh_sentiment
     scheduler.add_job(refresh_news, "interval", minutes=10, id="news_refresh", max_instances=1)
     scheduler.add_job(refresh_sentiment, "interval", minutes=10, id="sentiment_refresh", max_instances=1)
+    scheduler.add_job(resolve_expired_escrows, "interval", minutes=30, id="escrow_resolve", max_instances=1)
     scheduler.start()
-    logger.info("Scheduler started: card_gen(5m) + position_monitor(5m) + expire_cards(10m) + backfill_charts(30m) + sosovalue_cache(5m) + insight_cards(30m) + oracle_refresh(30m) + lp_advisory(15m) + user_agents(5m) + agent_learn(60m)")
+    logger.info("Scheduler started: card_gen(5m) + position_monitor(5m) + expire_cards(10m) + backfill_charts(30m) + sosovalue_cache(5m) + insight_cards(30m) + oracle_refresh(30m) + lp_advisory(15m) + user_agents(5m) + agent_learn(60m) + escrow_resolve(30m)")
 
 
 def stop_scheduler():

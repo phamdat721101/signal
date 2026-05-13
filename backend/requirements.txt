@@ -9,5 +9,6 @@ pydantic-settings>=2.6.0
 eth-abi
 psycopg2-binary>=2.9.9
 boto3
+stellar-sdk>=9.0.0
 x402[fastapi]
 cdp-sdk

@@ -38,10 +38,30 @@ def get_x402_middleware_args() -> tuple[dict, x402ResourceServer] | tuple[None, 
     if not settings.x402_receiver_address:
         return (None, None)
 
-    facilitator = HTTPFacilitatorClient(FacilitatorConfig(
-        url=settings.x402_facilitator_url,
-        auth_provider=_build_cdp_auth_provider(),
-    ))
+    try:
+        import signal as _sig
+
+        class _Timeout(Exception):
+            pass
+
+        def _handler(signum, frame):
+            raise _Timeout()
+
+        old = _sig.signal(_sig.SIGALRM, _handler)
+        _sig.alarm(10)  # 10s timeout for facilitator connection
+        try:
+            facilitator = HTTPFacilitatorClient(FacilitatorConfig(
+                url=settings.x402_facilitator_url,
+                auth_provider=_build_cdp_auth_provider(),
+            ))
+        finally:
+            _sig.alarm(0)
+            _sig.signal(_sig.SIGALRM, old)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"x402 facilitator init failed (skipping): {e}")
+        return (None, None)
+
     server = x402ResourceServer(facilitator)
     server.register(settings.x402_network, ExactEvmServerScheme())
     server.register_extension(bazaar_resource_server_extension)

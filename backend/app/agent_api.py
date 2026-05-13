@@ -107,21 +107,41 @@ async def get_context():
 
 @router.get("/my-agent")
 async def get_my_agent(address: str = Query(...)):
-    """Get user's agent config + learned preferences."""
+    """Get user's agent config + learned preferences + wallet."""
     agent = db.get_user_agent(address)
     if not agent:
         return {"agent": None, "learned": db.compute_preferences_from_swipes(address)}
+    # Attach stellar wallet if exists
+    conn = db._get_conn()
+    if conn:
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT stellar_public_key FROM agent_wallets WHERE user_address=%s", (address,))
+            row = cur.fetchone()
+            if row:
+                agent["stellar_public_key"] = row["stellar_public_key"]
     return {"agent": agent, "learned": agent.get("learned_preferences") or db.compute_preferences_from_swipes(address)}
 
 
 @router.put("/my-agent")
 async def upsert_my_agent(request: dict):
-    """Create or update user's agent config."""
+    """Create or update user's agent config. Generates OWS wallet on first create."""
     address = request.get("address", "")
     if not address:
         return {"error": "address required"}
     config = {k: v for k, v in request.items() if k != "address"}
+
+    # Check if agent already exists
+    existing = db.get_user_agent(address)
     agent = db.upsert_user_agent(address, config)
+
+    # Generate OWS wallet on first creation
+    if not existing and agent:
+        from app.trustless_escrow import generate_agent_wallet
+        wallet = generate_agent_wallet()
+        _store_agent_wallet(address, wallet["public_key"], wallet["secret"])
+        agent["stellar_public_key"] = wallet["public_key"]
+
     # Auto-compute learned preferences on first create
     if agent and not agent.get("learned_preferences"):
         prefs = db.compute_preferences_from_swipes(address)
@@ -134,6 +154,33 @@ async def upsert_my_agent(request: dict):
                                 (_json.dumps(prefs), address))
                 agent["learned_preferences"] = prefs
     return {"agent": agent}
+
+
+def _store_agent_wallet(user_address: str, public_key: str, secret: str):
+    """Store agent's Stellar wallet in DB."""
+    conn = db._get_conn()
+    if not conn:
+        return
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO agent_wallets (user_address, stellar_public_key, encrypted_secret)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_address) DO NOTHING
+        """, (user_address, public_key, secret))
+        cur.execute("UPDATE user_agents SET stellar_public_key=%s WHERE user_address=%s",
+                    (public_key, user_address))
+
+
+def _get_agent_wallet_secret(user_address: str) -> str | None:
+    """Retrieve agent wallet secret for signing."""
+    conn = db._get_conn()
+    if not conn:
+        return None
+    from psycopg2.extras import RealDictCursor
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT encrypted_secret FROM agent_wallets WHERE user_address=%s", (user_address,))
+        row = cur.fetchone()
+    return row["encrypted_secret"] if row else None
 
 
 @router.post("/my-agent/toggle")
@@ -174,3 +221,92 @@ async def get_agent_stats(address: str = Query(...)):
     total = row["total"] or 0
     wins = row["wins"] or 0
     return {"total": total, "wins": wins, "win_rate": round(wins / max(total, 1) * 100, 1), "pnl_usd": round(float(row["pnl_usd"] or 0), 2)}
+
+
+# ─── Marketplace Endpoints (Trustless Work Escrow) ────────────
+
+@router.post("/marketplace/subscribe")
+async def subscribe_signal(request: dict):
+    """Subscribe to a signal — deploys escrow, returns unsigned XDR for funding."""
+    subscriber_stellar = request.get("subscriber_stellar", "")
+    signal_id = request.get("signal_id")
+    amount = request.get("amount_usdc", 5.0)
+    if not subscriber_stellar or not signal_id:
+        return {"error": "subscriber_stellar and signal_id required"}
+
+    # Get signal provider's stellar address (agent wallet)
+    card = db.get_card_by_id(signal_id)
+    if not card:
+        return {"error": "signal not found"}
+
+    # Use platform address as provider for AI-generated signals
+    from app.trustless_escrow import deploy_escrow, fund_escrow, PLATFORM_ADDRESS
+    provider_stellar = PLATFORM_ADDRESS
+
+    # Deploy escrow
+    deploy_result = await deploy_escrow(subscriber_stellar, provider_stellar, amount, signal_id)
+    escrow_address = deploy_result.get("contractId", deploy_result.get("address", ""))
+
+    # Store in DB
+    conn = db._get_conn()
+    if conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO signal_escrows (signal_id, subscriber_stellar, provider_stellar, escrow_contract, amount_usdc, status)
+                VALUES (%s, %s, %s, %s, %s, 'deployed')
+            """, (signal_id, subscriber_stellar, provider_stellar, escrow_address, amount))
+
+    # Get funding XDR for user to sign
+    fund_result = await fund_escrow(escrow_address, subscriber_stellar)
+
+    return {
+        "escrow_address": escrow_address,
+        "unsigned_xdr": fund_result.get("unsignedXDR", ""),
+        "amount_usdc": amount,
+        "signal_id": signal_id,
+    }
+
+
+@router.get("/marketplace/escrows")
+async def get_user_escrows(address: str = Query(...)):
+    """Get user's active escrows."""
+    conn = db._get_conn()
+    if not conn:
+        return {"escrows": []}
+    from psycopg2.extras import RealDictCursor
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT e.*, c.token_symbol, c.verdict, c.price, c.hook
+            FROM signal_escrows e
+            LEFT JOIN cards c ON c.id = e.signal_id
+            WHERE e.subscriber_stellar = %s
+            ORDER BY e.created_at DESC LIMIT 20
+        """, (address,))
+        rows = cur.fetchall()
+    return {"escrows": [dict(r) for r in rows]}
+
+
+@router.get("/marketplace/providers")
+async def get_providers():
+    """Get signal providers with track records."""
+    conn = db._get_conn()
+    if not conn:
+        return {"providers": []}
+    from psycopg2.extras import RealDictCursor
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT 'AI Signal Engine' as name, COUNT(*) as total_signals,
+                   SUM(CASE WHEN was_correct THEN 1 ELSE 0 END) as wins,
+                   ROUND(AVG(outcome_pct)::numeric, 2) as avg_pnl
+            FROM agent_predictions WHERE resolved_at IS NOT NULL
+        """)
+        row = cur.fetchone()
+    total = row["total_signals"] or 0
+    wins = row["wins"] or 0
+    return {"providers": [{
+        "name": "AI Signal Engine",
+        "win_rate": round(wins / max(total, 1) * 100, 1),
+        "total_signals": total,
+        "avg_pnl": float(row["avg_pnl"] or 0),
+        "price_usdc": 5.0,
+    }]}

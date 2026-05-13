@@ -26,11 +26,9 @@ def _cg_can_call() -> bool:
 
 
 def _cg_wait_and_record():
-    """Record a CoinGecko call. Sleeps 2s if near limit, skips if over."""
+    """Record a CoinGecko call. Skip immediately if over limit (no blocking)."""
     if not _cg_can_call():
-        time.sleep(3)
-        if not _cg_can_call():
-            return False
+        return False
     _cg_timestamps.append(time.time())
     return True
 
@@ -949,7 +947,7 @@ def run_card_generation_cycle():
         return
 
     created = 0
-    for token in new_tokens[:15]:
+    for token in new_tokens[:8]:
         try:
             # Stage 2: Analyze signals
             signals = analyze_signals(token)
@@ -1168,10 +1166,13 @@ def generate_card_from_signal(signal_id: int) -> int:
 
     # Chart data
     if cg_id:
-        time.sleep(2)
-        chart_prices = fetch_chart_data(cg_id)
-        card["sparkline"] = _build_sparkline(chart_prices) if chart_prices else []
-        card["patterns"] = detect_patterns(chart_prices) if chart_prices else []
+        if _cg_wait_and_record():
+            chart_prices = fetch_chart_data(cg_id)
+            card["sparkline"] = _build_sparkline(chart_prices) if chart_prices else []
+            card["patterns"] = detect_patterns(chart_prices) if chart_prices else []
+        else:
+            card["sparkline"] = []
+            card["patterns"] = []
 
     card["source"] = "provider"
     card["provider"] = signal.get("provider", "")

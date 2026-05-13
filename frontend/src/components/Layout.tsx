@@ -7,6 +7,7 @@ import { useWallet } from '../hooks/useWallet';
 
 const navItems = [
   { to: '/', icon: 'bolt', label: 'Feed', fill: true },
+  { to: '/marketplace', icon: 'storefront', label: 'Market' },
   { to: '/agent', icon: 'smart_toy', label: 'Agent' },
   { to: '/portfolio', icon: 'account_balance_wallet', label: 'Portfolio' },
   { to: '/profile', icon: 'person', label: 'Profile' },

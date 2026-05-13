@@ -69,21 +69,16 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info(f"Starting Initia Signal backend | network={settings.network}")
     from app.scheduler import start_scheduler
-    if settings.contract_address:
-        try:
-            get_chain()
-            logger.info("Chain client connected")
-        except Exception as e:
-            logger.warning(f"Chain client init failed: {e}")
-    else:
-        logger.info("No CONTRACT_ADDRESS — running in simulation mode (in-memory signals)")
-    # DB connection test (no table creation — tables already exist on prod)
+    if not settings.contract_address:
+        logger.info("No CONTRACT_ADDRESS — running in simulation mode")
+    # DB connection test
     if settings.database_url:
         from app.db import _get_conn
         if _get_conn():
             logger.info("DB connected")
         else:
             logger.warning("DB connection failed")
+    # Chain connects lazily on first use (non-blocking startup)
     start_scheduler()
     yield
     from app.scheduler import stop_scheduler
@@ -99,13 +94,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# x402 payment middleware (Base/USDC)
-from app.x402_payment import get_x402_middleware_args
-_x402_routes, _x402_server = get_x402_middleware_args()
-if _x402_routes:
-    from x402.http.middleware.fastapi import PaymentMiddlewareASGI
-    app.add_middleware(PaymentMiddlewareASGI, routes=_x402_routes, server=_x402_server)
-
+# x402 disabled — CDP facilitator hangs on import
 from app.agent_api import router as agent_v2_router
 app.include_router(agent_v2_router)
 
