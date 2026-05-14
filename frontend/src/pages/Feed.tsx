@@ -210,7 +210,7 @@ export default function Feed() {
   const [showConviction, setShowConviction] = useState(false);
   const [pendingCard, setPendingCard] = useState<any>(null);
   const [fundingGas, setFundingGas] = useState(false);
-  const [cardFilter, setCardFilter] = useState<string>('all');
+  const [cardFilter] = useState<string>('all');
   const [showRareReveal, setShowRareReveal] = useState<string | null>(null);
 
   const { data, isLoading } = useCards(0, 50, cardFilter === 'all' ? undefined : cardFilter);
