@@ -66,27 +66,17 @@ def set_cache(key: str, value):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
-    logger.info(f"Starting Initia Signal backend | network={settings.network}")
-    from app.scheduler import start_scheduler
-    if not settings.contract_address:
-        logger.info("No CONTRACT_ADDRESS — running in simulation mode")
-    # DB connection test
-    if settings.database_url:
-        from app.db import _get_conn
-        if _get_conn():
-            logger.info("DB connected")
-        else:
-            logger.warning("DB connection failed")
-    # Chain connects lazily on first use (non-blocking startup)
+    logger.info(f"Starting Initia Signal backend | network={get_settings().network}")
+    from app.scheduler import start_scheduler, stop_scheduler
     start_scheduler()
+    logger.info("Scheduler started")
     yield
-    from app.scheduler import stop_scheduler
     stop_scheduler()
     logger.info("Shutting down")
 
 
 app = FastAPI(title="Initia Signal API", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -94,7 +84,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# x402 disabled — CDP facilitator hangs on import
+# Agent API router
 from app.agent_api import router as agent_v2_router
 app.include_router(agent_v2_router)
 
@@ -196,12 +186,18 @@ async def skill_md():
 
 @app.get("/api/cards")
 async def get_cards_feed(offset: int = 0, limit: int = Query(default=20, le=50), card_type: str | None = Query(default=None)):
+    cache_key = f"cards:{offset}:{limit}:{card_type or 'all'}"
+    hit = cached(cache_key, ttl=60)
+    if hit:
+        return hit
     settings = get_settings()
     if not settings.database_url:
         return {"cards": [], "total": 0}
     from app.db import get_cards
     cards, total = get_cards(offset, limit, card_type=card_type)
-    return {"cards": cards, "total": total}
+    result = {"cards": cards, "total": total}
+    set_cache(cache_key, result)
+    return result
 
 
 @app.get("/api/cards/{card_id}")

@@ -9,6 +9,7 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 _conn = None
+_read_conn = None
 
 
 def _get_conn():
@@ -26,6 +27,23 @@ def _get_conn():
             _conn = None
             return None
     return _conn
+
+
+def _get_read_conn():
+    """Separate connection for API reads — never blocked by scheduler writes."""
+    global _read_conn
+    if _read_conn is None or _read_conn.closed:
+        settings = get_settings()
+        if not settings.database_url:
+            return _get_conn()
+        url = settings.database_url.split("?")[0]
+        try:
+            _read_conn = psycopg2.connect(url, connect_timeout=5)
+            _read_conn.autocommit = True
+        except psycopg2.OperationalError:
+            _read_conn = None
+            return _get_conn()
+    return _read_conn
 
 
 def init_db():
@@ -347,7 +365,7 @@ def insert_card(card: dict) -> int:
 
 
 def get_cards(offset: int = 0, limit: int = 20, status: str = "active", card_type: str | None = None) -> tuple[list[dict], int]:
-    conn = _get_conn()
+    conn = _get_read_conn()
     if not conn:
         return [], 0
     where = "WHERE status = %s AND (expires_at > NOW() OR expires_at IS NULL)"
