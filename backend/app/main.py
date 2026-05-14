@@ -66,18 +66,13 @@ def set_cache(key: str, value):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info(f"Starting Initia Signal backend | network={get_settings().network}")
-    # Pre-warm DB read connection so first /api/cards is fast
+    logger.info(f"Starting Initia Signal API | network={get_settings().network}")
     try:
         from app.db import _get_read_conn
         _get_read_conn()
     except Exception:
         pass
-    from app.scheduler import start_scheduler, stop_scheduler
-    start_scheduler()
-    logger.info("Scheduler started")
     yield
-    stop_scheduler()
     logger.info("Shutting down")
 
 

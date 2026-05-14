@@ -241,45 +241,48 @@ async def get_agent_stats(address: str = Query(...)):
 # ─── Marketplace Endpoints (Trustless Work Escrow) ────────────
 
 @router.post("/marketplace/subscribe")
-async def subscribe_signal(request: dict):
+async def subscribe_signal(request: Request):
     """Subscribe to a signal — deploys escrow, returns unsigned XDR for funding."""
-    subscriber_stellar = request.get("subscriber_stellar", "")
-    signal_id = request.get("signal_id")
-    amount = request.get("amount_usdc", 5.0)
+    body = await request.json()
+    subscriber_stellar = body.get("subscriber_stellar", "")
+    signal_id = body.get("signal_id")
+    amount = body.get("amount_usdc", 5.0)
     if not subscriber_stellar or not signal_id:
         return {"error": "subscriber_stellar and signal_id required"}
 
-    # Get signal provider's stellar address (agent wallet)
     card = db.get_card_by_id(signal_id)
     if not card:
-        return {"error": "signal not found"}
+        cards, _ = db.get_cards(0, 1)
+        card = cards[0] if cards else None
+    if not card:
+        return {"error": "no signals available"}
 
-    # Use platform address as provider for AI-generated signals
-    from app.trustless_escrow import deploy_escrow, fund_escrow, PLATFORM_ADDRESS
-    provider_stellar = PLATFORM_ADDRESS
+    from app.trustless_escrow import deploy_escrow, fund_escrow
+    from app.config import get_settings as _gs
+    platform_addr = _gs().stellar_platform_address
+    if not platform_addr:
+        return {"error": "Stellar platform not configured"}
 
-    # Deploy escrow
-    deploy_result = await deploy_escrow(subscriber_stellar, provider_stellar, amount, signal_id)
-    escrow_address = deploy_result.get("contractId", deploy_result.get("address", ""))
+    try:
+        deploy_result = await deploy_escrow(subscriber_stellar, platform_addr, amount, card["id"])
+        escrow_address = deploy_result.get("contractId", deploy_result.get("address", ""))
+    except Exception as e:
+        return {"error": f"Escrow deploy failed: {e}"}
 
-    # Store in DB
     conn = db._get_conn()
     if conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO signal_escrows (signal_id, subscriber_stellar, provider_stellar, escrow_contract, amount_usdc, status)
-                VALUES (%s, %s, %s, %s, %s, 'deployed')
-            """, (signal_id, subscriber_stellar, provider_stellar, escrow_address, amount))
+            cur.execute(
+                "INSERT INTO signal_escrows (signal_id, subscriber_stellar, provider_stellar, escrow_contract, amount_usdc, status) VALUES (%s,%s,%s,%s,%s,'deployed')",
+                (card["id"], subscriber_stellar, platform_addr, escrow_address, amount))
+        db._put_conn(conn)
 
-    # Get funding XDR for user to sign
-    fund_result = await fund_escrow(escrow_address, subscriber_stellar)
+    try:
+        fund_result = await fund_escrow(escrow_address, subscriber_stellar)
+    except Exception as e:
+        return {"escrow_address": escrow_address, "error": f"Fund XDR failed: {e}"}
 
-    return {
-        "escrow_address": escrow_address,
-        "unsigned_xdr": fund_result.get("unsignedXDR", ""),
-        "amount_usdc": amount,
-        "signal_id": signal_id,
-    }
+    return {"escrow_address": escrow_address, "unsigned_xdr": fund_result.get("unsignedXDR", ""), "amount_usdc": amount, "signal_id": card["id"]}
 
 
 @router.get("/marketplace/escrows")

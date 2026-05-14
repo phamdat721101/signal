@@ -8,42 +8,36 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-_conn = None
-_read_conn = None
+_pool = None
 
 
 def _get_conn():
-    global _conn
-    if _conn is None or _conn.closed:
-        settings = get_settings()
-        if not settings.database_url:
-            return None
-        url = settings.database_url.split("?")[0]
+    """Get a DB connection. Creates new one if needed."""
+    global _pool
+    settings = get_settings()
+    if not settings.database_url:
+        return None
+    url = settings.database_url.split("?")[0]
+    try:
+        conn = psycopg2.connect(url, connect_timeout=5)
+        conn.autocommit = True
+        return conn
+    except Exception as e:
+        logger.warning(f"DB connection failed: {e}")
+        return None
+
+
+def _put_conn(conn):
+    """Close connection after use."""
+    if conn:
         try:
-            _conn = psycopg2.connect(url, connect_timeout=5)
-            _conn.autocommit = True
-        except psycopg2.OperationalError as e:
-            logger.warning(f"DB connection failed (will retry next call): {e}")
-            _conn = None
-            return None
-    return _conn
+            conn.close()
+        except Exception:
+            pass
 
 
 def _get_read_conn():
-    """Separate connection for API reads — never blocked by scheduler writes."""
-    global _read_conn
-    if _read_conn is None or _read_conn.closed:
-        settings = get_settings()
-        if not settings.database_url:
-            return _get_conn()
-        url = settings.database_url.split("?")[0]
-        try:
-            _read_conn = psycopg2.connect(url, connect_timeout=5)
-            _read_conn.autocommit = True
-        except psycopg2.OperationalError:
-            _read_conn = None
-            return _get_conn()
-    return _read_conn
+    return _get_conn()
 
 
 def init_db():

@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings
-from functools import lru_cache
+from pathlib import Path
+
+_ENV_FILE = str(Path(__file__).resolve().parent.parent / ".env")
 
 
 class Settings(BaseSettings):
@@ -69,9 +71,13 @@ class Settings(BaseSettings):
         return self.testnet_lcd_url if self.network == "testnet" else self.local_lcd_url
 
     class Config:
-        env_file = ".env"
+        env_file = _ENV_FILE
 
 
-@lru_cache
+_settings = None
+
 def get_settings() -> Settings:
-    return Settings()
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
