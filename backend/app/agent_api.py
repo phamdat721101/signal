@@ -242,7 +242,7 @@ async def get_agent_stats(address: str = Query(...)):
 
 @router.post("/marketplace/subscribe")
 async def subscribe_signal(request: Request):
-    """Subscribe to a signal — deploys escrow, returns unsigned XDR for funding."""
+    """Subscribe to a signal — returns unsigned deploy XDR for user to sign."""
     body = await request.json()
     subscriber_stellar = body.get("subscriber_stellar", "")
     signal_id = body.get("signal_id")
@@ -257,7 +257,7 @@ async def subscribe_signal(request: Request):
     if not card:
         return {"error": "no signals available"}
 
-    from app.trustless_escrow import deploy_escrow, fund_escrow
+    from app.trustless_escrow import deploy_escrow
     from app.config import get_settings as _gs
     platform_addr = _gs().stellar_platform_address
     if not platform_addr:
@@ -265,24 +265,43 @@ async def subscribe_signal(request: Request):
 
     try:
         deploy_result = await deploy_escrow(subscriber_stellar, platform_addr, amount, card["id"])
-        escrow_address = deploy_result.get("contractId", deploy_result.get("address", ""))
     except Exception as e:
         return {"error": f"Escrow deploy failed: {e}"}
 
+    # Deploy returns unsigned XDR — user must sign and submit via /helper/send-transaction
+    unsigned_xdr = deploy_result.get("unsignedTransaction", "")
+
+    # Store pending escrow
     conn = db._get_conn()
     if conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO signal_escrows (signal_id, subscriber_stellar, provider_stellar, escrow_contract, amount_usdc, status) VALUES (%s,%s,%s,%s,%s,'deployed')",
-                (card["id"], subscriber_stellar, platform_addr, escrow_address, amount))
+                "INSERT INTO signal_escrows (signal_id, subscriber_stellar, provider_stellar, escrow_contract, amount_usdc, status) VALUES (%s,%s,%s,%s,%s,'pending')",
+                (card["id"], subscriber_stellar, platform_addr, "", amount))
         db._put_conn(conn)
 
-    try:
-        fund_result = await fund_escrow(escrow_address, subscriber_stellar)
-    except Exception as e:
-        return {"escrow_address": escrow_address, "error": f"Fund XDR failed: {e}"}
+    return {
+        "unsigned_xdr": unsigned_xdr,
+        "amount_usdc": amount,
+        "signal_id": card["id"],
+        "token_symbol": card.get("token_symbol", ""),
+        "verdict": card.get("verdict", ""),
+    }
 
-    return {"escrow_address": escrow_address, "unsigned_xdr": fund_result.get("unsignedXDR", ""), "amount_usdc": amount, "signal_id": card["id"]}
+
+@router.post("/marketplace/submit-tx")
+async def submit_signed_tx(request: Request):
+    """Submit a signed XDR to Stellar via Trustless Work helper."""
+    body = await request.json()
+    signed_xdr = body.get("signed_xdr", "")
+    if not signed_xdr:
+        return {"error": "signed_xdr required"}
+    try:
+        from app.trustless_escrow import submit_transaction
+        result = await submit_transaction(signed_xdr)
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        return {"error": f"Submit failed: {e}"}
 
 
 @router.get("/marketplace/escrows")

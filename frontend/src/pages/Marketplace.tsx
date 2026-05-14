@@ -31,16 +31,27 @@ export default function Marketplace() {
     mutationFn: async ({ signalId, amount }: { signalId: number; amount: number }) => {
       setSubscribing(true);
       try {
+        // Step 1: Get unsigned deploy XDR from backend
         const r = await fetch(`${BASE}/marketplace/subscribe`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ subscriber_stellar: stellar.address, signal_id: signalId, amount_usdc: amount }),
         });
         const data = await r.json();
-        if (data.unsigned_xdr) {
-          await stellar.signXdr(data.unsigned_xdr);
-          qc.invalidateQueries({ queryKey: ['marketplace-escrows'] });
-        }
+        if (data.error) throw new Error(data.error);
+        if (!data.unsigned_xdr) throw new Error('No transaction to sign');
+
+        // Step 2: User signs with Freighter
+        const signedXdr = await stellar.signXdr(data.unsigned_xdr);
+
+        // Step 3: Submit signed XDR to Stellar via Trustless Work
+        await fetch(`${config.backendUrl}/api/v2/agent/marketplace/submit-tx`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ signed_xdr: signedXdr }),
+        });
+
+        qc.invalidateQueries({ queryKey: ['marketplace-escrows'] });
         return data;
       } finally {
         setSubscribing(false);

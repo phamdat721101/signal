@@ -107,6 +107,16 @@ async def get_escrows_by_role(stellar_address: str, role: str = "depositor") -> 
         return resp.json()
 
 
+async def submit_transaction(signed_xdr: str) -> dict:
+    """Submit a signed XDR transaction to Stellar via Trustless Work helper."""
+    payload = {"signedXdr": signed_xdr}
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(f"{_api_url()}/helper/send-transaction", json=payload, headers=_headers())
+        if resp.status_code not in (200, 201):
+            raise Exception(f"{resp.status_code}: {resp.text}")
+        return resp.json()
+
+
 async def resolve_signal_escrow(escrow_address: str, profitable: bool, evidence: str) -> dict:
     """Full resolution: mark milestone + release/refund."""
     status = "completed" if profitable else "failed"
