@@ -1,12 +1,23 @@
 """Agent API v2 — structured endpoints for AI agent consumption."""
 import logging
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
 from app import db
 from app.db import _get_conn
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v2/agent", tags=["agent"])
+
+ALLOWED_AGENT_FIELDS = {"strategy", "max_position_usd", "tokens_whitelist", "tokens_blacklist",
+                         "min_confidence", "auto_execute", "risk_tolerance", "take_profit_pct",
+                         "stop_loss_pct", "is_active"}
+
+
+def _verify_ownership(body_address: str, header_address: str | None):
+    """Verify caller owns the address via X-Wallet-Address header."""
+    if not header_address or body_address.lower() != header_address.lower():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="X-Wallet-Address header must match request address")
 
 
 @router.get("/decisions")
@@ -124,12 +135,14 @@ async def get_my_agent(address: str = Query(...)):
 
 
 @router.put("/my-agent")
-async def upsert_my_agent(request: dict):
+async def upsert_my_agent(request: Request):
     """Create or update user's agent config. Generates OWS wallet on first create."""
-    address = request.get("address", "")
+    body = await request.json()
+    address = body.get("address", "")
     if not address:
         return {"error": "address required"}
-    config = {k: v for k, v in request.items() if k != "address"}
+    _verify_ownership(address, request.headers.get("x-wallet-address"))
+    config = {k: v for k, v in body.items() if k in ALLOWED_AGENT_FIELDS}
 
     # Check if agent already exists
     existing = db.get_user_agent(address)
@@ -184,11 +197,13 @@ def _get_agent_wallet_secret(user_address: str) -> str | None:
 
 
 @router.post("/my-agent/toggle")
-async def toggle_agent(request: dict):
+async def toggle_agent(request: Request):
     """Activate or deactivate user's agent."""
-    address = request.get("address", "")
+    body = await request.json()
+    address = body.get("address", "")
     if not address:
         return {"error": "address required"}
+    _verify_ownership(address, request.headers.get("x-wallet-address"))
     agent = db.get_user_agent(address)
     if not agent:
         return {"error": "no agent configured"}

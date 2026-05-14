@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     stellar_fee_address: str = ""
     stellar_admin_address: str = ""
 
+    # Admin
+    admin_token: str = ""
+
     @property
     def json_rpc_url(self) -> str:
         return self.testnet_json_rpc_url if self.network == "testnet" else self.local_json_rpc_url

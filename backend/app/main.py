@@ -67,6 +67,12 @@ def set_cache(key: str, value):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Starting Initia Signal backend | network={get_settings().network}")
+    # Pre-warm DB read connection so first /api/cards is fast
+    try:
+        from app.db import _get_read_conn
+        _get_read_conn()
+    except Exception:
+        pass
     from app.scheduler import start_scheduler, stop_scheduler
     start_scheduler()
     logger.info("Scheduler started")
@@ -125,14 +131,23 @@ async def health():
     }
 
 
+def _require_admin(request: Request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    admin = get_settings().admin_token
+    if not admin or token != admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
 @app.get("/api/errors")
-async def get_errors(code: str | None = Query(default=None)):
+async def get_errors(request: Request, code: str | None = Query(default=None)):
+    _require_admin(request)
     if code:
         return {"errors": error_tracker.get_by_code(code)}
 
 
 @app.get("/api/crash-logs")
-async def get_crash_logs(lines: int = Query(default=50, le=200)):
+async def get_crash_logs(request: Request, lines: int = Query(default=50, le=200)):
+    _require_admin(request)
     """Read persistent crash logs (survives restarts)."""
     from app.error_tracker import _LOG_DIR
     log_file = _LOG_DIR / "crash.log"
@@ -273,7 +288,10 @@ async def ape_card(card_id: int, request: Request):
     on_chain = bool(tx_hash)
     if not tx_hash:
         import os
-        tx_hash = f"0x{os.urandom(32).hex()}"
+        tx_hash = f"sim_{os.urandom(16).hex()}"
+        execution_type = "simulated"
+    else:
+        execution_type = "confirmed"
     # SoDex real execution
     sodex_order_id = None
     execution_type = "simulated"
@@ -781,11 +799,26 @@ async def get_pricing():
     return result
 
 
+_faucet_limits: dict[str, float] = {}
+FAUCET_COOLDOWN = 300  # 5 minutes
+
+
+def _check_faucet_rate(address: str):
+    now = time.time()
+    last = _faucet_limits.get(address, 0)
+    if now - last < FAUCET_COOLDOWN:
+        raise HTTPException(status_code=429, detail=f"Rate limited. Try again in {int(FAUCET_COOLDOWN - (now - last))}s")
+    _faucet_limits[address] = now
+
+
 @app.post("/api/payment/faucet")
 async def claim_faucet(address: str):
     address = normalize_address(address)
     if not address:
         raise HTTPException(status_code=400, detail="Invalid address")
+    if get_settings().network == "mainnet":
+        raise HTTPException(status_code=403, detail="Faucet disabled on mainnet")
+    _check_faucet_rate(address)
     settings = get_settings()
     if not settings.mock_iusd_address:
         raise HTTPException(status_code=400, detail="MockIUSD not deployed")
@@ -810,6 +843,9 @@ async def gas_faucet(address: str):
     address = normalize_address(address)
     if not address:
         raise HTTPException(status_code=400, detail="Invalid address")
+    if get_settings().network == "mainnet":
+        raise HTTPException(status_code=403, detail="Faucet disabled on mainnet")
+    _check_faucet_rate(address)
     try:
         chain = get_chain()
         from web3 import Web3

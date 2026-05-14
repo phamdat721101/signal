@@ -282,33 +282,34 @@ export default function Feed() {
     setShowConviction(false);
     setPendingCard(null);
     setSwipeFeedback('ape');
+    // Advance immediately for snappy UX
+    setTimeout(() => { setSwipeFeedback(null); setIndex(i => i + 1); }, 400);
+    // Network in background
     const address = evmAddress || '';
     let txHash: string | undefined;
     if (address) {
       try { txHash = (await apeOnChain(card)) || undefined; } catch (e) { console.warn('On-chain ape failed:', e); }
     }
     const resp = await fetch(`${config.backendUrl}/api/cards/${card.id}/ape`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Wallet-Address': address },
       body: JSON.stringify({ address, tx_hash: txHash }),
     });
-    if (resp.status === 402) { setSwipeFeedback(null); setShowPaywall(true); return; }
+    if (resp.status === 402) { setShowPaywall(true); return; }
     const data = await resp.json();
-    setTimeout(() => {
-      setSwipeFeedback(null);
-      navigate(`/trade-success/${card.id}`, { state: { trade: data.trade, conviction: data.conviction } });
-    }, 600);
+    if (data.trade) navigate(`/trade-success/${card.id}`, { state: { trade: data.trade, conviction: data.conviction } });
   };
 
   const handleFade = async () => {
     if (!current) return;
     setSwipeFeedback('fade');
+    // Advance immediately
+    setTimeout(() => { setSwipeFeedback(null); setIndex(i => i + 1); }, 300);
+    // Backend in background
     const address = evmAddress || '';
-    const resp = await fetch(`${config.backendUrl}/api/cards/${current.id}/fade`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    fetch(`${config.backendUrl}/api/cards/${current.id}/fade`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Wallet-Address': address },
       body: JSON.stringify({ address }),
-    });
-    if (resp.status === 402) { setSwipeFeedback(null); setShowPaywall(true); return; }
-    setTimeout(() => { setSwipeFeedback(null); setIndex(i => i + 1); }, 400);
+    }).then(r => { if (r.status === 402) setShowPaywall(true); });
   };
 
   const onDragStart = (clientX: number) => { startX.current = clientX; setDragging(true); };
@@ -391,14 +392,6 @@ export default function Feed() {
         </div>
       )}
       <OracleWidget />
-      <div className="flex gap-2 mb-3 overflow-x-auto px-2">
-        {['all', 'trading', 'pool', 'sector', 'insight'].map(tab => (
-          <button key={tab} onClick={() => { setCardFilter(tab); setIndex(0); }}
-            className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap ${cardFilter === tab ? 'bg-[#8eff71] text-[#0b5800]' : 'bg-[#262626] text-[#adaaaa]'}`}>
-            {tab === 'all' ? '🎴 All' : tab === 'trading' ? '📈 Trading' : tab === 'pool' ? '🌊 Pools' : tab === 'sector' ? '🔥 Sectors' : '📰 Insights'}
-          </button>
-        ))}
-      </div>
       <div className="text-[10px] text-[#494847] text-center mb-1">
         {index + 1} / {cards.length}
         {(cardFilter === 'sector' || cardFilter === 'insight') && (

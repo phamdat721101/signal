@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 from pathlib import Path
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
@@ -28,35 +29,37 @@ class ChainClient:
             abi=abi,
         )
         self._nonce = self.w3.eth.get_transaction_count(self.account.address)
+        self._tx_lock = threading.Lock()
 
     def _send_tx(self, fn, _retry: bool = True):
         breaker = error_tracker.get_breaker("chain_tx", threshold=3, cooldown=300.0)
         if breaker.is_open:
             logger.warning("Chain TX circuit open — skipping")
             return None
-        try:
-            tx = fn.build_transaction({
-                "from": self.account.address,
-                "nonce": self._nonce,
-                "gas": 500_000,
-                "gasPrice": 0,
-            })
-            signed = self.account.sign_transaction(tx)
-            tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
-            self._nonce += 1
-            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
-            logger.info(f"TX {tx_hash.hex()} status={receipt['status']}")
-            breaker.record_success()
-            return receipt
-        except Exception as e:
-            err_str = str(e).lower()
-            if _retry and ("nonce" in err_str or "already known" in err_str):
-                logger.warning(f"Nonce error, resyncing: {e}")
-                self._nonce = self.w3.eth.get_transaction_count(self.account.address)
-                return self._send_tx(fn, _retry=False)
-            breaker.record_failure()
-            error_tracker.track("TX_SEND_FAILED", str(e))
-            raise
+        with self._tx_lock:
+            try:
+                tx = fn.build_transaction({
+                    "from": self.account.address,
+                    "nonce": self._nonce,
+                    "gas": 500_000,
+                    "gasPrice": 0,
+                })
+                signed = self.account.sign_transaction(tx)
+                tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
+                self._nonce += 1
+                receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
+                logger.info(f"TX {tx_hash.hex()} status={receipt['status']}")
+                breaker.record_success()
+                return receipt
+            except Exception as e:
+                err_str = str(e).lower()
+                if _retry and ("nonce" in err_str or "already known" in err_str):
+                    logger.warning(f"Nonce error, resyncing: {e}")
+                    self._nonce = self.w3.eth.get_transaction_count(self.account.address)
+                    return self._send_tx(fn, _retry=False)
+                breaker.record_failure()
+                error_tracker.track("TX_SEND_FAILED", str(e))
+                raise
 
     def create_signal(self, asset: str, is_bull: bool, confidence: int,
                       target_price: int, entry_price: int) -> tuple[int, str]:
