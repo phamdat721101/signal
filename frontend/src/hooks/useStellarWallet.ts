@@ -33,7 +33,7 @@ export function useStellarWallet() {
   }, []);
 
   const signXdr = useCallback(async (xdr: string): Promise<string> => {
-    const { signedTxXdr, error } = await signTransaction(xdr, { network: 'TESTNET' });
+    const { signedTxXdr, error } = await signTransaction(xdr, { networkPassphrase: 'Test SDF Network ; September 2015' });
     if (error) throw new Error(error);
     return signedTxXdr;
   }, []);
