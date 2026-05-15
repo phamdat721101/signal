@@ -1,6 +1,7 @@
 """Agent API v2 — structured endpoints for AI agent consumption."""
 import logging
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 from app import db
 from app.db import _get_conn
@@ -347,3 +348,177 @@ async def get_providers():
         "avg_pnl": float(row["avg_pnl"] or 0),
         "price_usdc": 5.0,
     }]}
+
+
+# ─── Premium Report Escrow ────────────────────────────────────
+
+REPORT_TYPES = {
+    "market_overview": {"price_usdc": 2.0, "description": "Full market analysis with top 5 signals, ETF flows, sentiment"},
+    "token_deep_dive": {"price_usdc": 5.0, "description": "Deep analysis on a specific token with multi-agent debate"},
+    "portfolio_advisory": {"price_usdc": 10.0, "description": "Personalized portfolio allocation + risk assessment"},
+}
+
+
+@router.get("/reports")
+async def list_report_types():
+    """Available premium report types and pricing."""
+    return {"reports": REPORT_TYPES}
+
+
+@router.post("/reports/purchase")
+async def purchase_report(request: Request):
+    """Deploy escrow (platform signs server-side) and return fund XDR for user to sign."""
+    body = await request.json()
+    report_type = body.get("report_type", "market_overview")
+    buyer_stellar = body.get("buyer_stellar", "")
+    if report_type not in REPORT_TYPES:
+        raise HTTPException(400, "Invalid report_type")
+    if not buyer_stellar:
+        raise HTTPException(400, "buyer_stellar required")
+
+    from app.config import get_settings as _gs
+    s = _gs()
+    if not s.stellar_platform_address or not s.stellar_platform_secret:
+        raise HTTPException(503, "Stellar platform not configured")
+
+    import uuid
+    engagement_id = f"report-{uuid.uuid4().hex[:12]}"
+    amount = REPORT_TYPES[report_type]["price_usdc"]
+
+    # Step 1: Deploy escrow (returns unsigned XDR for platform to sign)
+    from app.trustless_escrow import deploy_escrow, submit_transaction
+    try:
+        deploy_result = await deploy_escrow(buyer_stellar, s.stellar_platform_address, amount, 0)
+    except Exception as e:
+        raise HTTPException(503, f"Escrow deploy failed: {e}")
+
+    unsigned_xdr = deploy_result.get("unsignedTransaction", "")
+    if not unsigned_xdr:
+        raise HTTPException(503, "No transaction returned from escrow deploy")
+
+    # Step 2: Platform signs the deploy XDR server-side
+    from stellar_sdk import Keypair, TransactionEnvelope, Network
+    try:
+        envelope = TransactionEnvelope.from_xdr(unsigned_xdr, network_passphrase=Network.TESTNET_NETWORK_PASSPHRASE)
+        kp = Keypair.from_secret(s.stellar_platform_secret)
+        envelope.sign(kp)
+        signed_xdr = envelope.to_xdr()
+        tx_hash = envelope.hash_hex()
+    except Exception as e:
+        raise HTTPException(500, f"Platform signing failed: {e}")
+
+    # Step 3: Submit deploy tx to Stellar
+    escrow_address = None
+    try:
+        submit_result = await submit_transaction(signed_xdr)
+        escrow_address = submit_result.get("contractId", "")
+    except Exception as e:
+        raise HTTPException(502, f"Deploy transaction failed: {e}")
+
+    # Store in DB
+    conn = db._get_conn()
+    escrow_id = None
+    if conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO report_escrows (report_type, buyer_stellar, amount_usdc, engagement_id, escrow_contract, status)
+                VALUES (%s, %s, %s, %s, %s, 'deployed') RETURNING id
+            """, (report_type, buyer_stellar, amount, engagement_id, escrow_address or ""))
+            row = cur.fetchone()
+            escrow_id = row[0] if row else None
+
+    return {
+        "escrow_id": escrow_id,
+        "tx_hash": tx_hash,
+        "escrow_address": escrow_address,
+        "amount_usdc": amount,
+        "report_type": report_type,
+        "engagement_id": engagement_id,
+        "explorer_url": f"https://stellar.expert/explorer/testnet/tx/{tx_hash}" if tx_hash else None,
+        "next_step": "fund",
+    }
+
+
+@router.post("/reports/confirm")
+async def confirm_and_generate(request: Request):
+    """After user funds escrow (or skips if demo), generate report."""
+    body = await request.json()
+    escrow_id = body.get("escrow_id")
+    signed_xdr = body.get("signed_xdr", "")
+
+    if not escrow_id:
+        raise HTTPException(400, "escrow_id required")
+
+    conn = db._get_conn()
+    if not conn:
+        raise HTTPException(503, "DB unavailable")
+
+    from psycopg2.extras import RealDictCursor
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM report_escrows WHERE id=%s AND status IN ('deployed','pending')", (escrow_id,))
+        escrow = cur.fetchone()
+    if not escrow:
+        raise HTTPException(404, "Escrow not found or already processed")
+
+    # Submit fund XDR if provided (user signed the fund tx)
+    fund_tx_hash = None
+    if signed_xdr:
+        try:
+            from app.trustless_escrow import submit_transaction
+            result = await submit_transaction(signed_xdr)
+            fund_tx_hash = result.get("hash") or result.get("tx_hash") or result.get("id", "")
+        except Exception as e:
+            error_msg = str(e)
+            # Return structured error with details
+            return JSONResponse(status_code=502, content={
+                "error": "fund_failed",
+                "message": f"Fund transaction failed: {error_msg}",
+                "escrow_id": escrow_id,
+                "hint": "Ensure your Stellar wallet has USDC testnet tokens and a USDC trustline.",
+            })
+
+    # Mark funded
+    with conn.cursor() as cur:
+        cur.execute("UPDATE report_escrows SET status='funded', funded_at=NOW() WHERE id=%s", (escrow_id,))
+
+    # Generate report inline
+    try:
+        from app.report_generator import generate_premium_report
+        report_data = await generate_premium_report(escrow["report_type"])
+    except Exception as e:
+        logger.error(f"Report generation failed for escrow {escrow_id}: {e}")
+        raise HTTPException(503, "Report generation temporarily unavailable. Will retry automatically.")
+
+    # Store report and mark delivered
+    import json as _json
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE report_escrows SET status='delivered', report_data=%s, delivered_at=NOW() WHERE id=%s",
+            (_json.dumps(report_data), escrow_id))
+
+    return {
+        "status": "delivered",
+        "report": report_data,
+        "escrow_id": escrow_id,
+        "fund_tx_hash": fund_tx_hash,
+        "fund_explorer_url": f"https://stellar.expert/explorer/testnet/tx/{fund_tx_hash}" if fund_tx_hash else None,
+    }
+
+
+@router.get("/reports/{escrow_id}")
+async def get_report(escrow_id: int, buyer_stellar: str = Query(...)):
+    """Retrieve a purchased report."""
+    conn = db._get_conn()
+    if not conn:
+        raise HTTPException(503, "DB unavailable")
+    from psycopg2.extras import RealDictCursor
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM report_escrows WHERE id=%s AND buyer_stellar=%s", (escrow_id, buyer_stellar))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Report not found")
+    if row["status"] == "pending":
+        raise HTTPException(402, "Not yet funded")
+    if row["status"] == "funded":
+        return {"status": "generating", "message": "Report is being generated. Please wait."}
+    return {"status": row["status"], "report": row.get("report_data"), "delivered_at": str(row.get("delivered_at", ""))}

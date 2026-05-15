@@ -227,6 +227,47 @@ def resolve_expired_escrows():
         logger.warning(f"resolve_expired_escrows error: {e}")
 
 
+def resolve_report_escrows():
+    """Resolve premium report escrows: retry failed generations, expire stale, release delivered."""
+    from app.db import _get_conn
+    conn = _get_conn()
+    if not conn:
+        return
+    try:
+        from psycopg2.extras import RealDictCursor
+        # 1. Retry 'funded' reports that failed generation (max 3 retries)
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, report_type, retry_count FROM report_escrows
+                WHERE status='funded' AND retry_count < 3 AND funded_at < NOW() - INTERVAL '1 minute'
+                LIMIT 5
+            """)
+            to_retry = cur.fetchall()
+        for row in to_retry:
+            try:
+                import asyncio
+                from app.report_generator import generate_premium_report
+                report_data = asyncio.get_event_loop().run_until_complete(
+                    generate_premium_report(row["report_type"]))
+                with conn.cursor() as cur2:
+                    cur2.execute(
+                        "UPDATE report_escrows SET status='delivered', report_data=%s, delivered_at=NOW() WHERE id=%s",
+                        (json.dumps(report_data), row["id"]))
+                logger.info(f"Report {row['id']} generated on retry")
+            except Exception as e:
+                with conn.cursor() as cur2:
+                    cur2.execute("UPDATE report_escrows SET retry_count=retry_count+1, error_message=%s WHERE id=%s",
+                                 (str(e)[:200], row["id"]))
+        # 2. Expire unfunded reports older than 1h
+        with conn.cursor() as cur:
+            cur.execute("UPDATE report_escrows SET status='expired' WHERE status='pending' AND created_at < NOW() - INTERVAL '1 hour'")
+        # 3. Mark failed (exceeded retries)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE report_escrows SET status='failed' WHERE status='funded' AND retry_count >= 3")
+    except Exception as e:
+        logger.warning(f"resolve_report_escrows error: {e}")
+
+
 def start_scheduler():
     from datetime import datetime, timedelta
     from app.content_engine import run_card_generation_cycle
@@ -257,6 +298,7 @@ def start_scheduler():
     scheduler.add_job(refresh_news, "interval", minutes=10, id="news_refresh", max_instances=1, next_run_time=t + timedelta(seconds=50))
     scheduler.add_job(refresh_sentiment, "interval", minutes=10, id="sentiment_refresh", max_instances=1, next_run_time=t + timedelta(seconds=55))
     scheduler.add_job(resolve_expired_escrows, "interval", minutes=30, id="escrow_resolve", max_instances=1, next_run_time=t + timedelta(seconds=210))
+    scheduler.add_job(resolve_report_escrows, "interval", minutes=5, id="report_escrow_resolve", max_instances=1, next_run_time=t + timedelta(seconds=120))
     scheduler.start()
     logger.info("Scheduler started — all jobs delayed for graceful startup")
 

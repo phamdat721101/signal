@@ -217,6 +217,27 @@ def init_db():
             )
         """)
     logger.info("oracle_takes table ready")
+    # Report escrows table
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS report_escrows (
+                id SERIAL PRIMARY KEY,
+                report_type TEXT NOT NULL,
+                buyer_stellar TEXT NOT NULL,
+                escrow_contract TEXT,
+                amount_usdc NUMERIC(10,2) NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                report_data JSONB,
+                retry_count INTEGER DEFAULT 0,
+                error_message TEXT,
+                engagement_id TEXT UNIQUE,
+                funded_at TIMESTAMPTZ,
+                delivered_at TIMESTAMPTZ,
+                released_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+    logger.info("report_escrows table ready")
     init_user_agents_table()
 
 
