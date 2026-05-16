@@ -1,8 +1,8 @@
 # Initia Signal (Ape or Fade)
 
-Open-source AI-powered on-chain trading signal kit with **escrow-backed accountability** — pay for signals via Stellar escrow, get refunded if wrong.
+Open-source AI-powered on-chain trading signal kit with **escrow-backed accountability** — pay for signals via escrow, get refunded if wrong.
 
-Generate market signals from real price data, store them immutably on-chain, execute with one-click auto-signing, and access premium intelligence reports through Trustless Work escrow on Stellar.
+Generate market signals from real price data, store them immutably on-chain, execute with one-click auto-signing, and access premium intelligence reports through Trustless Work escrow.
 
 ---
 
@@ -57,10 +57,10 @@ AI trading signals have zero accountability. Providers collect fees upfront and 
 
 **Kinetic Signal Marketplace** uses [Trustless Work](https://trustlesswork.com) escrow on Stellar to create an **accountability layer**:
 
-- Users pay USDC into a Stellar escrow to access premium signals
+- Users pay USDC into an escrow to access premium signals
 - Funds are only released to the provider if the signal is profitable
 - If the signal fails, the user gets an automatic refund
-- All outcomes are verifiable on-chain (Stellar)
+- All outcomes are verifiable on-chain
 
 ### How Escrow Payment Works
 
@@ -149,7 +149,7 @@ User clicks "$2 Market Overview"
 
 | Chain | Wallet | Purpose |
 |-------|--------|---------|
-| **Initia (EVM)** | Privy embedded wallet | Swipe cards, on-chain conviction, AI agent trading |
+| **Initia (EVM)** | Interwoven Kit embedded wallet | Swipe cards, on-chain conviction, AI agent trading |
 | **Stellar (Soroban)** | Freighter browser extension | Fund escrows, receive USDC payouts, view escrow status |
 
 ---
@@ -326,7 +326,7 @@ frontend/    → Vite + React + TailwindCSS — Trading dashboard + Marketplace
 | Escrow | Trustless Work REST API (Soroban on Stellar) |
 | AI | AWS Bedrock (Nova Lite), multi-agent debate |
 | Database | PostgreSQL (Supabase) |
-| Agent Payment | x402 (USDC on Base) |
+| Agent Payment | x402 (USDC) |
 
 ## Deployment
 
@@ -363,20 +363,6 @@ https://scan.testnet.initia.xyz/initia-signal-1/evm-contracts/0xc178dcA82a0E1EBa
 ```
 
 ---
-
-## Boundless × Trustless Work Hackathon
-
-This project is submitted to the **Boundless × Trustless Work Hackathon** (May 2026).
-
-### Why This Wins
-
-| Criteria | How We Excel |
-|----------|-------------|
-| **Innovation** | First escrow-backed AI signal marketplace — novel use case |
-| **Trustless Work Usage** | Full lifecycle: deploy → fund → milestone → approve → release → dispute |
-| **Technical Depth** | Dual-chain (Initia + Stellar), multi-agent AI, x402 agent payments |
-| **Working Product** | Live backend with real data at ai.overguild.com |
-| **Business Viability** | Clear revenue: 10% platform fee per signal + report sales |
 
 ### Key Differentiators
 
