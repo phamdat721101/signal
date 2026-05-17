@@ -77,6 +77,25 @@ def init_db():
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS x402_settlements (
+                payload_hash TEXT PRIMARY KEY,
+                resource     TEXT NOT NULL,
+                payer        TEXT,
+                amount       TEXT,
+                network      TEXT,
+                tx_hash      TEXT,
+                status       TEXT NOT NULL DEFAULT 'pending',
+                retries      INTEGER DEFAULT 0,
+                last_error   TEXT,
+                created_at   TIMESTAMPTZ DEFAULT NOW(),
+                settled_at   TIMESTAMPTZ
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS x402_settlements_status_idx
+              ON x402_settlements (status, created_at)
+        """)
     logger.info("Supabase signals table ready")
     # Cards table (Ape or Fade)
     with conn.cursor() as cur:

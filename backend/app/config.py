@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     x402_receiver_address: str = ""
     x402_facilitator_url: str = "https://api.cdp.coinbase.com/platform/v2/x402"
     x402_network: str = "eip155:84532"
+    x402_public_base_url: str = ""  # e.g. https://ai.overguild.com/agent-api — for Bazaar resource URLs
     cdp_api_key_id: str = ""
     cdp_api_key_secret: str = ""
     # Supabase/Postgres

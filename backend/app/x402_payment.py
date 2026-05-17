@@ -83,28 +83,28 @@ def get_x402_middleware_args() -> tuple[dict, x402ResourceServer] | tuple[None, 
     routes = {
         "GET /api/v2/agent/decisions": route(
             "$0.001",
-            "AI trading decisions with confidence scores and track record",
+            "AI crypto trading signals with on-chain verifiable 60.8% accuracy across 5,816+ resolved predictions. Multi-agent technical+sentiment+fundamentals analysis returns APE/FADE/HOLD verdicts with confidence score, entry, target, stop, reasoning, and per-token track record.",
             {"decisions": [{"token": "BTC", "action": "APE", "confidence": 85, "entry": 104250.5, "target": 105814.3, "stop": 102686.7, "reasoning": "Bullish EMA crossover + RSI momentum", "track_record": {"win_rate": 68.5, "sample_size": 42}}], "total": 1},
         ),
         "GET /api/v2/agent/prices": route(
             "$0.001",
-            "Real-time aggregated crypto prices from multiple sources",
+            "Real-time aggregated cryptocurrency spot prices from CoinGecko + DexScreener with source attribution and confidence scoring. Pass comma-separated symbols (e.g. BTC,ETH,SOL).",
             {"prices": [{"symbol": "BTC", "price": 104250.5, "source": "coingecko"}]},
         ),
         "GET /api/v2/agent/pools": route(
             "$0.005",
-            "LP pool advisory opportunities with yield analysis",
+            "DeFi LP pool advisory ranked by APY and TVL with impermanent-loss risk scoring across multiple chains and protocols. Returns curated APE/FADE recommendations for liquidity provision opportunities.",
             {"pools": [{"pair": "ETH/USDC", "apy": 12.5, "tvl": 5000000, "risk_score": 35}], "total": 1},
         ),
         "GET /api/v2/agent/track-record": route(
             "$0.01",
-            "Historical prediction accuracy and win rates per token",
-            {"overall": {"total": 150, "wins": 102, "win_rate": 68.0}, "per_token": {"BTC": {"total": 42, "wins": 29, "win_rate": 69.0}}},
+            "Historical prediction accuracy and per-token win rates from 5,816+ on-chain resolved predictions. Includes overall accuracy, per-token breakdown, sample size, and average PnL.",
+            {"overall": {"total": 5816, "wins": 3534, "win_rate": 60.8}, "per_token": {"BTC": {"total": 42, "wins": 29, "win_rate": 69.0, "avg_pnl": 1.42}}},
         ),
         "GET /api/v2/agent/context": route(
             "$0.01",
-            "Market macro context including ETF flows and sentiment",
-            {"sosovalue": {"etf_flows": {"btc_net_flow_24h": 150000000}}, "oracle_mood": "bullish"},
+            "Macro market context fused from SoSoValue institutional data: BTC/ETH ETF net flows, macro economic event calendar, sector rotation signals, breaking news, plus the AI oracle's current market mood. Refreshed every 30 seconds.",
+            {"sosovalue": {"etf_flows": {"btc_net_flow_24h": 150000000}, "macro_events": [], "hot_news": []}, "oracle_mood": "bullish"},
         ),
     }
 

@@ -109,3 +109,21 @@ These are settled patterns — extending them is fine, replacing them with ad-ho
 - **Health & circuits**: `/api/health` reports `db_async` pool state and any `open_circuits`. Use this as the canonical "is the system OK" probe.
 - **N+1 elimination**: when fetching per-row data in a list endpoint, batch with `WHERE col = ANY($1::text[])` (see `_batch_track_record` in `agent_api.py`).
 - **Don't add Redis-dependent code yet** — rate-limiting, distributed cache, and Prometheus metrics are deferred until Redis is provisioned.
+
+## x402 Agent Surface (Bazaar-ready)
+
+Two FastAPI processes share the same data layer; they cannot crash each other.
+
+| Process | Port | Module | URL prefix | Audience | Gating |
+|---------|------|--------|-----------|----------|--------|
+| Consumer + admin | 8001 | `app.main:app` | `https://ai.overguild.com/api/*` | Frontend (KINETIC) | None / session-vault |
+| Agent (paid) | 8002 | `app.agent_main:app` | `https://ai.overguild.com/agent-api/api/v2/agent/*` | AI agents via x402 | x402 / USDC on Base mainnet |
+
+- **Single new file owns the agent surface**: `app/agent_main.py` — lifespan inits db_async pool + x402 server, runs reconciler asyncio task, mounts the gating middleware, and includes `agent_api.router`. No duplication of data-layer code.
+- **Single new file owns settlement**: `app/x402_settler.py` — record-pending → settle-async → mark-settled/failed → reconcile. Idempotency key = SHA256 of the `x-payment` header bytes (DB UNIQUE on `payload_hash` in table `x402_settlements`). Survives crash via pending rows; reconciler abandons rows older than 60s with retries < 3.
+- **Route prices + Bazaar extensions** live in `app/x402_payment.py`. **Route descriptions matter** for Bazaar semantic-search ranking — write natural-language with cited stats (e.g., "60.8% accuracy across 5,816+ predictions"), not bare endpoint names.
+- **Bazaar listing is automatic.** No registration step exists. The CDP Facilitator catalogs the resource on first successful **settle** with `paymentPayload.resource` set. Indexing arrives in the catalog within ~10 min; quality ranking signals (buyer reach, transaction volume, recency) recompute every 6 h. To verify a listing: `GET https://api.cdp.coinbase.com/platform/v2/x402/discovery/merchant?payTo=<x402_receiver_address>`.
+- **All facilitator HTTP** is invoked through the SDK's own `HTTPFacilitatorClient`. Wrap sync SDK calls with `asyncio.to_thread` from inside async handlers. Don't call `verify_payment` / `settle_payment` synchronously inside an `async def` — it blocks the event loop.
+- **Settle is fire-and-forget** post-response (asyncio task). Buyer gets data immediately; the settle outcome lands in `x402_settlements`. Crash window is bounded by the reconciler.
+- **Restart pattern on VPS**: `restart_signal.sh` on `/home/bitnami/signal-backend` runs three nohup processes (consumer 8001, agent 8002, scheduler). Caddy at `47-130-193-211.sslip.io` and `ai.overguild.com` exposes `/agent-api/*` to the agent process.
+- **Don't bolt x402 onto `:8001`.** Different SLA, different audience. The split is the architecture.

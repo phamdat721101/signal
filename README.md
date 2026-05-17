@@ -183,17 +183,28 @@ SoSoValue API (9 modules, smart-cached, 18 req/min)
 
 ## AI Agent API (x402 Pay-per-Request)
 
-Published on **Base Bazaar** — AI agents discover and pay for trading intelligence using x402. No API keys, no accounts — just USDC on Base.
+Pay-per-call market intelligence for AI agents. **No API keys. No accounts. Just USDC on Base.**
+
+| | |
+|---|---|
+| **Live base URL** | `https://ai.overguild.com/agent-api/api/v2/agent/*` |
+| **Network** | Base mainnet (`eip155:8453`) |
+| **Asset** | USDC |
+| **Receiver** | `0x100690a32B562fd45e685BC2E63bbfF566d452db` |
+| **Track record** | **60.8% accuracy** across **5,816+ on-chain resolved predictions** |
+| **Discovery** | [CDP Bazaar](https://docs.cdp.coinbase.com/x402/bazaar) (auto-indexed after first settle) |
 
 ### Paid Endpoints
 
 | Endpoint | Price | Description |
 |----------|-------|-------------|
-| `GET /api/v2/agent/decisions` | $0.001 | AI trading decisions with confidence + track record |
-| `GET /api/v2/agent/prices` | $0.001 | Real-time aggregated prices |
-| `GET /api/v2/agent/pools` | $0.005 | LP pool advisory with yield analysis |
-| `GET /api/v2/agent/context` | $0.01 | Market macro context (ETF flows, sectors) |
-| `GET /api/v2/agent/track-record` | $0.01 | Historical prediction accuracy per token |
+| `GET /api/v2/agent/decisions` | $0.001 | APE/FADE verdicts with confidence, entry/target/stop, reasoning, per-token track record |
+| `GET /api/v2/agent/prices` | $0.001 | Real-time aggregated prices (CoinGecko + DexScreener) with source attribution |
+| `GET /api/v2/agent/pools` | $0.005 | DeFi LP advisory ranked by APY, TVL, IL risk |
+| `GET /api/v2/agent/track-record` | $0.01 | Historical accuracy + per-token win rates |
+| `GET /api/v2/agent/context` | $0.01 | Macro context: BTC/ETH ETF flows, macro events, sector rotation, oracle mood |
+
+Full base URL is `https://ai.overguild.com/agent-api` — e.g. `https://ai.overguild.com/agent-api/api/v2/agent/decisions?limit=5`.
 
 ### Premium Report Endpoints (Stellar Escrow)
 
@@ -204,18 +215,94 @@ Published on **Base Bazaar** — AI agents discover and pay for trading intellig
 | `/api/v2/agent/reports/confirm` | POST | Fund escrow + generate report |
 | `/api/v2/agent/reports/{id}` | GET | Retrieve purchased report |
 
-### Agent Integration Example
+### How an Agent Pays (the x402 flow)
 
-```python
-# Using CDP AgentKit with x402
-from cdp_agentkit import Agent
-
-agent = Agent(wallet="base-mainnet")
-response = agent.x402_request(
-    "https://ai.overguild.com/api/v2/agent/decisions?limit=5"
-)
-decisions = response.json()["decisions"]
 ```
+Agent ──── GET /api/v2/agent/decisions ───→  Signal Agent API
+      ←─── 402 Payment Required           ───
+           {accepts: [{network: eip155:8453, asset: USDC, amount: "1000",
+                       payTo: "0x1006..."}], extensions: {bazaar: {...}}}
+
+      ──── GET ... + x-payment: <signed-payload> ───→
+                                                       Signal Agent API
+                                                       │ verify via CDP
+                                                       │ deliver data
+                                                       │ settle in background
+      ←─── 200 OK + x-payment-response: <receipt> ────
+           {decisions: [...]}
+```
+
+### Quickstart — TypeScript (canonical x402 SDK)
+
+```bash
+npm i x402-fetch viem
+```
+
+```ts
+import { wrapFetchWithPayment } from "x402-fetch";
+import { privateKeyToAccount } from "viem/accounts";
+
+const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
+const fetchWithPayment = wrapFetchWithPayment(fetch, account);
+
+const r = await fetchWithPayment(
+  "https://ai.overguild.com/agent-api/api/v2/agent/decisions?limit=5"
+);
+const { decisions } = await r.json();
+console.log(decisions[0]);
+// { token: "BTC", action: "APE", confidence: 85, entry: 67234.5,
+//   target: 68243.0, stop: 66225.0, reasoning: "...",
+//   track_record: { win_rate: 60.8, sample_size: 5816 } }
+```
+
+The wrapper handles 402 detection, payload signing, header attachment, and retry. Works in Node, Deno, and the browser.
+
+### Quickstart — curl (the manual 402 dance)
+
+```bash
+# 1. Hit the endpoint with no payment — you get the challenge
+curl -i https://ai.overguild.com/agent-api/api/v2/agent/decisions
+# HTTP/2 402
+# {"x402Version":2,
+#  "resource":{"url":"https://ai.overguild.com/agent-api/api/v2/agent/decisions",...},
+#  "accepts":[{"scheme":"exact","network":"eip155:8453","asset":"0x833...USDC",
+#              "amount":"1000","payTo":"0x1006..."}],
+#  "extensions":{"bazaar":{"info":{...},"schema":{...}}}}
+
+# 2. Sign a PaymentPayload, base64 it, send back as the x-payment header
+curl -H "x-payment: <base64-PaymentPayload>" \
+     https://ai.overguild.com/agent-api/api/v2/agent/decisions
+# HTTP/2 200
+# x-payment-response: <base64-SettleResponse>
+# {"decisions":[...]}
+```
+
+For the exact payload shape, see [x402.org](https://x402.org) or use the `x402-fetch` SDK to do it for you.
+
+### Discover Through Bazaar
+
+After the first paid call settles through the CDP Facilitator, this service is automatically indexed in the [CDP Bazaar](https://docs.cdp.coinbase.com/x402/bazaar) — no separate registration step.
+
+```bash
+# Semantic search (free, no auth)
+curl 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/search?query=trading+signals'
+
+# Look up our merchant directly
+curl 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/merchant?payTo=0x100690a32B562fd45e685BC2E63bbfF566d452db'
+
+# Browse the full catalog
+curl 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=20'
+```
+
+For agent-native discovery, the Bazaar exposes an MCP server:
+
+```
+https://api.cdp.coinbase.com/platform/v2/x402/discovery/mcp
+  search_resources({query: "AI trading"})    → ranked list of paid endpoints
+  proxy_tool_call({toolName: "decisions"})   → call with payment automatic
+```
+
+See the Bazaar [MCP guide](https://docs.cdp.coinbase.com/x402/bazaar#bazaar-mcp-server).
 
 ### Response Schema
 
@@ -226,13 +313,15 @@ decisions = response.json()["decisions"]
       "token": "BTC",
       "action": "APE",
       "confidence": 85,
-      "entry": 104250.5,
-      "target": 105814.3,
-      "stop": 102686.7,
+      "entry": 67234.5,
+      "target": 68243.0,
+      "stop": 66225.0,
       "reasoning": "ETF 3-day inflow streak ($450M) + bullish divergence",
-      "track_record": { "win_rate": 68.5, "sample_size": 42 }
+      "rarity": "rare",
+      "track_record": { "win_rate": 60.8, "sample_size": 5816 }
     }
-  ]
+  ],
+  "total": 1
 }
 ```
 
