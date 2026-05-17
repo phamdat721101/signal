@@ -1,9 +1,10 @@
 """Agent API v2 — structured endpoints for AI agent consumption."""
 import logging
+import time
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-from app import db
+from app import db, db_async
 from app.db import _get_conn
 
 logger = logging.getLogger(__name__)
@@ -13,6 +14,19 @@ ALLOWED_AGENT_FIELDS = {"strategy", "max_position_usd", "tokens_whitelist", "tok
                          "min_confidence", "auto_execute", "risk_tolerance", "take_profit_pct",
                          "stop_loss_pct", "is_active"}
 
+# Tiny in-process TTL cache for read-mostly endpoints. Per-worker; that's fine
+# at the current scale. Promote to a shared cache module when a 3rd file needs it.
+_cache: dict[str, tuple[float, object]] = {}
+
+
+def _cache_get(key: str, ttl: int) -> object | None:
+    entry = _cache.get(key)
+    return entry[1] if entry and time.time() - entry[0] < ttl else None
+
+
+def _cache_set(key: str, value: object) -> None:
+    _cache[key] = (time.time(), value)
+
 
 def _verify_ownership(body_address: str, header_address: str | None):
     """Verify caller owns the address via X-Wallet-Address header."""
@@ -21,13 +35,61 @@ def _verify_ownership(body_address: str, header_address: str | None):
         raise HTTPException(status_code=403, detail="X-Wallet-Address header must match request address")
 
 
+async def _batch_track_record(symbols: list[str]) -> dict[str, dict]:
+    """One query for all symbols. Replaces the N+1 _get_token_track_record loop."""
+    if not symbols or not db_async.is_ready():
+        return {}
+    rows = await db_async.fetch_all(
+        """
+        SELECT token_symbol,
+               COUNT(*) AS total,
+               SUM(CASE WHEN was_correct THEN 1 ELSE 0 END) AS wins
+        FROM agent_predictions
+        WHERE token_symbol = ANY($1::text[]) AND resolved_at IS NOT NULL
+        GROUP BY token_symbol
+        """,
+        symbols,
+    )
+    return {
+        r["token_symbol"]: {
+            "win_rate": round((r["wins"] or 0) / r["total"] * 100, 1) if r["total"] else 0,
+            "sample_size": r["total"] or 0,
+        }
+        for r in rows
+    }
+
+
 @router.get("/decisions")
 async def get_decisions(limit: int = Query(default=10, le=50)):
-    """Structured trading decisions for AI agents."""
-    cards, _ = db.get_cards(0, limit)
+    """Structured trading decisions for AI agents. Cached 20s."""
+    cache_key = f"decisions:{limit}"
+    hit = _cache_get(cache_key, ttl=20)
+    if hit is not None:
+        return hit
+
+    if not db_async.is_ready():
+        # Fallback to legacy sync path if async pool isn't up
+        cards, _ = db.get_cards(0, limit)
+        rows = cards
+    else:
+        # SELECT * keeps us schema-tolerant — older DBs may lack rarity/etc.
+        rows = await db_async.fetch_all(
+            """
+            SELECT *
+            FROM cards
+            WHERE status = 'active' AND price > 0
+            ORDER BY created_at DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+
+    symbols = [r["token_symbol"] for r in rows if r.get("token_symbol")]
+    track_records = await _batch_track_record(symbols)
+
     decisions = []
-    for c in cards:
-        entry = c.get("price", 0)
+    for c in rows:
+        entry = c.get("price") or 0
         if entry <= 0:
             continue
         is_bull = c.get("verdict") == "APE"
@@ -35,84 +97,119 @@ async def get_decisions(limit: int = Query(default=10, le=50)):
             "id": c["id"],
             "type": "liquidity" if c.get("card_type") == "pool" else "trading",
             "token": c["token_symbol"],
-            "action": c.get("verdict", "HOLD"),
+            "action": c.get("verdict") or "HOLD",
             "confidence": max(10, 100 - (c.get("risk_score") or 50)),
             "entry": round(entry, 6),
             "target": round(entry * (1.015 if is_bull else 0.985), 6),
             "stop": round(entry * (0.985 if is_bull else 1.015), 6),
-            "reasoning": c.get("verdict_reason", ""),
-            "rarity": c.get("rarity", "common"),
-            "track_record": _get_token_track_record(c["token_symbol"]),
+            "reasoning": c.get("verdict_reason") or "",
+            "rarity": c.get("rarity") or "common",
+            "track_record": track_records.get(c["token_symbol"], {"win_rate": 0, "sample_size": 0}),
         })
-    return {"decisions": decisions, "total": len(decisions)}
-
-
-def _get_token_track_record(symbol: str) -> dict:
-    """Quick accuracy lookup for a token."""
-    conn = _get_conn()
-    if not conn:
-        return {"win_rate": 0, "sample_size": 0}
-    from psycopg2.extras import RealDictCursor
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
-            "SELECT COUNT(*) as total, SUM(CASE WHEN was_correct THEN 1 ELSE 0 END) as wins "
-            "FROM agent_predictions WHERE token_symbol=%s AND resolved_at IS NOT NULL",
-            (symbol,))
-        row = cur.fetchone()
-    total = row["total"] or 0
-    wins = row["wins"] or 0
-    return {"win_rate": round(wins / total * 100, 1) if total > 0 else 0, "sample_size": total}
+    result = {"decisions": decisions, "total": len(decisions)}
+    _cache_set(cache_key, result)
+    return result
 
 
 @router.get("/prices")
 async def get_prices(symbols: str = Query(..., description="Comma-separated symbols")):
-    """Aggregated prices from best available source."""
+    """Aggregated prices from best available source. Offloaded to threadpool."""
+    import asyncio
     from app.price_feed import get_prices as fetch_prices
     symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    return {"prices": fetch_prices(symbol_list)}
+    prices = await asyncio.to_thread(fetch_prices, symbol_list)
+    return {"prices": prices}
 
 
 @router.get("/pools")
 async def get_pools(limit: int = Query(default=10, le=50)):
-    """LP advisory opportunities."""
-    cards, total = db.get_cards(0, limit, card_type="pool")
-    return {"pools": cards, "total": total}
+    """LP advisory opportunities. Cached 60s."""
+    cache_key = f"pools:{limit}"
+    hit = _cache_get(cache_key, ttl=60)
+    if hit is not None:
+        return hit
+
+    if not db_async.is_ready():
+        cards, total = db.get_cards(0, limit, card_type="pool")
+    else:
+        cards = await db_async.fetch_all(
+            """
+            SELECT * FROM cards
+            WHERE card_type = 'pool' AND status = 'active'
+            ORDER BY created_at DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+        total = len(cards)
+    result = {"pools": cards, "total": total}
+    _cache_set(cache_key, result)
+    return result
 
 
 @router.get("/track-record")
 async def get_track_record():
-    """Historical accuracy stats."""
-    conn = _get_conn()
-    if not conn:
+    """Historical accuracy stats. Cached 60s."""
+    cache_key = "track_record:overall"
+    hit = _cache_get(cache_key, ttl=60)
+    if hit is not None:
+        return hit
+
+    if not db_async.is_ready():
         return {"overall": {"total": 0, "wins": 0, "win_rate": 0}, "per_token": {}}
-    from psycopg2.extras import RealDictCursor
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("SELECT COUNT(*) as total, SUM(CASE WHEN was_correct THEN 1 ELSE 0 END) as wins FROM agent_predictions WHERE resolved_at IS NOT NULL")
-        overall = cur.fetchone()
-        cur.execute("""
-            SELECT token_symbol, COUNT(*) as total, SUM(CASE WHEN was_correct THEN 1 ELSE 0 END) as wins,
-                   ROUND(AVG(outcome_pct)::numeric, 2) as avg_pnl
-            FROM agent_predictions WHERE resolved_at IS NOT NULL
-            GROUP BY token_symbol HAVING COUNT(*) >= 3 ORDER BY COUNT(*) DESC LIMIT 20
-        """)
-        rows = cur.fetchall()
+
+    overall = await db_async.fetch_one(
+        "SELECT COUNT(*) AS total, SUM(CASE WHEN was_correct THEN 1 ELSE 0 END) AS wins "
+        "FROM agent_predictions WHERE resolved_at IS NOT NULL"
+    ) or {"total": 0, "wins": 0}
+    rows = await db_async.fetch_all(
+        """
+        SELECT token_symbol,
+               COUNT(*) AS total,
+               SUM(CASE WHEN was_correct THEN 1 ELSE 0 END) AS wins,
+               ROUND(AVG(outcome_pct)::numeric, 2) AS avg_pnl
+        FROM agent_predictions
+        WHERE resolved_at IS NOT NULL
+        GROUP BY token_symbol HAVING COUNT(*) >= 3
+        ORDER BY COUNT(*) DESC LIMIT 20
+        """
+    )
     total = overall["total"] or 0
     wins = overall["wins"] or 0
-    per_token = {r["token_symbol"]: {"total": r["total"], "wins": r["wins"] or 0,
-                 "win_rate": round((r["wins"] or 0) / r["total"] * 100, 1), "avg_pnl": float(r["avg_pnl"] or 0)}
-                 for r in rows}
-    return {
+    per_token = {
+        r["token_symbol"]: {
+            "total": r["total"],
+            "wins": r["wins"] or 0,
+            "win_rate": round((r["wins"] or 0) / r["total"] * 100, 1),
+            "avg_pnl": float(r["avg_pnl"] or 0),
+        }
+        for r in rows
+    }
+    result = {
         "overall": {"total": total, "wins": wins, "win_rate": round(wins / max(total, 1) * 100, 1)},
         "per_token": per_token,
     }
+    _cache_set(cache_key, result)
+    return result
 
 
 @router.get("/context")
 async def get_context():
-    """Market context: SoSoValue data + oracle mood."""
+    """Market context: SoSoValue data + oracle mood. Cached 30s, offloaded to threadpool."""
+    import asyncio
     from app.sosovalue_client import get_full_context
     from app.degen_oracle import get_current_mood
-    return {"sosovalue": get_full_context(), "oracle_mood": get_current_mood()}
+
+    hit = _cache_get("context", ttl=30)
+    if hit is not None:
+        return hit
+    sosovalue, mood = await asyncio.gather(
+        asyncio.to_thread(get_full_context),
+        asyncio.to_thread(get_current_mood),
+    )
+    result = {"sosovalue": sosovalue, "oracle_mood": mood}
+    _cache_set("context", result)
+    return result
 
 
 # ─── User Agent Config Endpoints ─────────────────────────────

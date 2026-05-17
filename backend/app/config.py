@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     # Admin
     admin_token: str = ""
 
+    # Scalability
+    db_pool_min: int = 5
+    db_pool_max: int = 20
+    log_level: str = "INFO"
+    log_json: bool = False  # set true in production for structured logs
+
     @property
     def json_rpc_url(self) -> str:
         return self.testnet_json_rpc_url if self.network == "testnet" else self.local_json_rpc_url

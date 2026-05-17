@@ -181,37 +181,15 @@ def harvest_pools(limit: int = 5) -> list[dict]:
 
 
 def harvest_tokens(limit: int = 10) -> list[dict]:
-    """Fetch token data from CoinGecko — multiple orderings for diversity."""
-    all_tokens = {}
-    orderings = ["volume_desc", "market_cap_desc", "market_cap_change_24h_desc"]
-    for order in orderings:
-        if not _cg_can_call():
-            break
-        try:
-            _cg_wait_and_record()
-            resp = httpx.get(
-                "https://api.coingecko.com/api/v3/coins/markets",
-                params={"vs_currency": "usd", "order": order, "per_page": min(limit, 100),
-                        "page": 1, "sparkline": False, "price_change_percentage": "1h,24h"},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            for c in resp.json():
-                parsed = _parse_coingecko(c)
-                all_tokens[parsed["coingecko_id"]] = parsed
-        except Exception as e:
-            logger.warning(f"Harvest ({order}) failed: {e}")
-    tokens = list(all_tokens.values())
-    # Sort by "interestingness" — anomaly-first, not just volume
-    for t in tokens:
-        score = 0
-        vol_mcap = t["volume_24h"] / max(t["market_cap"], 1)
-        if vol_mcap > 0.3: score += 30
-        if abs(t.get("price_change_1h") or 0) > 5: score += 25
-        if abs(t["price_change_24h"]) > 10: score += 20
-        if t["circulating_supply"] > 0 and t["total_supply"] > 0 and t["circulating_supply"] / t["total_supply"] < 0.5: score += 15
-        t["interest_score"] = score
-    tokens.sort(key=lambda t: t["interest_score"], reverse=True)
+    """SoSoValue-first token harvest with CoinGecko fallback (free tier).
+
+    Delegates to token_harvester.harvest_all() which:
+    - Tries SoSoValue sectors + index constituents first (free tier, no rate-limit pressure on CoinGecko).
+    - Falls back to a single CoinGecko volume_desc call only if SoSoValue returns < 20 tokens.
+    - Already de-dupes and applies interest scoring.
+    """
+    from app.token_harvester import harvest_all
+    tokens = harvest_all(limit=max(limit * 2, 30))
     from app.sosovalue_client import get_full_context
     sv_ctx = get_full_context()
     if sv_ctx:

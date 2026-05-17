@@ -2,14 +2,30 @@ import json
 import logging
 import time
 import traceback
+import uuid
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.error_tracker import error_tracker
+from app import db_async, http_client
 
-logging.basicConfig(level=logging.INFO)
+# Configure logging once. Format includes request_id when present.
+_request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
+
+
+class _RequestIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = _request_id_ctx.get()
+        return True
+
+
+_LOG_FORMAT = "%(asctime)s %(levelname)s [%(request_id)s] %(name)s: %(message)s"
+logging.basicConfig(level=get_settings().log_level, format=_LOG_FORMAT)
+for h in logging.getLogger().handlers:
+    h.addFilter(_RequestIdFilter())
 logger = logging.getLogger(__name__)
 
 _BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l'
@@ -67,16 +83,45 @@ def set_cache(key: str, value):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Starting Initia Signal API | network={get_settings().network}")
+    # Sync pool warm-up (legacy psycopg2)
     try:
         from app.db import _get_read_conn
         _get_read_conn()
     except Exception:
         pass
+    # Async pool for hot endpoints
+    await db_async.init_pool()
     yield
+    await db_async.close_pool()
+    await http_client.close_async()
+    http_client.close_sync()
     logger.info("Shutting down")
 
 
 app = FastAPI(title="Initia Signal API", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    """Attach a request_id to logs; emit one access log line per request."""
+    rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+    token = _request_id_ctx.set(rid)
+    start = time.monotonic()
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        logger.exception("request failed: %s %s after %dms", request.method, request.url.path, elapsed_ms)
+        raise
+    finally:
+        _request_id_ctx.reset(token)
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+    response.headers["x-request-id"] = rid
+    # Skip noisy access logs for /metrics-style polling; log at INFO otherwise.
+    if request.url.path not in ("/api/health",):
+        logger.info("%s %s -> %d (%dms)", request.method, request.url.path, response.status_code, elapsed_ms)
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -123,6 +168,8 @@ async def health():
         "contract": settings.contract_address or None,
         "chain_connected": connected,
         "simulation_mode": simulation,
+        "db_async": await db_async.health(),
+        "circuits": error_tracker.summary().get("open_circuits", []),
     }
 
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Initia Signal is an AI-powered on-chain trading intelligence platform deployed as an EVM appchain on Initia. Users receive AI-generated market signals (buy/sell), execute with one-click auto-signing, and all signals are stored on-chain for verifiable track records.
+Initia Signal (codename **KINETIC** / "Ape or Fade") is a Tinder-style swipe trading-card app for crypto, plus an agent-API marketplace. Users swipe APE/FADE on AI-generated cards; every swipe is an on-chain prediction (Initia EVM) resolved 24h later. AI agents consume the same data via a paid `/api/v2/agent/*` surface (x402 / USDC on Base). Premium reports flow through Stellar escrow (Trustless Work). Two chains: **Initia EVM** for cards/conviction (InterwovenKit wallet), **Stellar** for escrow funding (Freighter wallet).
 
 ## Commands
 
@@ -47,22 +47,26 @@ npm run lint      # ESLint
 
 Three independent services that communicate via on-chain state and REST:
 
-**contracts/** — Single `SignalRegistry.sol` contract (Ownable). Stores an array of Signal structs. Anyone can `createSignal()`; only the owner can `resolveSignal()`. Uses OpenZeppelin Ownable and requires `--via-ir` compilation.
+**contracts/** — Foundry. Multiple contracts: `SignalRegistry` (predictions), `SessionVault` (premium-swipe deposits), `RewardEngine` (streaks/wins), `ProofOfAlpha` (soulbound achievement NFTs), `ConvictionEngine` (per-wallet on-chain reputation). Use `--via-ir`. Deploy to Initia minitia via `minitiad tx evm create`.
 
-**backend/** — FastAPI app (`app/main.py`) with these key modules:
-- `config.py` — Pydantic Settings loading from `.env`, switches between `local` and `testnet` network via `NETWORK` env var
-- `chain.py` — `ChainClient` wraps web3.py to interact with the SignalRegistry contract. Uses POA middleware. Sends txs with `gasPrice: 0` (gasless local chain)
-- `signal_engine.py` — Fetches prices from Initia Slinky oracle (LCD endpoint), falls back to CoinGecko. Runs a momentum-based signal generation algorithm. Auto-resolves signals older than the configured timeout
-- `scheduler.py` — APScheduler runs `run_signal_cycle()` on a configurable interval (default 5 min)
+**backend/** — FastAPI app (`app/main.py`). Key modules grouped by concern:
 
-**frontend/** — React 19 SPA with react-router-dom and InterwovenKit wallet integration. Key patterns:
-- `hooks/useSignals.ts` — Reads contract state directly via viem `publicClient.readContract()` (not through the backend)
-- `hooks/usePrices.ts` — Fetches prices and leaderboard from the backend REST API
-- `hooks/useSignalActions.ts` — Sends transactions via InterwovenKit `requestTxBlock` with `/minievm.evm.v1.MsgCall` message type
-- `config/index.ts` — viem chain definitions, InterwovenKit `customChain` definition, asset metadata, price formatting
-- `main.tsx` — InterwovenKitProvider wraps the app with auto-signing enabled for MsgCall
-- `components/Layout.tsx` — Header with wallet connect + bridge buttons via `useInterwovenKit()`
-- TanStack Query with 15s stale/refetch interval for real-time updates
+- *Foundation*: `config.py` (Pydantic Settings), `error_tracker.py` (CircuitBreaker + persistent crash log), `http_client.py` (shared sync+async retry+breaker; **all external HTTP must go through this**), `db_async.py` (asyncpg pool for hot API endpoints), `db.py` (legacy sync psycopg2; used by scheduler + writes), `chain.py` (web3.py wrapper).
+- *Card pipeline*: `content_engine.py` (5-stage CoinGecko→signals→narrative→assemble), `token_harvester.py`, `lp_advisory.py`, `insight_engine.py`, `degen_oracle.py`, `signal_engine.py`.
+- *Data sources*: `sosovalue_client.py` (institutional ETF flows + macro + indices, routes through http_client), `news_aggregator.py`, `sentiment_engine.py`, `price_feed.py` (DexScreener+CoinGecko aggregator).
+- *Agent surface*: `agent_api.py` exposes `/api/v2/agent/{decisions,prices,pools,context,track-record,my-agent,marketplace,reports}` — paid via `x402_payment.py` (USDC on Base) or `mpp_middleware.py` (session-vault payments). Hot endpoints are async + asyncpg + per-handler TTL cache.
+- *Stellar / escrow*: `trustless_escrow.py` (Trustless Work API), `report_generator.py`.
+- *Autonomous trader*: `agent_runner.py` (per-user agent that swipes on its behalf, every 10 min via scheduler).
+- *Scheduler*: `scheduler.py` runs ~12 jobs (card_gen 5min, position_monitor 5min, expire 10min, backfill_charts 30min, sosovalue 10min, oracle 30min, lp_advisory 15min, user_agents 10min, news 10min, sentiment 10min, prediction_resolve 30min, etc.).
+
+**frontend/** — Vite + React 19 + TypeScript SPA. Wallet via **InterwovenKit only** (`useWallet.ts` is the unified hook; Privy is fully removed). Stellar via **Freighter** (`useStellarWallet.ts`) for Trustless Work flows on `/marketplace`.
+- `hooks/useWallet.ts` — single source of truth for EVM auth (`useInterwovenKit` + wagmi `useAccount`/`useSendTransaction`). Every page consumes this; never call `usePrivy`.
+- `hooks/useApeTransaction.ts`, `hooks/useSession.ts`, `hooks/useIUSDBalance.ts` — built on top of `useWallet`.
+- `components/Layout.tsx` — header with InterwovenKit connect, bottom nav (Feed/Market/Agent/Portfolio/Profile).
+- `pages/Feed.tsx` — swipe UX with conviction overlay, rare-card reveal, resolution modal, daily-swipes paywall.
+- `pages/Marketplace.tsx` — Stellar/Trustless Work escrow flow.
+- `main.tsx` — `InterwovenKitProvider` + `WagmiProvider` with `initiaPrivyWalletConnector` and auto-sign for `MsgCall`.
+- TanStack Query 15s stale/refetch.
 
 ## Data Flow
 
@@ -92,3 +96,16 @@ Backend uses `NETWORK=local|testnet` with Pydantic Settings loading from `backen
 - Tracked assets use placeholder addresses (`0x...0001` for BTC, `0x...0002` for ETH, `0x...0003` for INIT)
 - Backend settings use `pydantic-settings` with `@lru_cache` singleton pattern
 - Foundry remapping: `@openzeppelin/contracts/` → `lib/openzeppelin-contracts/contracts/`
+
+## Performance & Scaling Patterns (avoid repeating mistakes)
+
+These are settled patterns — extending them is fine, replacing them with ad-hoc code is not.
+
+- **All outbound HTTP** must go through `app/http_client.py` (`get`/`post`/`aget`/`apost`, with a `service=` tag). It centralizes retry (429/5xx, exponential backoff, honors `Retry-After`), reuses `error_tracker.CircuitBreaker` per service, and returns `None` on permanent failure (callers degrade gracefully). Do **not** add new `httpx.get(...)` + `try/except` patterns in integrations.
+- **Hot API endpoints** (`/api/v2/agent/*`) use `app/db_async.py` (asyncpg pool) — never open a `psycopg2` connection per request inside a handler. The legacy sync `db._get_conn()` path stays for the scheduler and writes.
+- **`async def` handlers must not call sync external libs directly** — wrap with `asyncio.to_thread()` (see `/api/v2/agent/{prices,context}` for the pattern). Otherwise you block the event loop.
+- **Per-handler TTL caches** are inline (4 lines: `_cache_get/_cache_set` in `agent_api.py`). Promote to a shared module only when ≥3 modules need it. Redis is deferred — when adopted, replace these inline caches uniformly.
+- **Request observability**: every request gets a `request_id` (echoed in `x-request-id` response header and in the `[%(request_id)s]` log prefix). Add it to your log lines if you emit context — don't reinvent.
+- **Health & circuits**: `/api/health` reports `db_async` pool state and any `open_circuits`. Use this as the canonical "is the system OK" probe.
+- **N+1 elimination**: when fetching per-row data in a list endpoint, batch with `WHERE col = ANY($1::text[])` (see `_batch_track_record` in `agent_api.py`).
+- **Don't add Redis-dependent code yet** — rate-limiting, distributed cache, and Prometheus metrics are deferred until Redis is provisioned.

@@ -1,5 +1,6 @@
-import logging, time, httpx
+import logging, time
 from app.config import get_settings
+from app import http_client
 
 log = logging.getLogger(__name__)
 _BASE = "https://openapi.sosovalue.com/openapi/v1"
@@ -19,23 +20,31 @@ def _is_enabled() -> bool:
 
 
 def _get(path: str, params: dict | None = None, cache_key: str = "", ttl: int = 300) -> dict | None:
+    """SoSoValue GET. Cached when cache_key set. Retry+breaker via http_client."""
     now = time.time()
     if cache_key and cache_key in _cache and now - _cache[cache_key][0] < ttl:
         return _cache[cache_key][1]
+    _req_timestamps.append(now)
+    r = http_client.get(
+        f"{_BASE}{path}",
+        service="sosovalue",
+        params=params,
+        headers={"x-soso-api-key": get_settings().sosovalue_api_key},
+    )
+    if r is None:
+        return None  # http_client already logged + tracked the failure
     try:
-        _req_timestamps.append(time.time())
-        r = httpx.get(f"{_BASE}{path}", params=params, headers={"x-soso-api-key": get_settings().sosovalue_api_key}, timeout=10)
         body = r.json()
-        if body.get("code") != 0:
-            log.warning("SosoValue %s error: %s", path, body.get("message"))
-            return None
-        data = body.get("data")
-        if cache_key:
-            _cache[cache_key] = (now, data)
-        return data
     except Exception as e:
-        log.warning("SosoValue %s failed: %s", path, e)
+        log.warning("SosoValue %s: invalid JSON: %s", path, e)
         return None
+    if body.get("code") != 0:
+        log.warning("SosoValue %s api error: %s", path, body.get("message"))
+        return None
+    data = body.get("data")
+    if cache_key:
+        _cache[cache_key] = (now, data)
+    return data
 
 
 def get_etf_flows() -> dict:
