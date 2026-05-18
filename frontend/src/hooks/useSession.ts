@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 // import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { createPublicClient, encodeFunctionData, http, parseEther, formatEther } from 'viem';
 import { config, normalizeAddress } from '../config';
@@ -38,6 +38,23 @@ export function useSession() {
     setSteps(prev => prev.map((s, i) => i === index ? { ...s, ...update } : s));
   };
 
+  // ── iUSD faucet cooldown (5min — mirrors backend FAUCET_COOLDOWN). UX-only; backend still enforces. ──
+  const FAUCET_COOLDOWN_MS = 300_000;
+  const cooldownKey = address ? `iusd_faucet_last_${address.toLowerCase()}` : '';
+  const [iusdCooldownSeconds, setIusdCooldownSeconds] = useState(0);
+  useEffect(() => {
+    if (!cooldownKey || typeof window === 'undefined') { setIusdCooldownSeconds(0); return; }
+    const tick = () => {
+      const last = Number(window.localStorage.getItem(cooldownKey) || 0);
+      const remaining = Math.max(0, Math.ceil((last + FAUCET_COOLDOWN_MS - Date.now()) / 1000));
+      setIusdCooldownSeconds(remaining);
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [cooldownKey]);
+  const mockIUSDConfigured = config.mockIUSDAddress !== '0x0000000000000000000000000000000000000000';
+
   // Read iUSD balance
   const { data: iusdBalance, refetch: refetchBalance } = useQuery({
     queryKey: ['iusd-balance', address],
@@ -62,15 +79,28 @@ export function useSession() {
     setSteps([{ label: 'Claim 1000 iUSD from faucet', status: 'pending' }]);
     try {
       const resp = await fetch(`${config.backendUrl}/api/payment/faucet?address=${address}`, { method: 'POST' });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || 'Faucet failed');
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        // Friendly error mapping from FastAPI HTTPException(detail=...)
+        const detail = data?.detail || resp.statusText || 'Faucet failed';
+        const friendly =
+          resp.status === 429 ? `Cooldown — ${detail}` :
+          resp.status === 400 ? `Faucet unavailable — ${detail}` :
+          resp.status === 403 ? 'Faucet disabled on this network' :
+          `Network error — ${detail}`;
+        throw new Error(friendly);
+      }
       updateStep(0, { status: 'success', txHash: data.txHash });
+      if (cooldownKey && typeof window !== 'undefined') {
+        window.localStorage.setItem(cooldownKey, String(Date.now()));
+        setIusdCooldownSeconds(Math.ceil(FAUCET_COOLDOWN_MS / 1000));
+      }
       refetchBalance();
     } catch (e: any) {
       setError(e.message);
       updateStep(0, { status: 'error', error: e.message });
     } finally { setLoading(false); }
-  }, [address, refetchBalance]);
+  }, [address, refetchBalance, cooldownKey]);
 
   // Deposit: approve + createSession via user wallet
   const approveAndDeposit = useCallback(async (amountIUSD: string, durationHours: number) => {
@@ -131,20 +161,10 @@ export function useSession() {
 
   const clearSteps = useCallback(() => { setSteps([]); setError(null); }, []);
 
-  const claimGas = useCallback(async () => {
-    if (!address) return;
-    setLoading(true); setError(null);
-    setSteps([{ label: 'Requesting 1 INIT gas', status: 'pending' }]);
-    try {
-      const resp = await fetch(`${config.backendUrl}/api/faucet/gas?address=${address}`, { method: 'POST' });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || 'Gas faucet failed');
-      updateStep(0, { status: 'success', txHash: data.txHash });
-    } catch (e: any) {
-      setError(e.message);
-      updateStep(0, { status: 'error', error: e.message });
-    } finally { setLoading(false); }
-  }, [address]);
-
-  return { claimFaucet, claimGas, approveAndDeposit, closeSession, clearSteps, loading, error, steps, iusdBalance, connected: !!address, address };
+  return {
+    claimFaucet, approveAndDeposit, closeSession, clearSteps,
+    loading, error, steps, iusdBalance,
+    iusdCooldownSeconds, mockIUSDConfigured,
+    connected: !!address, address,
+  };
 }

@@ -12,14 +12,18 @@ const localChain = defineChain({
 });
 
 const testnetChain = defineChain({
-  id: 2124225178762456,
-  name: 'Initia Testnet',
-  nativeCurrency: { name: 'INIT', symbol: 'INIT', decimals: 18 },
+  id: 2124225178762456, // 0x78bf8b733fcd8
+  name: 'Initia evm-1 Testnet',
+  nativeCurrency: { name: 'Initia', symbol: 'INIT', decimals: 18 },
   rpcUrls: {
     default: {
       http: [import.meta.env.VITE_TESTNET_JSON_RPC_URL || 'https://jsonrpc-evm-1.anvil.asia-southeast.initia.xyz'],
     },
   },
+  blockExplorers: {
+    default: { name: 'Initia Scan', url: 'https://scan.testnet.initia.xyz/evm-1' },
+  },
+  testnet: true,
 });
 
 export const config = {

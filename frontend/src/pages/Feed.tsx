@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 // import { usePrivy } from '@privy-io/react-auth';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { createPublicClient, http } from 'viem';
 import { useCards } from '../hooks/useCards';
 import { config, shareToX, normalizeAddress } from '../config';
@@ -11,7 +11,6 @@ import { OracleWidget } from '../components/OracleWidget';
 import Onboarding from '../components/Onboarding';
 import Paywall from '../components/Paywall';
 import { useApeTransaction } from '../hooks/useApeTransaction';
-import { useSession } from '../hooks/useSession';
 import { useWallet } from '../hooks/useWallet';
 
 const publicClient = createPublicClient({ chain: config.chain, transport: http() });
@@ -209,16 +208,13 @@ export default function Feed() {
   const [generating, setGenerating] = useState(false);
   const [showConviction, setShowConviction] = useState(false);
   const [pendingCard, setPendingCard] = useState<any>(null);
-  const [fundingGas, setFundingGas] = useState(false);
   const [cardFilter] = useState<string>('all');
   const [showRareReveal, setShowRareReveal] = useState<string | null>(null);
 
   const { data, isLoading } = useCards(0, 50, cardFilter === 'all' ? undefined : cardFilter);
-  const { address: initiaAddress, login } = useWallet();
+  const { address: initiaAddress, login, isCorrectChain } = useWallet();
   const navigate = useNavigate();
   const { apeOnChain } = useApeTransaction();
-  const { claimGas } = useSession();
-  const queryClient = useQueryClient();
 
   const evmAddress = normalizeAddress(initiaAddress);
 
@@ -227,17 +223,6 @@ export default function Feed() {
     queryFn: () => publicClient.getBalance({ address: evmAddress as `0x${string}` }),
     enabled: !!evmAddress,
   });
-
-  // Auto-faucet gas for new users
-  useEffect(() => {
-    if (evmAddress && balance === 0n && !fundingGas) {
-      setFundingGas(true);
-      fetch(`${config.backendUrl}/api/faucet/gas?address=${evmAddress}`, { method: 'POST' })
-        .then(() => queryClient.invalidateQueries({ queryKey: ['balance', evmAddress] }))
-        .catch(() => {})
-        .finally(() => setFundingGas(false));
-    }
-  }, [evmAddress, balance]);
 
   // Resolution detection
   const { data: resolvedData } = useQuery({
@@ -405,15 +390,14 @@ export default function Feed() {
       )}
       {showPaywall && <Paywall onDismiss={() => setShowPaywall(false)} />}
       {resolvedTrade && <ResolutionModal trade={resolvedTrade} onDismiss={() => setResolvedTrade(null)} />}
-      {fundingGas && (
-        <div className="fixed top-16 left-4 right-4 z-50 bg-[#131313] border border-[#8eff71]/20 p-3 rounded-xl text-center">
-          <div className="text-sm text-[#8eff71] animate-pulse">⛽ Funding your wallet...</div>
-        </div>
-      )}
-      {evmAddress && balance != null && balance > 0n && balance < 10000000000000000n && !fundingGas && (
-        <div className="fixed top-16 left-4 right-4 z-50 bg-[#131313] border border-[#ff7166]/20 p-3 rounded-xl flex items-center justify-between">
-          <span className="text-xs text-[#adaaaa]">⛽ Low gas balance</span>
-          <button onClick={claimGas} className="text-xs font-bold text-[#8eff71] bg-[#262626] px-3 py-1 rounded-lg">Get Gas</button>
+      {evmAddress && isCorrectChain && balance != null && balance < 10000000000000000n && (
+        <div className="fixed top-16 left-4 right-4 z-40 bg-[#131313] border border-[#bf81ff]/30 p-3 rounded-xl flex items-center justify-between">
+          <span className="text-xs text-[#adaaaa]">⛽ Low INIT — bridge from L1 to trade</span>
+          <a href={`https://bridge.initia.xyz/?to=initia-signal-1&address=${evmAddress}`}
+             target="_blank" rel="noopener noreferrer"
+             className="text-xs font-bold text-[#8eff71] bg-[#262626] px-3 py-1 rounded-lg">
+            Bridge
+          </a>
         </div>
       )}
 

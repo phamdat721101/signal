@@ -881,31 +881,15 @@ async def claim_faucet(address: str):
 
 @app.post("/api/faucet/gas")
 async def gas_faucet(address: str):
-    """Send native gas tokens to new user from gas-station account."""
-    address = normalize_address(address)
-    if not address:
-        raise HTTPException(status_code=400, detail="Invalid address")
-    if get_settings().network == "mainnet":
-        raise HTTPException(status_code=403, detail="Faucet disabled on mainnet")
-    _check_faucet_rate(address)
-    try:
-        chain = get_chain()
-        from web3 import Web3
-        to = Web3.to_checksum_address(address)
-        bal = chain.w3.eth.get_balance(to)
-        if bal > Web3.to_wei(0.1, 'ether'):
-            return {"status": "ok", "message": "Already funded", "balance": str(bal)}
-        tx = {
-            "from": chain.account.address, "to": to,
-            "value": Web3.to_wei(1, 'ether'), "gas": 21000, "gasPrice": 0,
-            "nonce": chain.w3.eth.get_transaction_count(chain.account.address),
-        }
-        signed = chain.account.sign_transaction(tx)
-        tx_hash = chain.w3.eth.send_raw_transaction(signed.raw_transaction)
-        chain.w3.eth.wait_for_transaction_receipt(tx_hash)
-        return {"status": "ok", "txHash": tx_hash.hex(), "amount": "1 INIT"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Removed 2026-05-18 — users fund their wallet via the Initia L1 bridge.
+
+    Kept as a 410 Gone for any clients still pointing at this URL so they get
+    an explicit signal instead of a misleading 404.
+    """
+    raise HTTPException(
+        status_code=410,
+        detail="Gas faucet removed. Bridge from Initia L1: https://bridge.initia.xyz/?to=initia-signal-1",
+    )
 
 
 

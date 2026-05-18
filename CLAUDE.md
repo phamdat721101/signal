@@ -60,9 +60,10 @@ Three independent services that communicate via on-chain state and REST:
 - *Scheduler*: `scheduler.py` runs ~12 jobs (card_gen 5min, position_monitor 5min, expire 10min, backfill_charts 30min, sosovalue 10min, oracle 30min, lp_advisory 15min, user_agents 10min, news 10min, sentiment 10min, prediction_resolve 30min, etc.).
 
 **frontend/** — Vite + React 19 + TypeScript SPA. Wallet via **InterwovenKit only** (`useWallet.ts` is the unified hook; Privy is fully removed). Stellar via **Freighter** (`useStellarWallet.ts`) for Trustless Work flows on `/marketplace`.
-- `hooks/useWallet.ts` — single source of truth for EVM auth (`useInterwovenKit` + wagmi `useAccount`/`useSendTransaction`). Every page consumes this; never call `usePrivy`.
+- `hooks/useWallet.ts` — single source of truth for EVM auth (`useInterwovenKit` + wagmi `useAccount`/`useSendTransaction`/`useChainId`/`useSwitchChain`). Exposes chain status (`isCorrectChain`, `switchToCorrect`) so any page can react to mismatch. Every page consumes this; never call `usePrivy`.
+- `components/Layout.tsx` — header with InterwovenKit connect, **inline `ChainSwitchBanner`** that auto-shows on every route when the wallet is on the wrong EVM chain (one-click switch via wagmi). Bottom nav (Feed/Market/Agent/Portfolio/Profile).
 - `hooks/useApeTransaction.ts`, `hooks/useSession.ts`, `hooks/useIUSDBalance.ts` — built on top of `useWallet`.
-- `components/Layout.tsx` — header with InterwovenKit connect, bottom nav (Feed/Market/Agent/Portfolio/Profile).
+- `hooks/useSession.ts` exposes `iusdCooldownSeconds` + `mockIUSDConfigured`; the iUSD-faucet button on `/profile` is disabled when not connected, on the wrong chain, in 5-min cooldown, or when MockIUSD isn't configured. **Gas faucet is removed** — low-INIT users see a Bridge banner pointing at `bridge.initia.xyz`.
 - `pages/Feed.tsx` — swipe UX with conviction overlay, rare-card reveal, resolution modal, daily-swipes paywall.
 - `pages/Marketplace.tsx` — Stellar/Trustless Work escrow flow.
 - `main.tsx` — `InterwovenKitProvider` + `WagmiProvider` with `initiaPrivyWalletConnector` and auto-sign for `MsgCall`.

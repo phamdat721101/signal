@@ -6,9 +6,13 @@ import { useConviction } from '../hooks/useConviction';
 import { useWallet } from '../hooks/useWallet';
 
 export default function Profile() {
-  const { address: walletAddr } = useWallet();
+  const { address: walletAddr, isCorrectChain, isConnected } = useWallet();
   const address = normalizeAddress(walletAddr);
-  const { claimFaucet, claimGas, approveAndDeposit, closeSession, clearSteps, loading, error, steps, iusdBalance } = useSession();
+  const {
+    claimFaucet, approveAndDeposit, closeSession, clearSteps,
+    loading, error, steps, iusdBalance,
+    iusdCooldownSeconds, mockIUSDConfigured,
+  } = useSession();
   const { data: convictionData } = useConviction(address);
 
   const { data } = useQuery({
@@ -137,14 +141,22 @@ export default function Profile() {
           </div>
         </div>
         <div className="space-y-2">
-          <button onClick={() => { clearSteps(); claimGas(); }} disabled={loading}
-            className="w-full bg-[#262626] text-white font-headline font-bold py-3 rounded-lg disabled:opacity-50 active:scale-95 transition-transform">
-            {loading && steps[0]?.label.includes('INIT') ? 'Requesting...' : 'Get 1 INIT Gas'}
-          </button>
-          <button onClick={() => { clearSteps(); claimFaucet(); }} disabled={loading}
-            className="w-full bg-[#262626] text-[#8eff71] font-headline font-bold py-3 rounded-lg disabled:opacity-50 active:scale-95 transition-transform">
-            {loading && steps[0]?.label.includes('faucet') ? 'Claiming...' : 'Claim 1000 iUSD (Testnet Faucet)'}
-          </button>
+          {(() => {
+            const iusdDisabled = loading || !isConnected || !isCorrectChain || iusdCooldownSeconds > 0 || !mockIUSDConfigured;
+            const iusdLabel =
+              !isConnected ? 'Connect wallet to claim'
+              : !isCorrectChain ? 'Switch to evm-1 first'
+              : !mockIUSDConfigured ? 'Faucet unavailable'
+              : iusdCooldownSeconds > 0 ? `Try again in ${Math.floor(iusdCooldownSeconds / 60)}m ${iusdCooldownSeconds % 60}s`
+              : loading && steps[0]?.label.includes('faucet') ? 'Claiming...'
+              : 'Claim 1000 iUSD (Testnet Faucet)';
+            return (
+              <button onClick={() => { clearSteps(); claimFaucet(); }} disabled={iusdDisabled}
+                className="w-full bg-[#262626] text-[#8eff71] font-headline font-bold py-3 rounded-lg disabled:opacity-50 active:scale-95 transition-transform">
+                {iusdLabel}
+              </button>
+            );
+          })()}
           <button onClick={() => { clearSteps(); approveAndDeposit('10', 24); }} disabled={loading}
             className="w-full ape-gradient text-[#0b5800] font-headline font-bold py-3 rounded-lg disabled:opacity-50 active:scale-95 transition-transform">
             {loading && steps[0]?.label.includes('Approve') ? 'Depositing...' : 'Deposit 10 iUSD (24h Session)'}

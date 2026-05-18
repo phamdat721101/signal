@@ -1,25 +1,40 @@
-import { useAccount, useSendTransaction } from 'wagmi';
+import { useAccount, useChainId, useSendTransaction, useSwitchChain } from 'wagmi';
 import { useInterwovenKit } from '@initia/interwovenkit-react';
 import { config } from '../config';
 
 /**
- * Unified wallet hook replacing all Privy usage.
- * Single source of truth for auth state and transaction sending.
+ * Unified wallet hook — single source of truth for EVM auth, tx, and chain state.
+ * Wraps wagmi (EVM connector) + InterwovenKit (Initia auto-sign / Cosmos UX)
+ * so pages never reach into either dependency directly.
+ *
+ * Note: chain default is set in main.tsx via InterwovenKitProvider.defaultChainId,
+ * not here — the wagmi connector inherits whatever chain the InterwovenKit wallet
+ * boots on. switchToCorrect() remains available for any future case where the
+ * wagmi config registers more than one chain.
  */
 export function useWallet() {
   const { address } = useAccount();
   const { isConnected, openConnect, disconnect, hexAddress, autoSign } = useInterwovenKit();
   const { sendTransactionAsync } = useSendTransaction();
+  const currentChainId = useChainId();
+  const { switchChainAsync, isPending: isSwitchingChain, error: switchChainError } = useSwitchChain();
 
   const walletAddress = hexAddress || address || '';
+  const expectedChainId = config.chain.id;
+  const isCorrectChain = !isConnected || currentChainId === expectedChainId;
 
   const sendTx = async (to: string, data: string): Promise<string> => {
     const hash = await sendTransactionAsync({
       to: to as `0x${string}`,
       data: data as `0x${string}`,
-      chainId: config.chain.id,
+      chainId: expectedChainId,
     });
     return hash;
+  };
+
+  const switchToCorrect = async () => {
+    if (isCorrectChain) return;
+    await switchChainAsync({ chainId: expectedChainId });
   };
 
   return {
@@ -29,5 +44,12 @@ export function useWallet() {
     logout: disconnect,
     sendTx,
     autoSign,
+    chainId: currentChainId,
+    expectedChainId,
+    expectedChainName: config.chain.name,
+    isCorrectChain,
+    isSwitchingChain,
+    switchChainError,
+    switchToCorrect,
   };
 }

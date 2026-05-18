@@ -13,6 +13,26 @@ const navItems = [
   { to: '/profile', icon: 'person', label: 'Profile' },
 ];
 
+/** Inline banner — visible on every page when wallet is on the wrong EVM chain. */
+function ChainSwitchBanner() {
+  const { isConnected, isCorrectChain, isSwitchingChain, switchChainError, switchToCorrect, expectedChainName } = useWallet();
+  if (!isConnected || isCorrectChain) return null;
+  return (
+    <div className="mx-4 mt-2 bg-[#131313] border border-[#ff7166]/30 rounded-xl px-3 py-2 flex items-center justify-between gap-3">
+      <span className="text-xs text-[#adaaaa] truncate">
+        ⚠️ Wrong network — switch to <span className="text-white font-bold">{expectedChainName}</span> to continue
+        {switchChainError && <span className="block text-[10px] text-[#ff7166] mt-0.5">{switchChainError.message}</span>}
+      </span>
+      <button
+        onClick={() => { void switchToCorrect(); }}
+        disabled={isSwitchingChain}
+        className="text-xs font-bold text-[#0b5800] ape-gradient px-3 py-1 rounded-lg disabled:opacity-50 shrink-0">
+        {isSwitchingChain ? 'Switching...' : 'Switch'}
+      </button>
+    </div>
+  );
+}
+
 export default function Layout({ children }: { children: ReactNode }) {
   const { address: walletAddress, isConnected: authenticated, login, logout } = useWallet();
   const { data: rewardsData } = useQuery({
@@ -52,6 +72,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 
       {/* Main */}
       <main className="flex-1 overflow-y-auto overflow-x-hidden">
+        <ChainSwitchBanner />
         {children}
       </main>
 

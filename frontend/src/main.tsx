@@ -41,8 +41,8 @@ function Providers({ children }: { children: React.ReactNode }) {
       <WagmiProvider config={wagmiConfig}>
         <InterwovenKitProvider
           {...TESTNET}
-          defaultChainId="initiation-2"
-          enableAutoSign={{ 'initiation-2': ['/minievm.evm.v1.MsgCall'] }}
+          defaultChainId={config.chainId}
+          enableAutoSign={{ [config.chainId]: ['/minievm.evm.v1.MsgCall'] }}
         >
           {children}
         </InterwovenKitProvider>
