@@ -21,14 +21,23 @@ contract MockIUSD is ERC20, Ownable {
     event FaucetClaimed(address indexed user, uint256 amount);
 
     constructor() ERC20("Mock iUSD", "iUSD") Ownable(msg.sender) {
-        ERC20_REGISTRY.register_erc20();
+        // Register with Initia ERC20Registry precompile only when present.
+        // On chains without the precompile (e.g. evm-1 testnet), behave as a vanilla ERC20.
+        if (address(ERC20_REGISTRY).code.length > 0) {
+            try ERC20_REGISTRY.register_erc20() returns (bool) {} catch {}
+        }
         _mint(msg.sender, 1_000_000 * 1e18);
     }
 
-    /// @dev Hook called on every mint/transfer/burn. Registers recipient's ERC20 store.
+    /// @dev Hook called on every mint/transfer/burn. Registers recipient's ERC20 store
+    ///      when the precompile is available; otherwise behaves like a vanilla ERC20.
     function _update(address from, address to, uint256 value) internal override {
-        if (to != address(0) && !ERC20_REGISTRY.is_erc20_store_registered(to)) {
-            ERC20_REGISTRY.register_erc20_store(to);
+        if (to != address(0) && address(ERC20_REGISTRY).code.length > 0) {
+            try ERC20_REGISTRY.is_erc20_store_registered(to) returns (bool registered) {
+                if (!registered) {
+                    try ERC20_REGISTRY.register_erc20_store(to) returns (bool) {} catch {}
+                }
+            } catch {}
         }
         super._update(from, to, value);
     }

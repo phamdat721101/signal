@@ -29,8 +29,8 @@ DEPLOY_OUTPUT=$(forge script script/Deploy.s.sol \
   --private-key "$PRIVATE_KEY" \
   --broadcast \
   --via-ir \
-  --skip-simulation \
-  --with-gas-price 0 \
+  --with-gas-price 100000000 \
+  --gas-estimate-multiplier 300 \
   --slow \
   2>&1) || {
   echo "$DEPLOY_OUTPUT"
