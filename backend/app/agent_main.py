@@ -84,6 +84,12 @@ async def lifespan(app: FastAPI):
     global _x402_routes, _x402_server
     logger.info("Starting Signal Agent API | network=%s", get_settings().network)
     await db_async.init_pool()
+    # Reliability layer — chain_operations table for retry/idempotency on chain writes
+    try:
+        from app import chain_ops
+        chain_ops.init_table()
+    except Exception as e:
+        logger.warning("chain_ops init failed (non-fatal): %s", e)
     _x402_routes, _x402_server = get_x402_middleware_args()
     if _x402_server is None:
         logger.warning("x402 not configured — endpoints will serve UNPAID")
@@ -198,6 +204,14 @@ async def x402_gate(request: Request, call_next):
             "message": verify_resp.invalid_message,
         })
 
+    # Sanctions gate (Initia ICosmos.is_blocked_address; 1h LRU; fail-open on error).
+    if x402_settler.is_buyer_blocked(verify_resp.payer):
+        return JSONResponse(status_code=402, content={
+            "error": "payment_invalid",
+            "reason": "blocked",
+            "message": "Buyer address is sanctioned by the Cosmos bank module.",
+        })
+
     # Persist intent before delivering data — survives crash mid-settle
     await x402_settler.record_pending(
         payload_hash,
@@ -273,4 +287,13 @@ async def health():
         "x402_routes": list((_x402_routes or {}).keys()),
         "db_async": await db_async.health(),
         "settlements": settle_summary,
+        "chain_ops_pending_count": _safe_chain_ops_pending(),
     }
+
+
+def _safe_chain_ops_pending() -> int:
+    try:
+        from app import chain_ops
+        return chain_ops.pending_count()
+    except Exception:
+        return -1

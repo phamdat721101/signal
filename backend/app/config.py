@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     tucana_router_address: str = ""
     enable_payment_gating: bool = True
     free_signals_per_day: int = 3
+    # ── Initia-Native helpers (this PRD; populated post-deploy) ──
+    oracle_adapter_address: str = ""
+    cosmos_utils_view_address: str = ""
+    cosmos_dispatcher_address: str = ""
+    ibc_settlement_hook_address: str = ""
+    vip_score_adapter_address: str = ""
+    connect_oracle_address: str = ""        # ConnectOracle precompile/contract on the chain
     # x402 Agent Payment (Base/USDC)
     x402_receiver_address: str = ""
     x402_facilitator_url: str = "https://api.cdp.coinbase.com/platform/v2/x402"
@@ -76,6 +83,18 @@ class Settings(BaseSettings):
     @property
     def lcd_url(self) -> str:
         return self.testnet_lcd_url if self.network == "testnet" else self.local_lcd_url
+
+    # ── EVM gas params (network-derived; documented in product_context.md) ──
+    # Initia evm-1 testnet quirk: forge gas estimator under-counts ~60k of
+    # Cosmos-layer fee accounting. CALL txs need ≥250k limit and ≥0.1 gwei
+    # gas price. Local minievm accepts gasPrice=0 and lower limits.
+    @property
+    def evm_gas_price_wei(self) -> int:
+        return 100_000_000 if self.network == "testnet" else 0  # 0.1 gwei vs free
+
+    @property
+    def evm_min_gas_limit(self) -> int:
+        return 250_000 if self.network == "testnet" else 100_000
 
     class Config:
         env_file = _ENV_FILE

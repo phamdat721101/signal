@@ -128,3 +128,55 @@ Two FastAPI processes share the same data layer; they cannot crash each other.
 - **Settle is fire-and-forget** post-response (asyncio task). Buyer gets data immediately; the settle outcome lands in `x402_settlements`. Crash window is bounded by the reconciler.
 - **Restart pattern on VPS**: `restart_signal.sh` on `/home/bitnami/signal-backend` runs three nohup processes (consumer 8001, agent 8002, scheduler). Caddy at `47-130-193-211.sslip.io` and `ai.overguild.com` exposes `/agent-api/*` to the agent process.
 - **Don't bolt x402 onto `:8001`.** Different SLA, different audience. The split is the architecture.
+
+## Initia-Native Helpers (PRD-Initia-Native-Upgrade)
+
+5 additive helper contracts on top of the 7 live ones — **no redeploys** of
+existing contracts. See `docs/AGENT-ONCHAIN-CONTEXT.md` for the canonical
+state-of-the-system doc and `docs/PRDs/PRD-Initia-Native-Upgrade.md` for the
+plan.
+
+| Contract | Role | Initia primitive |
+|---|---|---|
+| `OracleAdapter` | resolution-time ConnectOracle price proofs (NOT in swipe path) | `ConnectOracle.get_price` |
+| `CosmosUtils` (lib) + `CosmosUtilsView` (deployable) | read-only ICosmos wrapper: sanctions, address/denom conversion | `ICosmos` `0x…f1` |
+| `CosmosDispatcher` | owner-gated `execute_cosmos`: NFT mirror, IBC transfer | `ICosmos` `0x…f1` |
+| `IBCSettlementHook` | entrypoint for EVM IBC Hooks ICS-20 packets → `SessionVault.payFromSession` | EVM IBC Hooks |
+| `VIPScoreAdapter` | mirrors `ConvictionEngine.reputationScore` for VIP eligibility | `vip_score` pattern |
+
+Every external precompile call wraps in `try/catch` + 100k gas cap (Code4rena
+2025-02 H-07/H-08). Every helper is `Ownable + Pausable`. Every state-mutating
+chain call from the backend routes through `chain_ops.submit()` for SHA256
+idempotency.
+
+**Reliability layer.** `backend/app/chain_ops.py` + `chain_operations` table +
+60s reconciler job. State machine: `pending → sent → confirmed → final` or
+`failed_retryable → failed_terminal`. Re-running a chain op with the same args
+is a no-op. `/api/health` reports `chain_ops_pending_count`. Pattern lifted
+from `x402_settler.py`.
+
+**Deploy.** Single command — `./deploy-initia-native.sh`. Pure-additive; the
+5,816+ live predictions stay intact. Smoke test runs at the end.
+
+**Swipe ritual.** `frontend/src/hooks/useSwipeSession.ts` queues swipes in
+localStorage, settles via `requestTxBlock` in one Cosmos tx (atomic
+`MsgCall` × N). Backend mirror tables `swipe_sessions` + `swipe_session_queue`
+provide recovery if the user reloads mid-session. `atomicMode` feature flag
+falls back to sequential `sendTx` if `evm-1` doesn't atomically batch.
+
+**Sanctions.** `x402_settler.is_buyer_blocked()` calls
+`CosmosUtilsView.isAddressSanctioned()` with a 1h LRU cache; refused settles
+return `402 {"reason": "blocked"}`.
+
+**VIP score.** Daily backend job pushes top-200 reputation users to
+`VIPScoreAdapter`; `finalizeEpoch` runs every 14 days. Whitelisting requires
+Initia L1 governance — see `docs/proposals/VIP-Whitelisting-Proposal-draft.md`.
+
+**Key conventions added by this upgrade.**
+- Every new helper contract uses `Ownable + Pausable` and `try/catch` + per-call
+  gas cap on every precompile call.
+- ICosmos precompile address must be lowercase: `0x...f1` (EIP-55 checksum).
+- New ABIs are inlined in `chain.py` (lean — only the methods we call); no
+  separate `*_abi.json` files in `backend/app/` for the new helpers.
+- Every state-mutating chain call must route through `chain_ops.submit()` —
+  no exceptions. Read methods can hit the chain directly.

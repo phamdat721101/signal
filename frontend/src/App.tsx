@@ -5,6 +5,7 @@ import Portfolio from './pages/Portfolio';
 import History from './pages/History';
 import Profile from './pages/Profile';
 import TradeSuccess from './pages/TradeSuccess';
+import SettlementSuccess from './pages/SettlementSuccess';
 import Agent from './pages/Agent';
 import Marketplace from './pages/Marketplace';
 
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="/profile" element={<Profile />} />
 
         <Route path="/trade-success/:id" element={<TradeSuccess />} />
+        <Route path="/session/:txHash" element={<SettlementSuccess />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

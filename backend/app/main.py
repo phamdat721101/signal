@@ -89,6 +89,18 @@ async def lifespan(app: FastAPI):
         _get_read_conn()
     except Exception:
         pass
+    # Reliability layer — chain_operations table for retry/idempotency on chain writes
+    try:
+        from app import chain_ops
+        chain_ops.init_table()
+    except Exception as e:
+        logger.warning("chain_ops init failed (non-fatal): %s", e)
+    # Swipe-session mirror tables
+    try:
+        from app import swipe_session
+        swipe_session.init_table()
+    except Exception as e:
+        logger.warning("swipe_session init failed (non-fatal): %s", e)
     # Async pool for hot endpoints
     await db_async.init_pool()
     yield
@@ -170,7 +182,16 @@ async def health():
         "simulation_mode": simulation,
         "db_async": await db_async.health(),
         "circuits": error_tracker.summary().get("open_circuits", []),
+        "chain_ops_pending_count": _safe_chain_ops_pending(),
     }
+
+
+def _safe_chain_ops_pending() -> int:
+    try:
+        from app import chain_ops
+        return chain_ops.pending_count()
+    except Exception:
+        return -1
 
 
 def _require_admin(request: Request):
@@ -517,6 +538,8 @@ async def get_profile(address: str):
         "total_pnl_usd": round(sum(t.get("pnl_usd", 0) or 0 for t in trades), 2),
         "total_trades": trade_total,
         "win_count": sum(1 for t in resolved if (t.get("pnl_usd") or 0) > 0),
+        "loss_count": sum(1 for t in resolved if (t.get("pnl_usd") or 0) <= 0),
+        "resolved_count": len(resolved),
     }}
     wins = rewards_data.get("wins", 0)
     total = rewards_data.get("totalTrades", 0)
@@ -530,7 +553,26 @@ async def get_profile(address: str):
     except Exception:
         pass
     on_chain_rep = conviction_data.get("reputationScore", 0)
-    iq = max(0, wins * 10 - (total - wins) * 5 + streak * 5 + earned * 25 + (on_chain_rep // 10))
+    # Trading IQ — engagement + conviction-aware (DB-derived, never stuck at 0)
+    # RewardEngine fields lag because onTradeResolved only fires after a 24h
+    # resolution; meanwhile the user's swipes/convictions are real activity.
+    db_total       = trades_data["summary"].get("total_trades", 0)
+    db_wins        = trades_data["summary"].get("win_count", 0)
+    db_losses      = trades_data["summary"].get("loss_count", 0)
+    conv_total     = conviction_data.get("totalConvictions", 0)
+    conv_correct   = conviction_data.get("correctCalls", 0)
+    best_streak    = max(streak, conviction_data.get("bestStreak", 0))
+    iq = max(
+        0,
+        db_total       * 2          # engagement: every swipe earns IQ
+      + conv_total     * 3          # on-chain proof of activity (verifiable)
+      + db_wins        * 10         # resolved wins
+      + conv_correct   * 8          # oracle-verified correct calls
+      - db_losses      * 3          # penalize ONLY resolved losses, never pending
+      + best_streak    * 5
+      + earned         * 25
+      + on_chain_rep   // 10
+    )
     return {
         "address": address,
         "trading_iq": iq,
@@ -1133,3 +1175,56 @@ Returns: {overall: {total_trades, wins, win_rate}, per_token: {SYMBOL: {total_tr
 Premium endpoints require an active SessionVault session or x402 payment.
 See GET /api/payment/pricing for details.
 """)
+
+
+
+# ─── Swipe-session mirror (frontend useSwipeSession recovery surface) ──
+
+@app.post("/api/swipe-session/start")
+async def swipe_session_start(payload: dict):
+    """Mirror the start of a swipe session. Frontend localStorage is truth.
+
+    Body: {"user": "0x...", "tx_hash": "0x...", "duration_hours": 24, "session_id"?: "..."}
+    """
+    from app import swipe_session
+    user = (payload.get("user") or "").strip()
+    if not user:
+        raise HTTPException(status_code=400, detail="user required")
+    # session_id may be 'pending' until we read it from the createSession event;
+    # frontend can patch it later by re-calling start with the resolved id.
+    session_id = str(payload.get("session_id") or "pending")
+    swipe_session.start(
+        session_id, user,
+        start_tx_hash=payload.get("tx_hash"),
+        duration_hours=int(payload.get("duration_hours") or 24),
+    )
+    return {"ok": True, "session_id": session_id}
+
+
+@app.post("/api/swipe-session/{session_id}/queue")
+async def swipe_session_queue(session_id: str, payload: dict):
+    """Mirror one queued swipe. Idempotent on (session_id, card_id)."""
+    from app import swipe_session
+    swipe_session.queue(session_id, payload)
+    return {"ok": True}
+
+
+@app.post("/api/swipe-session/{session_id}/settle")
+async def swipe_session_settle(session_id: str, payload: dict):
+    """Mark session settled. Idempotent."""
+    from app import swipe_session
+    tx_hash = (payload.get("tx_hash") or "").strip()
+    if not tx_hash:
+        raise HTTPException(status_code=400, detail="tx_hash required")
+    swipe_session.settle(session_id, tx_hash)
+    return {"ok": True}
+
+
+@app.get("/api/swipe-session/{session_id}")
+async def swipe_session_get(session_id: str):
+    """Recovery: read the full session + queue."""
+    from app import swipe_session
+    s = swipe_session.get(session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="session not found")
+    return s

@@ -299,6 +299,22 @@ def start_scheduler():
     scheduler.add_job(refresh_sentiment, "interval", minutes=10, id="sentiment_refresh", max_instances=1, next_run_time=t + timedelta(seconds=55))
     scheduler.add_job(resolve_expired_escrows, "interval", minutes=30, id="escrow_resolve", max_instances=1, next_run_time=t + timedelta(seconds=210))
     scheduler.add_job(resolve_report_escrows, "interval", minutes=5, id="report_escrow_resolve", max_instances=1, next_run_time=t + timedelta(seconds=120))
+
+    # ── Initia-Native helpers (PRD-Initia-Native-Upgrade) ──
+    scheduler.add_job(_chain_ops_reconcile_job, "interval", seconds=60,
+                      id="chain_ops_reconciler", max_instances=1,
+                      next_run_time=t + timedelta(seconds=20))
+    scheduler.add_job(_oracle_resolve_job, "interval", minutes=30,
+                      id="oracle_resolve", max_instances=1,
+                      next_run_time=t + timedelta(seconds=240))
+    scheduler.add_job(_vip_score_update_job, "interval", hours=24,
+                      id="vip_score_update", max_instances=1,
+                      next_run_time=t + timedelta(seconds=300))
+    scheduler.add_job(_vip_finalize_epoch_job, "interval", days=14,
+                      id="vip_finalize_epoch", max_instances=1,
+                      next_run_time=t + timedelta(seconds=360))
+    _start_ibc_listener_thread()
+
     scheduler.start()
     logger.info("Scheduler started — all jobs delayed for graceful startup")
 
@@ -306,3 +322,179 @@ def start_scheduler():
 def stop_scheduler():
     if scheduler.running:
         scheduler.shutdown(wait=False)
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Initia-Native scheduler jobs (PRD-Initia-Native-Upgrade)
+#
+# Per-job circuit breakers + chain_ops idempotency keep these crash-safe.
+# Each job acquires a Postgres advisory lock so two scheduler processes
+# (e.g. blue/green deploy) never run the same job concurrently.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _with_advisory_lock(job_id: str, fn):
+    """Run fn() iff we can acquire pg_try_advisory_lock(hash(job_id)).
+
+    Lock is auto-released on connection close. Multi-process safe.
+    """
+    from app.db import _get_conn
+    conn = _get_conn()
+    if not conn:
+        # No DB — fall through to local execution; deploy guarantees DB exists.
+        return fn()
+    try:
+        # Stable 8-byte int from job id
+        lock_key = abs(hash(job_id)) % (2**31)
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
+            row = cur.fetchone()
+            got_lock = bool(row and row[0])
+        if not got_lock:
+            logger.debug("scheduler[%s] advisory lock held by another process; skipping", job_id)
+            return None
+        try:
+            return fn()
+        finally:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+    finally:
+        conn.close()
+
+
+def _chain_ops_reconcile_job():
+    """Sweep stuck chain_operations rows. 60s cadence."""
+    from app import chain_ops
+    def _do():
+        try:
+            counts = chain_ops.reconcile()
+            if any(v for k, v in counts.items() if k != "checked"):
+                logger.info("chain_ops reconcile: %s", counts)
+        except Exception as e:
+            logger.warning("chain_ops reconcile failed: %s", e)
+    _with_advisory_lock("chain_ops_reconciler", _do)
+
+
+def _oracle_resolve_job():
+    """Snapshot oracle exit-price for unresolved signals past 24h.
+
+    Read existing signals from DB; for each unresolved + past-24h signal,
+    submit a chain_ops 'oracle_exit_price' op pointing at OracleAdapter.
+    The reconciler heals retries automatically.
+    """
+    from app.chain import ChainClient
+    from app.db import _get_conn
+
+    def _do():
+        conn = _get_conn()
+        if not conn:
+            return
+        try:
+            from psycopg2.extras import RealDictCursor
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, symbol FROM signals
+                     WHERE resolved = FALSE
+                       AND created_at < NOW() - INTERVAL '24 hours'
+                     ORDER BY id
+                     LIMIT 50
+                    """
+                )
+                rows = cur.fetchall()
+        except Exception as e:
+            logger.warning("oracle_resolve query failed: %s", e)
+            rows = []
+        finally:
+            conn.close()
+        if not rows:
+            return
+        try:
+            chain = ChainClient()
+        except Exception as e:
+            logger.warning("oracle_resolve: ChainClient init failed: %s", e)
+            return
+        for r in rows:
+            symbol = (r.get("symbol") or "").upper()
+            if not symbol:
+                continue
+            pair = f"{symbol}/USD"
+            try:
+                chain.commit_exit_price_proof(int(r["id"]), pair)
+            except Exception as e:
+                logger.debug("oracle_resolve signal=%s pair=%s err=%s", r["id"], pair, e)
+
+    _with_advisory_lock("oracle_resolve", _do)
+
+
+def _vip_score_update_job():
+    """Push the top-N reputation users to VIPScoreAdapter once per day.
+
+    Excludes operator/team addresses per the VIP whitelisting proposal.
+    """
+    from app.chain import ChainClient
+    from app.config import get_settings
+
+    EXCLUDED = {get_settings().__dict__.get("deployer_address", "").lower()} or set()
+
+    def _do():
+        try:
+            chain = ChainClient()
+        except Exception as e:
+            logger.warning("vip_score_update: ChainClient init failed: %s", e)
+            return
+        try:
+            leaderboard = chain.get_conviction_leaderboard(0, 200)
+        except Exception as e:
+            logger.warning("vip_score_update: leaderboard read failed: %s", e)
+            return
+        users = [
+            row["address"] for row in leaderboard
+            if row["address"].lower() not in EXCLUDED and row["reputationScore"] > 0
+        ]
+        if not users:
+            return
+        # Page in batches of 100 (VIPScoreAdapter.scoreBatch gas-safety).
+        for i in range(0, len(users), 100):
+            batch = users[i:i + 100]
+            try:
+                chain.vip_score_batch(batch)
+            except Exception as e:
+                logger.warning("vip_score_update batch %d failed: %s", i // 100, e)
+
+    _with_advisory_lock("vip_score_update", _do)
+
+
+def _vip_finalize_epoch_job():
+    """Finalize the current VIP epoch every 14 days (aligned with VIP stage)."""
+    from app.chain import ChainClient
+
+    def _do():
+        try:
+            chain = ChainClient()
+            chain.vip_finalize_epoch()
+        except Exception as e:
+            logger.warning("vip_finalize_epoch failed: %s", e)
+
+    _with_advisory_lock("vip_finalize_epoch", _do)
+
+
+def _start_ibc_listener_thread():
+    """Spawn the asyncio IBC listener in a background thread.
+
+    The listener is asyncio-native; we run it in its own event loop on a
+    daemon thread so the sync APScheduler stays unaffected.
+    """
+    import threading
+    import asyncio
+
+    def _runner():
+        try:
+            from app.ibc_listener import run as ibc_run
+            asyncio.run(ibc_run())
+        except Exception as e:
+            logger.warning("ibc_listener thread crashed: %s", e)
+
+    th = threading.Thread(target=_runner, name="ibc_listener", daemon=True)
+    th.start()
+    logger.info("ibc_listener thread started")

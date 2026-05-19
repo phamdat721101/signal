@@ -61,6 +61,29 @@ frontend/    Vite · React 19 · TS · TailwindCSS v4 · 6 pages
 | `ProofOfAlpha` | Soulbound ERC-721 (5 tiers: Bronze→Sage) | Wired via scheduler |
 | `ConvictionEngine` | On-chain reputation: `commitConviction()` + `resolveCard()` | Working |
 
+#### Initia-Native Helpers (PRD-Initia-Native-Upgrade — additive, no redeploys above)
+
+| Contract | Role | Status |
+|---|---|---|
+| `OracleAdapter` | Resolution-time ConnectOracle price proofs; idempotent `commitEntryPriceProof`/`commitExitPriceProof` with try/catch + 100k gas cap | Code merged; deploy via `deploy-initia-native.sh` |
+| `CosmosUtilsView` | Read-only `ICosmos` wrapper (`isAddressSanctioned`, address/denom conversion) | Code merged |
+| `CosmosDispatcher` | Owner-gated `execute_cosmos`: NFT mirror to Cosmos NFT module + IBC transfer | Code merged |
+| `IBCSettlementHook` | EVM IBC Hooks entry → `SessionVault.payFromSession` for cross-chain report buyers | Code merged; cross-chain demo deferred |
+| `VIPScoreAdapter` | Mirrors `ConvictionEngine.reputationScore` onto VIP-compliant scoring contract | Code merged; whitelisting via L1 governance |
+
+**Reliability layer:** `backend/app/chain_ops.py` + `chain_operations` table +
+60s reconciler. SHA256 idempotency keys. State machine
+`pending→sent→confirmed→final` / `failed_retryable→failed_terminal`. Re-runs
+are no-ops. `/api/health` reports `chain_ops_pending_count`. See
+`docs/AGENT-ONCHAIN-CONTEXT.md` §7.
+
+**Swipe ritual:** `frontend/src/hooks/useSwipeSession.ts` queues swipes locally,
+settles via InterwovenKit `requestTxBlock` (one Cosmos tx, N atomic
+`MsgCall` messages). Backend mirror tables `swipe_sessions` + `swipe_session_queue`.
+`atomicMode` feature flag falls back to sequential `sendTx` if needed.
+
+**Deploy:** `./deploy-initia-native.sh` — pure-additive, smoke-tested at end.
+
 ### 3.2 Backend — 3-process split
 
 | Process | Port | Module | Audience |

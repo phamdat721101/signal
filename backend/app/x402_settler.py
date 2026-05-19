@@ -30,6 +30,7 @@ import base64
 import hashlib
 import json
 import logging
+import time
 from typing import Any
 
 from app import db_async
@@ -40,6 +41,35 @@ log = logging.getLogger(__name__)
 # settled by the original request. Keeps reconciler from racing the live path.
 _PENDING_GRACE_SECONDS = 60
 _MAX_RETRIES = 3
+
+# Sanctions cache — buyer address → (is_blocked, expires_at_unix). 1h TTL.
+_SANCTIONS_CACHE: dict[str, tuple[bool, float]] = {}
+_SANCTIONS_TTL_SECONDS = 3600
+
+
+def is_buyer_blocked(buyer: str | None) -> bool:
+    """Cosmos-side sanctions check via ICosmos.is_blocked_address.
+
+    1h LRU; fail-open on chain read errors so we don't break legitimate
+    payments when the precompile is unreachable. The chain helper itself
+    fails-open identically.
+    """
+    if not buyer:
+        return False
+    key = buyer.lower()
+    now = time.time()
+    cached = _SANCTIONS_CACHE.get(key)
+    if cached and cached[1] > now:
+        return cached[0]
+    try:
+        from app.chain import ChainClient
+        # Importing here avoids circular-import risk at module load.
+        blocked = bool(ChainClient().is_blocked_address(buyer))
+    except Exception as e:
+        log.warning("sanctions check failed for %s: %s — failing open", key[:10], e)
+        blocked = False
+    _SANCTIONS_CACHE[key] = (blocked, now + _SANCTIONS_TTL_SECONDS)
+    return blocked
 
 
 def hash_payload(x_payment_header: str) -> str:

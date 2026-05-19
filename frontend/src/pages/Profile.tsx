@@ -5,6 +5,42 @@ import { useSession } from '../hooks/useSession';
 import { useConviction } from '../hooks/useConviction';
 import { useWallet } from '../hooks/useWallet';
 
+// ── Persona + mood (pure derive — single responsibility, inlined per scope) ──
+type Persona = { emoji: string; name: string; color: string; tagline: string };
+
+function derivePersona(opts: {
+  total: number; wins: number; convTotal: number; convCorrect: number;
+  bestStreak: number; rep: number; achievements: number;
+}): Persona {
+  const { total, wins, convTotal, convCorrect, bestStreak, rep, achievements } = opts;
+  const accuracy = total > 0 ? (wins / total) * 100 : 0;
+  const convAcc  = convTotal > 0 ? (convCorrect / convTotal) * 100 : 0;
+  // Highest tier wins; check from top down so promotion is sticky.
+  if (achievements >= 3 || rep >= 5000 || (total >= 30 && accuracy >= 70))
+    return { emoji: '🐉', name: 'Conviction Sage', color: '#bf81ff',
+             tagline: 'You read the tape before it printed.' };
+  if (bestStreak >= 5 || convAcc >= 65)
+    return { emoji: '🪨', name: 'Diamond Hands', color: '#8eff71',
+             tagline: 'Held when the timeline screamed.' };
+  if (total >= 20 || rep >= 100)
+    return { emoji: '🐺', name: 'Lone Apex', color: '#8eff71',
+             tagline: 'Your conviction has volume.' };
+  if (total >= 5)
+    return { emoji: '🐒', name: 'Curious Ape', color: '#ffb84d',
+             tagline: 'You smell alpha — keep sniffing.' };
+  return { emoji: '🌱', name: 'Fresh Mind', color: '#adaaaa',
+           tagline: 'Your first APE writes the chain.' };
+}
+
+function deriveMood(opts: { total: number; wins: number; curStreak: number }): string {
+  const { total, wins, curStreak } = opts;
+  if (total === 0)              return 'Your first APE writes the chain.';
+  if (curStreak >= 5)           return "Don't let euphoria pick your next swipe.";
+  if (curStreak >= 3)           return 'Hot. Quiet. Disciplined.';
+  if (total > 0 && wins === 0)  return 'Even diamonds were carbon once.';
+  return 'Patience is alpha.';
+}
+
 export default function Profile() {
   const { address: walletAddr, isCorrectChain, isConnected } = useWallet();
   const address = normalizeAddress(walletAddr);
@@ -39,15 +75,39 @@ export default function Profile() {
   const summary = data?.summary || {};
   const iq = data?.trading_iq || 0;
 
+  // Persona + mood — pure derivation from already-fetched data
+  const persona = derivePersona({
+    total:        summary.total_trades || 0,
+    wins:         rewards.wins || 0,
+    convTotal:    convictionData?.total_convictions || 0,
+    convCorrect:  convictionData?.correct_calls || 0,
+    bestStreak:   Math.max(rewards.bestStreak || 0, convictionData?.best_streak || 0),
+    rep:          convictionData?.reputation_score || 0,
+    achievements: (achievements.earned || []).length,
+  });
+  const mood = deriveMood({
+    total:     summary.total_trades || 0,
+    wins:      rewards.wins || 0,
+    curStreak: rewards.currentStreak || 0,
+  });
+
   return (
     <div className="p-5 space-y-5 pb-24">
-      {/* Trading IQ */}
-      <div className="text-center py-4">
-        <div className="font-label text-[10px] text-[#bf81ff] uppercase tracking-widest mb-1">Trading IQ</div>
+      {/* Persona + Trading IQ — the vibe header */}
+      <div className="text-center py-3">
+        <div className="inline-flex items-center gap-2 bg-[#131313] border px-3 py-1 rounded-full mb-2"
+             style={{ borderColor: `${persona.color}33` }}>
+          <span className="text-base">{persona.emoji}</span>
+          <span className="font-headline font-bold text-xs uppercase tracking-widest"
+                style={{ color: persona.color }}>{persona.name}</span>
+        </div>
+        <div className="font-label text-[10px] text-[#bf81ff] uppercase tracking-widest">Trading IQ</div>
         <div className="font-headline text-5xl font-black text-[#8eff71]">{iq}</div>
-        <div className="font-label text-[10px] text-[#adaaaa] mt-1">{address.slice(0, 6)}...{address.slice(-4)}</div>
+        <div className="font-label text-[11px] text-[#adaaaa] mt-1 italic">{persona.tagline}</div>
+        <div className="font-label text-[10px] text-[#494847] mt-1">{address.slice(0, 6)}...{address.slice(-4)}</div>
+        <div className="font-label text-[10px] text-[#adaaaa] mt-3">{mood}</div>
         <button onClick={() => shareToX(
-          `My Trading IQ is ${iq} on @KineticApp 🧠 ${iq >= 300 ? 'Whale status.' : iq >= 150 ? 'Alpha hunter.' : iq >= 50 ? 'Getting dangerous.' : 'Just getting started.'} #ApeOrFade`
+          `${persona.emoji} ${persona.name} on @KineticApp — Trading IQ ${iq} 🧠 ${persona.tagline} #ApeOrFade`
         )} className="mt-3 bg-[#262626] px-4 py-2 rounded-lg text-[#adaaaa] font-label text-xs flex items-center gap-2 mx-auto">
           <span className="material-symbols-outlined text-sm">share</span>
           Share Trading IQ
@@ -81,37 +141,46 @@ export default function Profile() {
         ))}
       </div>
 
-      {/* On-Chain Reputation */}
-      {convictionData && convictionData.total_convictions > 0 && (
-        <div className="bg-[#131313] rounded-xl p-4 border border-[#bf81ff]/10">
-          <div className="flex justify-between items-center mb-3">
-            <h2 className="font-headline font-bold text-sm text-white">On-Chain Reputation</h2>
-            <span className="text-[9px] font-label text-[#494847]">verified on-chain ✓</span>
-          </div>
-          <div className="grid grid-cols-3 gap-2 mb-3">
-            <div className="text-center">
-              <div className={`font-headline text-xl font-bold ${(convictionData.reputation_score || 0) >= 0 ? 'text-[#bf81ff]' : 'text-[#ff7166]'}`}>
-                {convictionData.reputation_score || 0}
-              </div>
-              <div className="font-label text-[8px] text-[#adaaaa] uppercase">Rep Score</div>
-            </div>
-            <div className="text-center">
-              <div className="font-headline text-xl font-bold text-[#8eff71]">{convictionData.accuracy || 0}%</div>
-              <div className="font-label text-[8px] text-[#adaaaa] uppercase">Accuracy</div>
-            </div>
-            <div className="text-center">
-              <div className="font-headline text-xl font-bold text-white">{convictionData.total_convictions || 0}</div>
-              <div className="font-label text-[8px] text-[#adaaaa] uppercase">Convictions</div>
-            </div>
-          </div>
-          <button onClick={() => shareToX(
-            `My on-chain reputation: ${convictionData.reputation_score} REP | ${convictionData.accuracy}% accuracy | ${convictionData.best_streak} best streak 🧠 Verified on @KineticApp #ProofOfConviction`
-          )} className="w-full bg-[#bf81ff]/10 border border-[#bf81ff]/20 py-2 rounded-lg text-[#bf81ff] font-headline font-bold text-xs flex items-center justify-center gap-2">
-            <span className="material-symbols-outlined text-sm">share</span>
-            Share Reputation
-          </button>
+      {/* On-Chain Reputation — always shown; empty-state nudges first commit */}
+      <div className="bg-[#131313] rounded-xl p-4 border border-[#bf81ff]/10">
+        <div className="flex justify-between items-center mb-3">
+          <h2 className="font-headline font-bold text-sm text-white">On-Chain Reputation</h2>
+          <span className="text-[9px] font-label text-[#494847]">verified on-chain ✓</span>
         </div>
-      )}
+        {convictionData && convictionData.total_convictions > 0 ? (
+          <>
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className="text-center">
+                <div className={`font-headline text-xl font-bold ${(convictionData.reputation_score || 0) >= 0 ? 'text-[#bf81ff]' : 'text-[#ff7166]'}`}>
+                  {convictionData.reputation_score || 0}
+                </div>
+                <div className="font-label text-[8px] text-[#adaaaa] uppercase">Rep Score</div>
+              </div>
+              <div className="text-center">
+                <div className="font-headline text-xl font-bold text-[#8eff71]">{convictionData.accuracy || 0}%</div>
+                <div className="font-label text-[8px] text-[#adaaaa] uppercase">Accuracy</div>
+              </div>
+              <div className="text-center">
+                <div className="font-headline text-xl font-bold text-white">{convictionData.total_convictions || 0}</div>
+                <div className="font-label text-[8px] text-[#adaaaa] uppercase">Convictions</div>
+              </div>
+            </div>
+            <button onClick={() => shareToX(
+              `My on-chain reputation: ${convictionData.reputation_score} REP | ${convictionData.accuracy}% accuracy | ${convictionData.best_streak} best streak 🧠 Verified on @KineticApp #ProofOfConviction`
+            )} className="w-full bg-[#bf81ff]/10 border border-[#bf81ff]/20 py-2 rounded-lg text-[#bf81ff] font-headline font-bold text-xs flex items-center justify-center gap-2">
+              <span className="material-symbols-outlined text-sm">share</span>
+              Share Reputation
+            </button>
+          </>
+        ) : (
+          <div className="text-center py-2">
+            <div className="font-label text-[11px] text-[#adaaaa] mb-1">No convictions yet</div>
+            <div className="font-label text-[10px] text-[#494847]">
+              Your next APE/FADE swipe writes a verifiable, slashing-grade conviction onto Initia EVM.
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Achievements */}
       {(achievements.earned || []).length > 0 && (

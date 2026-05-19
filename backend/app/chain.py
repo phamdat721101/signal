@@ -31,32 +31,66 @@ class ChainClient:
         self._nonce = self.w3.eth.get_transaction_count(self.account.address)
         self._tx_lock = threading.Lock()
 
-    def _send_tx(self, fn, _retry: bool = True):
+    def _estimate_gas_with_floor(self, fn) -> int:
+        """Estimate gas + 20% buffer, never below the network floor.
+
+        Initia evm-1 quirk (per product_context.md): the estimator under-counts
+        ~60k of Cosmos-layer fee accounting on CALL txs. The floor closes that gap.
+        """
+        settings = get_settings()
+        try:
+            estimated = fn.estimate_gas({"from": self.account.address})
+            return max(settings.evm_min_gas_limit, int(estimated * 1.2))
+        except Exception as e:
+            logger.debug(f"gas estimate failed, using floor: {e}")
+            return max(settings.evm_min_gas_limit, 500_000)
+
+    def _send_tx(self, fn, _retry: int = 2):
         breaker = error_tracker.get_breaker("chain_tx", threshold=3, cooldown=300.0)
         if breaker.is_open:
             logger.warning("Chain TX circuit open — skipping")
             return None
+        settings = get_settings()
         with self._tx_lock:
             try:
+                # Always re-fetch the live pending nonce. The deployer key is shared
+                # across api / agent_api / scheduler / operator CLI, so any in-memory
+                # cache drifts (Cosmos error: "account sequence mismatch, expected X,
+                # got Y"). Cost: one RPC per tx — cheap vs the tx submission itself.
+                self._nonce = self.w3.eth.get_transaction_count(
+                    self.account.address, "pending"
+                )
                 tx = fn.build_transaction({
                     "from": self.account.address,
                     "nonce": self._nonce,
-                    "gas": 500_000,
-                    "gasPrice": 0,
+                    "gas": self._estimate_gas_with_floor(fn),
+                    "gasPrice": settings.evm_gas_price_wei,
                 })
                 signed = self.account.sign_transaction(tx)
                 tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
                 self._nonce += 1
                 receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
-                logger.info(f"TX {tx_hash.hex()} status={receipt['status']}")
+                logger.info(f"TX {tx_hash.hex()} status={receipt['status']} gas={receipt.get('gasUsed', 0)}")
                 breaker.record_success()
                 return receipt
             except Exception as e:
                 err_str = str(e).lower()
-                if _retry and ("nonce" in err_str or "already known" in err_str):
-                    logger.warning(f"Nonce error, resyncing: {e}")
-                    self._nonce = self.w3.eth.get_transaction_count(self.account.address)
-                    return self._send_tx(fn, _retry=False)
+                # Nonce/sequence drift — covers both EVM-style ("nonce too low",
+                # "already known") AND Cosmos-layer ("sequence mismatch",
+                # "incorrect account sequence") forms. Same drift class either way.
+                if _retry > 0 and (
+                    "nonce" in err_str
+                    or "already known" in err_str
+                    or "sequence mismatch" in err_str
+                    or "account sequence" in err_str
+                ):
+                    logger.warning(f"Nonce/sequence drift, retry: {e}")
+                    return self._send_tx(fn, _retry=_retry - 1)
+                # Replacement underpriced — same nonce already in mempool; retry
+                # picks up next pending nonce on the next iteration.
+                if _retry > 0 and "underpriced" in err_str:
+                    logger.warning(f"Tx underpriced, retry: {e}")
+                    return self._send_tx(fn, _retry=_retry - 1)
                 breaker.record_failure()
                 error_tracker.track("TX_SEND_FAILED", str(e))
                 raise
@@ -261,3 +295,192 @@ class ChainClient:
         )
         receipt = self._send_tx(fn)
         return receipt["transactionHash"].hex()
+
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Initia-Native helpers (PRD-Initia-Native-Upgrade)
+    # All write methods route through chain_ops.submit() for crash-safe
+    # idempotency. Read methods are best-effort; callers handle empty values.
+    # ═══════════════════════════════════════════════════════════════════════
+
+    _ORACLE_ADAPTER_ABI = [
+        {"type":"function","name":"commitEntryPriceProof","inputs":[{"name":"signalId","type":"uint256"},{"name":"pair","type":"string"}],"outputs":[],"stateMutability":"nonpayable"},
+        {"type":"function","name":"commitExitPriceProof","inputs":[{"name":"signalId","type":"uint256"},{"name":"pair","type":"string"}],"outputs":[],"stateMutability":"nonpayable"},
+        {"type":"function","name":"signalEntryPrice","inputs":[{"name":"","type":"uint256"}],"outputs":[{"name":"price","type":"uint256"},{"name":"timestamp","type":"uint256"},{"name":"height","type":"uint64"},{"name":"nonce","type":"uint64"},{"name":"decimal","type":"uint64"},{"name":"id","type":"uint64"}],"stateMutability":"view"},
+        {"type":"function","name":"signalExitPrice","inputs":[{"name":"","type":"uint256"}],"outputs":[{"name":"price","type":"uint256"},{"name":"timestamp","type":"uint256"},{"name":"height","type":"uint64"},{"name":"nonce","type":"uint64"},{"name":"decimal","type":"uint64"},{"name":"id","type":"uint64"}],"stateMutability":"view"},
+        {"type":"function","name":"getOracleHealth","inputs":[],"outputs":[{"name":"available","type":"bool"},{"name":"lastSuccessTs","type":"uint256"}],"stateMutability":"view"},
+    ]
+
+    _COSMOS_UTILS_ABI = [
+        {"type":"function","name":"isAddressSanctioned","inputs":[{"name":"user","type":"address"}],"outputs":[{"name":"","type":"bool"}],"stateMutability":"view"},
+        {"type":"function","name":"isModuleAddress","inputs":[{"name":"account","type":"address"}],"outputs":[{"name":"","type":"bool"}],"stateMutability":"view"},
+    ]
+
+    _COSMOS_DISPATCHER_ABI = [
+        {"type":"function","name":"mintNFTToCosmosCollection","inputs":[{"name":"msgJson","type":"string"}],"outputs":[],"stateMutability":"nonpayable"},
+        {"type":"function","name":"sendIBCTransfer","inputs":[{"name":"msgJson","type":"string"}],"outputs":[],"stateMutability":"nonpayable"},
+    ]
+
+    _VIP_SCORE_ABI = [
+        {"type":"function","name":"scoreUser","inputs":[{"name":"user","type":"address"}],"outputs":[],"stateMutability":"nonpayable"},
+        {"type":"function","name":"scoreBatch","inputs":[{"name":"users","type":"address[]"}],"outputs":[],"stateMutability":"nonpayable"},
+        {"type":"function","name":"finalizeEpoch","inputs":[],"outputs":[],"stateMutability":"nonpayable"},
+        {"type":"function","name":"scoreOf","inputs":[{"name":"","type":"address"}],"outputs":[{"name":"","type":"uint256"}],"stateMutability":"view"},
+        {"type":"function","name":"currentEpoch","inputs":[],"outputs":[{"name":"","type":"uint256"}],"stateMutability":"view"},
+    ]
+
+    def _helper_contract(self, address_attr: str, abi: list):
+        """DRY helper for contract instantiation by Settings address attribute."""
+        addr = getattr(get_settings(), address_attr, "") or ""
+        if not addr:
+            return None
+        return self.w3.eth.contract(address=Web3.to_checksum_address(addr), abi=abi)
+
+    # ─── OracleAdapter (resolution-time ConnectOracle proofs) ──────────────
+
+    def commit_entry_price_proof(self, signal_id: int, pair: str) -> str:
+        from app import chain_ops
+        oa = self._helper_contract("oracle_adapter_address", self._ORACLE_ADAPTER_ABI)
+        if not oa:
+            return ""
+        fn = oa.functions.commitEntryPriceProof(signal_id, pair)
+        return chain_ops.submit(
+            "oracle_entry_price",
+            {"signal_id": signal_id, "pair": pair},
+            fn=lambda: self._send_tx(fn)["transactionHash"].hex(),
+        )
+
+    def commit_exit_price_proof(self, signal_id: int, pair: str) -> str:
+        from app import chain_ops
+        oa = self._helper_contract("oracle_adapter_address", self._ORACLE_ADAPTER_ABI)
+        if not oa:
+            return ""
+        fn = oa.functions.commitExitPriceProof(signal_id, pair)
+        return chain_ops.submit(
+            "oracle_exit_price",
+            {"signal_id": signal_id, "pair": pair},
+            fn=lambda: self._send_tx(fn)["transactionHash"].hex(),
+        )
+
+    def get_oracle_entry_price(self, signal_id: int) -> dict:
+        oa = self._helper_contract("oracle_adapter_address", self._ORACLE_ADAPTER_ABI)
+        if not oa:
+            return {}
+        try:
+            r = oa.functions.signalEntryPrice(signal_id).call()
+            return {"price": str(r[0]), "timestamp": r[1], "height": r[2],
+                    "nonce": r[3], "decimal": r[4], "id": r[5]}
+        except Exception:
+            return {}
+
+    def get_oracle_health(self) -> dict:
+        oa = self._helper_contract("oracle_adapter_address", self._ORACLE_ADAPTER_ABI)
+        if not oa:
+            return {"available": False, "last_success_ts": 0}
+        try:
+            available, ts = oa.functions.getOracleHealth().call()
+            return {"available": bool(available), "last_success_ts": int(ts)}
+        except Exception:
+            return {"available": False, "last_success_ts": 0}
+
+    # ─── CosmosUtils (sanctions check, address conversions) ────────────────
+
+    def is_blocked_address(self, user: str) -> bool:
+        cu = self._helper_contract("cosmos_utils_view_address", self._COSMOS_UTILS_ABI)
+        if not cu:
+            return False  # fail-open if helper not deployed
+        try:
+            return bool(cu.functions.isAddressSanctioned(Web3.to_checksum_address(user)).call())
+        except Exception as e:
+            logger.warning(f"is_blocked_address read failed: {e}")
+            return False
+
+    # ─── CosmosDispatcher (NFT mirror, IBC transfer) ───────────────────────
+
+    def mint_nft_cosmos(self, recipient: str, tier: int) -> str:
+        """Mirror an EVM tier mint to the Cosmos NFT module. Best-effort.
+
+        EVM mint via ProofOfAlpha is authoritative; this mirror just makes the
+        NFT show up in InterwovenKit / Initia explorer. chain_ops.submit ensures
+        we never double-mirror.
+        """
+        from app import chain_ops
+        cd = self._helper_contract("cosmos_dispatcher_address", self._COSMOS_DISPATCHER_ABI)
+        if not cd:
+            return ""
+        # Backend constructs the JSON; on-chain we just dispatch it. Class id +
+        # token id naming is a Signal convention — easy to grep + audit.
+        msg_json = json.dumps({
+            "@type": "/cosmos.nft.v1beta1.MsgSend",
+            "class_id": "signal-proof-of-alpha",
+            "id": f"tier-{tier}-{recipient.lower()}",
+            "sender":   self.account.address,
+            "receiver": recipient,
+        }, separators=(",", ":"))
+        fn = cd.functions.mintNFTToCosmosCollection(msg_json)
+        return chain_ops.submit(
+            "cosmos_nft_mirror",
+            {"recipient": recipient.lower(), "tier": tier},
+            fn=lambda: self._send_tx(fn)["transactionHash"].hex(),
+        )
+
+    # ─── VIPScoreAdapter ──────────────────────────────────────────────────
+
+    def vip_score_user(self, user: str) -> str:
+        from app import chain_ops
+        vs = self._helper_contract("vip_score_adapter_address", self._VIP_SCORE_ABI)
+        if not vs:
+            return ""
+        fn = vs.functions.scoreUser(Web3.to_checksum_address(user))
+        return chain_ops.submit(
+            "vip_score_user",
+            {"user": user.lower()},
+            fn=lambda: self._send_tx(fn)["transactionHash"].hex(),
+        )
+
+    def vip_score_batch(self, users: list[str]) -> str:
+        from app import chain_ops
+        vs = self._helper_contract("vip_score_adapter_address", self._VIP_SCORE_ABI)
+        if not vs or not users:
+            return ""
+        addrs = [Web3.to_checksum_address(u) for u in users]
+        fn = vs.functions.scoreBatch(addrs)
+        # Idempotency key includes the epoch so repeated batches across epochs
+        # don't dedup; within an epoch the same set of users is a no-op.
+        epoch = self.vip_current_epoch()
+        return chain_ops.submit(
+            "vip_score_batch",
+            {"epoch": epoch, "users": sorted(u.lower() for u in users)},
+            fn=lambda: self._send_tx(fn)["transactionHash"].hex(),
+        )
+
+    def vip_finalize_epoch(self) -> str:
+        from app import chain_ops
+        vs = self._helper_contract("vip_score_adapter_address", self._VIP_SCORE_ABI)
+        if not vs:
+            return ""
+        epoch = self.vip_current_epoch()
+        fn = vs.functions.finalizeEpoch()
+        return chain_ops.submit(
+            "vip_finalize_epoch",
+            {"epoch": epoch},   # one finalize per epoch — idempotent
+            fn=lambda: self._send_tx(fn)["transactionHash"].hex(),
+        )
+
+    def vip_score_of(self, user: str) -> int:
+        vs = self._helper_contract("vip_score_adapter_address", self._VIP_SCORE_ABI)
+        if not vs:
+            return 0
+        try:
+            return int(vs.functions.scoreOf(Web3.to_checksum_address(user)).call())
+        except Exception:
+            return 0
+
+    def vip_current_epoch(self) -> int:
+        vs = self._helper_contract("vip_score_adapter_address", self._VIP_SCORE_ABI)
+        if not vs:
+            return 0
+        try:
+            return int(vs.functions.currentEpoch().call())
+        except Exception:
+            return 0
