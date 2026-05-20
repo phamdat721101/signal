@@ -916,7 +916,9 @@ async def claim_faucet(address: str):
         iusd = chain.w3.eth.contract(address=Web3.to_checksum_address(settings.mock_iusd_address), abi=iusd_abi)
         fn = iusd.functions.mint(Web3.to_checksum_address(address), int(1000 * 1e18))
         receipt = chain._send_tx(fn)
-        return {"status": "ok", "amount": "1000", "token": "iUSD", "recipient": address, "txHash": receipt["transactionHash"].hex()}
+        if not receipt or receipt.get("status") != 1:
+            raise HTTPException(status_code=500, detail="Mint transaction reverted on-chain")
+        return {"status": "ok", "amount": "1000", "token": "iUSD", "recipient": address, "txHash": "0x" + receipt["transactionHash"].hex()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

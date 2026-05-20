@@ -53,6 +53,13 @@ contract MockIUSD is ERC20, Ownable {
         _mint(to, amount);
     }
 
+    /// @notice Re-register this token with the Initia ERC20Registry precompile.
+    ///         Call once after deploy if the initial registration was skipped.
+    function registerToken() external onlyOwner {
+        require(address(ERC20_REGISTRY).code.length > 0, "ERC20Registry not available");
+        ERC20_REGISTRY.register_erc20();
+    }
+
     function batchMint(address[] calldata recipients, uint256 amount) external onlyOwner {
         for (uint256 i = 0; i < recipients.length; i++) {
             _mint(recipients[i], amount);

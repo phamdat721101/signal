@@ -33,6 +33,30 @@ function ChainSwitchBanner() {
   );
 }
 
+/** Persistent testnet notice with gas faucet + bridge actions. */
+function TestnetBanner() {
+  const { openBridge, isConnected } = useWallet();
+  return (
+    <div className="bg-[#1a1a00] border-b border-[#ffb84d]/20 px-4 py-2 flex items-center justify-between gap-2 shrink-0">
+      <span className="text-[11px] text-[#ffb84d] font-label">
+        ⚠️ The Kinetic App is currently available only on Testnet.
+      </span>
+      <div className="flex gap-2 shrink-0">
+        <a href="https://app.testnet.initia.xyz" target="_blank" rel="noopener noreferrer"
+          className="text-[10px] font-bold text-[#0e0e0e] bg-[#ffb84d] px-2 py-0.5 rounded">
+          Get INIT
+        </a>
+        {isConnected && (
+          <button onClick={() => openBridge({ srcChainId: 'initiation-2', srcDenom: 'uinit', dstChainId: config.chainId, dstDenom: 'uinit' })}
+            className="text-[10px] font-bold text-[#ffb84d] border border-[#ffb84d]/40 px-2 py-0.5 rounded">
+            Bridge to evm-1
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Layout({ children }: { children: ReactNode }) {
   const { address: walletAddress, isConnected: authenticated, login, logout } = useWallet();
   const { data: rewardsData } = useQuery({
@@ -48,6 +72,8 @@ export default function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="h-screen flex flex-col bg-[#0e0e0e] overflow-hidden">
+      {/* Testnet Banner */}
+      <TestnetBanner />
       {/* Header */}
       <header className="flex justify-between items-center px-5 py-3 shrink-0 z-50">
         <div className="flex items-center gap-3">

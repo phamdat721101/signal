@@ -147,7 +147,7 @@ const INDEXER_BASE = import.meta.env.VITE_INDEXER_URL || 'http://localhost:8080'
 
 export function explorerTxUrl(txHash: string): string {
   const hash = txHash.replace(/^0x/i, '').toUpperCase();
-  return `${SCAN_BASE}/txs/${hash}`;
+  return `${SCAN_BASE}/txs/0x${hash}`;
 }
 
 export function explorerAccountUrl(address: string): string {

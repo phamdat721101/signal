@@ -14,7 +14,7 @@ import { config } from '../config';
  */
 export function useWallet() {
   const { address } = useAccount();
-  const { isConnected, openConnect, disconnect, hexAddress, autoSign } = useInterwovenKit();
+  const { isConnected, openConnect, disconnect, hexAddress, autoSign, openBridge } = useInterwovenKit();
   const { sendTransactionAsync } = useSendTransaction();
   const currentChainId = useChainId();
   const { switchChainAsync, isPending: isSwitchingChain, error: switchChainError } = useSwitchChain();
@@ -44,6 +44,7 @@ export function useWallet() {
     logout: disconnect,
     sendTx,
     autoSign,
+    openBridge,
     chainId: currentChainId,
     expectedChainId,
     expectedChainName: config.chain.name,
