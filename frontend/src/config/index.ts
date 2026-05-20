@@ -146,7 +146,8 @@ const SCAN_BASE = `https://scan.testnet.initia.xyz/${import.meta.env.VITE_CHAIN_
 const INDEXER_BASE = import.meta.env.VITE_INDEXER_URL || 'http://localhost:8080';
 
 export function explorerTxUrl(txHash: string): string {
-  return `${SCAN_BASE}/txs/${txHash}`;
+  const hash = txHash.replace(/^0x/i, '').toUpperCase();
+  return `${SCAN_BASE}/txs/${hash}`;
 }
 
 export function explorerAccountUrl(address: string): string {
