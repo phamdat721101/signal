@@ -11,6 +11,9 @@ bin/
 *.egg-info/
 *.so
 *.o
+*.js.map
+*.d.ts.map
+tsconfig.tsbuildinfo
 
 # Foundry
 contracts/out/
@@ -24,6 +27,11 @@ __pycache__/
 # Frontend
 frontend/dist/
 frontend/dist-ssr/
+
+# Agent Provider (Node)
+backend/agent-provider/dist/
+backend/agent-provider/logs/
+backend/agent-provider/node_modules/
 
 # ── Dependencies ──
 node_modules/
@@ -44,10 +52,16 @@ package-lock.json
 *.keystore
 credentials.json
 *.secret
+*.credential
+id_rsa
+id_ed25519
+*.gpg
+service-account*.json
 
 # Keep examples
 !.env.example
 !backend/.env.example
+!backend/agent-provider/.env.example
 !frontend/.env.example
 !contracts/.env.example
 
