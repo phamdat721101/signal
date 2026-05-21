@@ -7,7 +7,6 @@ import { useCards } from '../hooks/useCards';
 import { config, shareToX, normalizeAddress } from '../config';
 import TokenCard from '../components/TokenCard';
 import { InsightCard } from '../components/InsightCard';
-import { OracleWidget } from '../components/OracleWidget';
 import Onboarding from '../components/Onboarding';
 import Paywall from '../components/Paywall';
 import { useApeTransaction } from '../hooks/useApeTransaction';
@@ -339,32 +338,12 @@ export default function Feed() {
     );
   }
 
-  // Pool card — LP opportunity
-  if (current && current.card_type === 'pool') {
-    return (
-      <div className="flex flex-col h-full p-4 max-w-md mx-auto">
-        <OracleWidget />
-        <div className="relative w-full max-w-md mx-auto">
-          <TokenCard card={current} onApe={() => setIndex(i => i + 1)} onFade={() => setIndex(i => i + 1)} />
-        </div>
-      </div>
-    );
-  }
-
-  // If current card is an insight card, render InsightCard instead
-  if (current && current.card_type === 'insight') {
-    return (
-      <div className="flex flex-col h-full p-4 max-w-md mx-auto">
-        <OracleWidget />
-        <InsightCard card={current as any} onDismiss={() => setIndex(i => i + 1)} />
-      </div>
-    );
-  }
-
-
+  // ─── Unified single-root layout (eliminates CLS across card types) ───
+  const isTrading = current.card_type !== 'pool' && current.card_type !== 'insight';
 
   return (
-    <div className="flex flex-col items-center justify-center h-full p-4">
+    <div className="flex flex-col h-full p-4 max-w-md mx-auto">
+      {/* Modals/overlays (fixed, no CLS) */}
       {showQuickOnboarding && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6" onClick={() => { localStorage.setItem('onboarded', 'true'); setShowQuickOnboarding(false); }}>
           <div className="bg-[#131313] border border-[#bf81ff]/30 rounded-2xl p-6 max-w-sm text-center space-y-3" onClick={e => e.stopPropagation()}>
@@ -376,15 +355,6 @@ export default function Feed() {
           </div>
         </div>
       )}
-      <OracleWidget />
-      <div className="text-[10px] text-[#494847] text-center mb-1">
-        {index + 1} / {cards.length}
-        {(cardFilter === 'sector' || cardFilter === 'insight') && (
-          <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#6366f1]/10">
-            <span className="text-[8px] text-[#a5b4fc]">via SoSoValue</span>
-          </span>
-        )}
-      </div>
       {showConviction && pendingCard && (
         <ConvictionOverlay card={pendingCard} onConfirm={confirmConviction} onCancel={() => { setShowConviction(false); setPendingCard(null); }} />
       )}
@@ -401,38 +371,59 @@ export default function Feed() {
         </div>
       )}
 
-      <div className="relative w-full max-w-md mx-auto h-[520px]">
-        {/* Next card peek */}
-        {cards[index + 1] && (
-          <div className="absolute inset-0 scale-95 opacity-50">
-            <TokenCard card={cards[index + 1]} onApe={() => {}} onFade={() => {}} />
-          </div>
+      {/* Reserved header slot — fixed height prevents CLS */}
+      <div className="h-5 mb-1 text-[10px] text-[#494847] text-center">
+        {isTrading && (
+          <>
+            {index + 1} / {cards.length}
+            {(cardFilter === 'sector' || cardFilter === 'insight') && (
+              <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#6366f1]/10">
+                <span className="text-[8px] text-[#a5b4fc]">via SoSoValue</span>
+              </span>
+            )}
+          </>
         )}
-        {/* Current card with drag */}
-        <div
-          className={`absolute inset-0 transition-transform ${exiting ? 'duration-300' : dragging ? 'duration-0' : 'duration-200'}`}
-          style={{
-            transform: exiting === 'right' ? 'translateX(120%) rotate(15deg)'
-              : exiting === 'left' ? 'translateX(-120%) rotate(-15deg)'
-              : `translateX(${dragX}px) rotate(${dragX * 0.05}deg)`,
-            opacity: exiting ? 0 : 1,
-          }}
-          onMouseDown={(e) => onDragStart(e.clientX)}
-          onMouseMove={(e) => onDragMove(e.clientX)}
-          onMouseUp={onDragEnd}
-          onMouseLeave={() => { if (dragging) onDragEnd(); }}
-          onTouchStart={(e) => onDragStart(e.touches[0].clientX)}
-          onTouchMove={(e) => onDragMove(e.touches[0].clientX)}
-          onTouchEnd={onDragEnd}
-        >
-          {/* Drag overlay indicators */}
-          {dragX > 50 && <div className="absolute inset-0 rounded-xl border-4 border-[#8eff71] bg-[#8eff71]/10 z-10 flex items-center justify-center"><span className="text-[#8eff71] font-headline text-4xl font-black">APE 🦍</span></div>}
-          {dragX < -50 && <div className="absolute inset-0 rounded-xl border-4 border-[#ff7166] bg-[#ff7166]/10 z-10 flex items-center justify-center"><span className="text-[#ff7166] font-headline text-4xl font-black">FADE 💨</span></div>}
-          {/* Swipe feedback animation */}
-          {swipeFeedback && <SwipeFeedback type={swipeFeedback} />}
-          {showRareReveal && <RareCardReveal rarity={showRareReveal} onDone={() => setShowRareReveal(null)} />}
-          <TokenCard card={current} onApe={handleApe} onFade={handleFade} />
-        </div>
+      </div>
+
+      {/* Card surface — fixed height container */}
+      <div className="relative w-full max-w-md mx-auto h-[520px]">
+        {current.card_type === 'insight' ? (
+          <InsightCard card={current as any} onDismiss={() => setIndex(i => i + 1)} />
+        ) : current.card_type === 'pool' ? (
+          <TokenCard card={current} onApe={() => setIndex(i => i + 1)} onFade={() => setIndex(i => i + 1)} />
+        ) : (
+          <>
+            {/* Next card peek */}
+            {cards[index + 1] && (
+              <div className="absolute inset-0 scale-95 opacity-50">
+                <TokenCard card={cards[index + 1]} onApe={() => {}} onFade={() => {}} />
+              </div>
+            )}
+            {/* Current card with drag */}
+            <div
+              className={`absolute inset-0 transition-transform ${exiting ? 'duration-300' : dragging ? 'duration-0' : 'duration-200'}`}
+              style={{
+                transform: exiting === 'right' ? 'translateX(120%) rotate(15deg)'
+                  : exiting === 'left' ? 'translateX(-120%) rotate(-15deg)'
+                  : `translateX(${dragX}px) rotate(${dragX * 0.05}deg)`,
+                opacity: exiting ? 0 : 1,
+              }}
+              onMouseDown={(e) => onDragStart(e.clientX)}
+              onMouseMove={(e) => onDragMove(e.clientX)}
+              onMouseUp={onDragEnd}
+              onMouseLeave={() => { if (dragging) onDragEnd(); }}
+              onTouchStart={(e) => onDragStart(e.touches[0].clientX)}
+              onTouchMove={(e) => onDragMove(e.touches[0].clientX)}
+              onTouchEnd={onDragEnd}
+            >
+              {dragX > 50 && <div className="absolute inset-0 rounded-xl border-4 border-[#8eff71] bg-[#8eff71]/10 z-10 flex items-center justify-center"><span className="text-[#8eff71] font-headline text-4xl font-black">APE 🦍</span></div>}
+              {dragX < -50 && <div className="absolute inset-0 rounded-xl border-4 border-[#ff7166] bg-[#ff7166]/10 z-10 flex items-center justify-center"><span className="text-[#ff7166] font-headline text-4xl font-black">FADE 💨</span></div>}
+              {swipeFeedback && <SwipeFeedback type={swipeFeedback} />}
+              {showRareReveal && <RareCardReveal rarity={showRareReveal} onDone={() => setShowRareReveal(null)} />}
+              <TokenCard card={current} onApe={handleApe} onFade={handleFade} />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

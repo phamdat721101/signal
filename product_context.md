@@ -1,6 +1,6 @@
 # Initia Signal — Product Context (Agent Onboarding)
 
-> **Updated 2026-05-18** after fresh redeploy to Initia testnet `evm-1`.
+> **Updated 2026-05-21** — Oracle UI removed, Feed CLS eliminated, agent-provider sidecar documented.
 > This is the canonical context document for AI agents and developers working on this codebase.
 
 ---
@@ -84,13 +84,20 @@ settles via InterwovenKit `requestTxBlock` (one Cosmos tx, N atomic
 
 **Deploy:** `./deploy-initia-native.sh` — pure-additive, smoke-tested at end.
 
-### 3.2 Backend — 3-process split
+### 3.2 Backend — 3-process split + Node sidecar
 
 | Process | Port | Module | Audience |
 |---|---|---|---|
 | Consumer + admin API | 8001 | `app.main:app` | Frontend SPA |
 | Agent x402 paid API | 8002 | `app.agent_main:app` | AI agents (USDC-on-Base) |
 | Background jobs | n/a | `app.scheduler_worker` | ~12 cron-like jobs |
+| Agent Provider (Node) | 8003 | `backend/agent-provider/src/server.ts` | n-payment SDK streaming + payment gate |
+
+#### Agent Provider Sidecar (added 2026-05-20)
+
+TypeScript Node.js service using n-payment SDK. Handles streaming payment sessions,
+settlement via `settler.ts`, and exposes MCP-compatible tools (`tools.ts`).
+Managed via PM2 (`ecosystem.config.cjs`). Shares the same Postgres DB.
 
 VPS layout: `bitnami@47.130.193.211:~/signal-backend/` (Caddy → `:8001` and `/agent-api/*` → `:8002`).
 
@@ -238,3 +245,27 @@ VPS access:
 ssh -i ~/Downloads/nim-claw.pem bitnami@47.130.193.211
 # restart: bash ~/signal-backend/restart_signal.sh   (main + scheduler; agent_main started separately)
 ```
+
+---
+
+## 10. Design Principles (UX Invariants)
+
+These are hard rules. Violating them re-introduces the CLS and broken-copy bugs we fixed 2026-05-21.
+
+1. **No naked empty states.** Every loading/empty surface must either show a skeleton of the same dimensions or render nothing (not a partial element that later grows). System status ("Oracle hasn't woken up") must never leak to users as personality copy.
+
+2. **Reserve space for async content.** Any element that depends on a network fetch must occupy its final dimensions from first paint. Use fixed-height slots, skeletons, or `min-h-[Xpx]` containers. Never let a resolved fetch push surrounding content.
+
+3. **Single root container per route.** Each page has ONE root layout shell. Card-type-specific content renders inside a fixed-size slot within that shell. Never use multiple `return` branches with different root containers — that causes CLS on content-type transitions.
+
+4. **Expand/disclosure UIs overlay, not push.** When the user taps to see more detail (analysis panels, expanded cards), the detail renders as a bottom-sheet or modal overlay (`position: fixed`). It must NOT grow the parent element in normal document flow.
+
+5. **Persona-first copy.** User-facing text must sound intentional and on-brand. If a backend state is "no data yet", the frontend either hides the element entirely or shows a brand-consistent placeholder — never a developer-facing status message.
+
+---
+
+## 11. Deleted UI Components (2026-05-21)
+
+| Component | Reason | Backend impact |
+|---|---|---|
+| `OracleWidget` | Awkward copy ("Oracle is feeling Sleeping"), CLS source, low user value | None — `degen_oracle.py` still powers paid `/api/v2/agent/context`. Consumer endpoints `/api/oracle/mood` and `/api/oracle/takes` removed from `:8001`. |

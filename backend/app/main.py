@@ -939,19 +939,6 @@ async def gas_faucet(address: str):
 
 
 
-# ─── Oracle Endpoints ───────────────────────────────────────
-@app.get("/api/oracle/mood")
-def get_oracle_mood():
-    from app.degen_oracle import get_current_mood
-    return get_current_mood()
-
-@app.get("/api/oracle/takes")
-def get_oracle_takes():
-    from app.degen_oracle import get_recent_takes
-    return get_recent_takes(5)
-
-
-
 # ─── Agent-Optimized Endpoints ────────────────────────────────
 @app.get("/api/agent/signals/active")
 async def agent_signals_active(limit: int = Query(default=10, le=50)):

@@ -231,9 +231,12 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
             </div>
           )}
 
-          {/* === EXPANDABLE ANALYSIS === */}
-          <div className={`overflow-hidden transition-all duration-300 ${expanded ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'}`}>
-            <div className="px-3 pb-3 space-y-2 border-t border-[#262626] pt-2">
+          {/* === EXPANDABLE ANALYSIS (bottom-sheet overlay — no CLS) === */}
+          {expanded && (
+            <div className="fixed inset-0 z-50 bg-black/70 flex items-end" onClick={() => setExpanded(false)}>
+              <div className="w-full max-w-md mx-auto bg-[#0e0e0e] rounded-t-2xl p-4 max-h-[80vh] overflow-y-auto animate-[slideUp_0.25s_ease-out]" onClick={e => e.stopPropagation()}>
+                <div className="w-10 h-1 bg-[#494847] rounded-full mx-auto mb-3" />
+                <div className="space-y-2">
               {/* Verdict reason */}
               {card.verdict_reason && (
                 <div className="bg-[#1a1a1a] p-2 rounded-lg">
@@ -335,13 +338,16 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
                   </div>
                 )}
               </div>
+                </div>
+                <button className="w-full mt-3 bg-[#262626] text-[#adaaaa] py-2 rounded-lg text-sm" onClick={() => setExpanded(false)}>Close</button>
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Expand hint */}
+          {/* Analyze trigger */}
           <div className="text-center pb-1">
-            <button onClick={() => setExpanded(!expanded)} className="text-[9px] text-[#494847] hover:text-[#adaaaa] transition-colors">
-              {expanded ? '▲ collapse' : '▼ tap to analyze'}
+            <button onClick={() => setExpanded(true)} className="text-[9px] text-[#494847] hover:text-[#adaaaa] transition-colors">
+              ▼ tap to analyze
             </button>
           </div>
 

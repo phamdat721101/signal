@@ -42,7 +42,7 @@ function TestnetBanner() {
         ⚠️ The Kinetic App is currently available only on Testnet.
       </span>
       <div className="flex gap-2 shrink-0">
-        <a href="https://app.testnet.initia.xyz" target="_blank" rel="noopener noreferrer"
+        <a href="https://app.testnet.initia.xyz/faucet" target="_blank" rel="noopener noreferrer"
           className="text-[10px] font-bold text-[#0e0e0e] bg-[#ffb84d] px-2 py-0.5 rounded">
           Get INIT
         </a>
@@ -107,8 +107,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         {navItems.map((item) => (
           <NavLink key={item.to} to={item.to} end={item.to === '/'}
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center transition-colors ${
-                isActive ? 'text-[#8eff71] scale-110' : 'text-[#adaaaa] opacity-50 hover:text-[#bf81ff]'
+              `flex flex-col items-center justify-center transition-colors ${isActive ? 'text-[#8eff71] scale-110' : 'text-[#adaaaa] opacity-50 hover:text-[#bf81ff]'
               }`
             }>
             <span className="material-symbols-outlined"
