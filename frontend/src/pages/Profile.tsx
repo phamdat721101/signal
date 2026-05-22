@@ -2,6 +2,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { config, shareToX, explorerTxUrl, normalizeAddress } from '../config';
 import { useSession } from '../hooks/useSession';
+import { useIUSDBalance } from '../hooks/useIUSDBalance';
 import { useConviction } from '../hooks/useConviction';
 import { useWallet } from '../hooks/useWallet';
 
@@ -49,6 +50,9 @@ export default function Profile() {
     loading, error, steps, iusdBalance,
     iusdCooldownSeconds, mockIUSDConfigured,
   } = useSession();
+  // Show what's locked in active SessionVault sessions — fixes the "where did
+  // my 10 iUSD go?" UX gap after a deposit succeeds.
+  const { sessionFormatted: vaultLockedFmt, sessionBalance: vaultLockedRaw } = useIUSDBalance();
   const { data: convictionData } = useConviction(address);
 
   const { data } = useQuery({
@@ -209,6 +213,14 @@ export default function Profile() {
             {iusdBalance ? `${Number(iusdBalance).toLocaleString(undefined, { maximumFractionDigits: 0 })} iUSD` : '— iUSD'}
           </div>
         </div>
+        {vaultLockedRaw > 0n && (
+          <div className="flex justify-between items-center -mt-1 mb-2 text-[11px]">
+            <span className="text-[#adaaaa]">+ locked in active session</span>
+            <span className="text-[#bf81ff] font-bold">
+              {Number(vaultLockedFmt).toLocaleString(undefined, { maximumFractionDigits: 2 })} iUSD
+            </span>
+          </div>
+        )}
         <div className="space-y-2">
           {(() => {
             const iusdDisabled = loading || !isConnected || !isCorrectChain || iusdCooldownSeconds > 0 || !mockIUSDConfigured;

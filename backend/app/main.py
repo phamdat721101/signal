@@ -331,7 +331,7 @@ def _is_premium(address: str) -> bool:
         return False
     except Exception as e:
         logger.warning(f"_is_premium chain check failed for {address}: {e}")
-        return True  # fail-open: don't block users when chain is unreachable
+        return False  # fail-closed: require confirmed session for premium
 
 
 @app.post("/api/cards/{card_id}/ape")
@@ -344,9 +344,17 @@ async def ape_card(card_id: int, request: Request):
     card = get_card_by_id(card_id)
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
+    # Energy gate
+    if address:
+        from app.db import consume_energy
+        result = consume_energy(address, card.get("card_type", "trading"))
+        if not result["ok"]:
+            raise HTTPException(status_code=402, detail="no_energy")
     price = card.get("price", 0)
+    # Non-price cards (macro_desk, whale_alert) — record swipe only, no trade
     if price <= 0:
-        raise HTTPException(status_code=400, detail="Card has no valid price")
+        record_swipe(card_id, address, "ape")
+        return {"status": "ok", "action": "ape", "trade": None, "conviction": None}
     token_amount = amount_usd / price
     on_chain = bool(tx_hash)
     if not tx_hash:
@@ -421,9 +429,92 @@ async def ape_card(card_id: int, request: Request):
 async def fade_card(card_id: int, request: Request):
     body = await request.json()
     address = normalize_address(body.get("address", ""))
-    from app.db import record_swipe
+    from app.db import record_swipe, get_card_by_id
+    card = get_card_by_id(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    # Energy gate
+    if address:
+        from app.db import consume_energy
+        result = consume_energy(address, card.get("card_type", "trading"))
+        if not result["ok"]:
+            raise HTTPException(status_code=402, detail="no_energy")
     swipe_id = record_swipe(card_id, address, "fade")
     return {"status": "ok", "swipe_id": swipe_id, "action": "fade"}
+
+
+@app.get("/api/energy/{address}")
+async def get_user_energy(address: str):
+    """Energy state for the energy bar UI.
+
+    Premium path (active SessionVault session): unlimited energy, is_premium=true.
+    Falls back to daily_swipes-derived count on RPC error or when no session.
+    """
+    import asyncio as _aio
+    from app.config import get_settings
+    from app.db import get_energy
+    s = get_settings()
+    address = normalize_address(address)
+    if not address:
+        return {"energy": s.energy_max, "max": s.energy_max, "is_premium": False}
+
+    # Chain-derived premium check (60s cached). Wrapped in to_thread because
+    # web3.py is sync; never block the event loop in an async handler.
+    is_premium = False
+    try:
+        from app.chain import ChainClient
+        is_premium = await _aio.to_thread(ChainClient().has_active_session, address)
+    except Exception:
+        is_premium = False  # fail-open to daily_swipes path
+
+    if is_premium:
+        return {"energy": s.energy_max, "max": s.energy_max, "is_premium": True}
+    return {"energy": get_energy(address), "max": s.energy_max, "is_premium": False}
+
+
+@app.post("/api/energy/refill")
+async def refill_energy(request: Request):
+    """Reset daily_swipes after a verified SessionVault deposit.
+
+    Requires {address, tx_hash}. Verifies the tx receipt's SessionCreated event
+    proves `address` is the depositor. Idempotent on tx_hash — replaying
+    returns the same response without doing on-chain work twice.
+    """
+    import asyncio as _aio
+    from app.config import get_settings
+    from app import db
+    s = get_settings()
+    body = await request.json()
+    address = normalize_address(body.get("address", ""))
+    tx_hash = (body.get("tx_hash") or "").strip().lower()
+
+    if not address:
+        raise HTTPException(400, "address required")
+    if not (tx_hash.startswith("0x") and len(tx_hash) == 66):
+        raise HTTPException(400, "tx_hash required (0x + 64 hex chars)")
+
+    # Idempotent replay — same tx_hash returns the same outcome with no chain RPC.
+    if await _aio.to_thread(db.get_refill, tx_hash):
+        return {"energy": s.energy_max, "max": s.energy_max,
+                "tx_hash": tx_hash, "redeemed": True, "replayed": True}
+
+    # Verify the deposit happened on-chain and matches the caller.
+    from app.chain import ChainClient
+    result = await _aio.to_thread(
+        ChainClient().verify_session_creation_tx, tx_hash, address)
+    if not result.get("ok"):
+        raise HTTPException(403, f"tx does not prove deposit: {result.get('reason')}")
+
+    # Persist refill (idempotency boundary) + clear today's swipe count.
+    await _aio.to_thread(
+        db.record_refill, tx_hash, address,
+        result.get("session_id"), result.get("amount"))
+    await _aio.to_thread(db.reset_daily_swipes, address)
+
+    return {"energy": s.energy_max, "max": s.energy_max,
+            "tx_hash": tx_hash, "redeemed": True, "replayed": False,
+            "session_id": result.get("session_id"),
+            "expires_at": result.get("expires_at")}
 
 
 @app.get("/api/cards/user/{address}")

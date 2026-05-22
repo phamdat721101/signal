@@ -210,6 +210,21 @@ def init_db():
                 UNIQUE(user_address, swipe_date)
             )
         """)
+        # Energy-refill ledger — tx_hash is the idempotency key. Same hash on
+        # two refill calls = single row. Mirrors x402_settlements.payload_hash.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS energy_refills (
+                tx_hash      TEXT PRIMARY KEY,
+                user_address TEXT NOT NULL,
+                session_id   BIGINT,
+                amount_iusd  NUMERIC,
+                refilled_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS energy_refills_user_idx
+              ON energy_refills (user_address, refilled_at DESC)
+        """)
     logger.info("Daily swipes table ready")
     # New tables for SosoValue integration
     with conn.cursor() as cur:
@@ -635,6 +650,94 @@ def increment_daily_swipes(address: str) -> int:
                RETURNING count""",
             (address,))
         return cur.fetchone()[0]
+
+
+# ─── Energy System ───────────────────────────────────────────
+
+PREMIUM_CARD_TYPES = {'macro_desk', 'whale_alert', 'index_battle'}
+
+
+def get_energy(address: str) -> int:
+    """Remaining energy for today."""
+    from app.config import get_settings
+    return max(0, get_settings().energy_max - get_daily_swipe_count(address))
+
+
+def consume_energy(address: str, card_type: str) -> dict:
+    """Deduct energy. Returns {ok, remaining, cost}."""
+    from app.config import get_settings
+    s = get_settings()
+    cost = s.energy_cost_premium if card_type in PREMIUM_CARD_TYPES else s.energy_cost_standard
+    if get_energy(address) < cost:
+        return {"ok": False, "remaining": get_energy(address), "cost": cost}
+    conn = _get_conn()
+    if not conn:
+        return {"ok": True, "remaining": 0, "cost": cost}
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO daily_swipes (user_address, swipe_date, count)
+               VALUES (%s, CURRENT_DATE, %s)
+               ON CONFLICT (user_address, swipe_date)
+               DO UPDATE SET count = daily_swipes.count + %s
+               RETURNING count""",
+            (address, cost, cost))
+        new_count = cur.fetchone()[0]
+    return {"ok": True, "remaining": max(0, s.energy_max - new_count), "cost": cost}
+
+
+# ─── Energy refill ledger (tx-hash-keyed idempotency) ─────────────────
+
+
+def get_refill(tx_hash: str) -> dict | None:
+    """Look up a previously-redeemed refill by its on-chain tx hash."""
+    if not tx_hash:
+        return None
+    conn = _get_conn()
+    if not conn:
+        return None
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT tx_hash, user_address, session_id, amount_iusd, refilled_at "
+            "FROM energy_refills WHERE tx_hash = %s",
+            (tx_hash.lower(),))
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def record_refill(tx_hash: str, user_address: str, session_id: int | None,
+                  amount_iusd: str | None) -> bool:
+    """Insert a refill row. Returns True if newly inserted, False if duplicate.
+
+    `user_address` is stored verbatim (caller is expected to pass the checksum
+    form from normalize_address — same form daily_swipes is keyed on)."""
+    conn = _get_conn()
+    if not conn:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO energy_refills (tx_hash, user_address, session_id, amount_iusd)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (tx_hash) DO NOTHING
+               RETURNING tx_hash""",
+            (tx_hash.lower(), user_address, session_id, amount_iusd))
+        return cur.fetchone() is not None
+
+
+def reset_daily_swipes(address: str) -> int:
+    """Clear today's swipe count for an address. Returns rows deleted (0 or 1).
+
+    Address is matched verbatim — must use the same form daily_swipes is
+    keyed on (consume_energy stores the checksum address from normalize_address)."""
+    if not address:
+        return 0
+    conn = _get_conn()
+    if not conn:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM daily_swipes WHERE user_address = %s AND swipe_date = CURRENT_DATE",
+            (address,))
+        return cur.rowcount or 0
 
 
 def get_recently_resolved_trades(address: str, since_hours: int = 24) -> list[dict]:

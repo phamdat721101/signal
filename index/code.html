@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Kinetic Terminal - Index Battle</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;800;900&amp;family=Inter:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "tertiary-fixed-dim": "#ff7b70",
+                        "primary-dim": "#2be800",
+                        "inverse-surface": "#fcf8f8",
+                        "on-primary": "#0d6100",
+                        "secondary-container": "#7701d0",
+                        "surface-container": "#1a1919",
+                        "on-error": "#450900",
+                        "on-secondary": "#32005c",
+                        "primary": "#8eff71",
+                        "on-primary-container": "#0b5800",
+                        "primary-container": "#2ff801",
+                        "outline": "#777575",
+                        "on-surface": "#ffffff",
+                        "surface-container-high": "#201f1f",
+                        "secondary-fixed-dim": "#dab4ff",
+                        "secondary-fixed": "#e4c6ff",
+                        "tertiary-dim": "#e51a22",
+                        "surface-tint": "#8eff71",
+                        "inverse-on-surface": "#565554",
+                        "primary-fixed": "#2ff801",
+                        "surface-container-highest": "#262626",
+                        "on-secondary-fixed-variant": "#7500cc",
+                        "tertiary-container": "#f5282b",
+                        "on-background": "#ffffff",
+                        "on-primary-fixed-variant": "#0d6200",
+                        "primary-fixed-dim": "#2be800",
+                        "on-tertiary": "#4a0003",
+                        "tertiary": "#ff7166",
+                        "error-dim": "#d53d18",
+                        "on-tertiary-container": "#000000",
+                        "error-container": "#b92902",
+                        "surface-variant": "#262626",
+                        "on-tertiary-fixed": "#3a0002",
+                        "background": "#0e0e0e",
+                        "on-secondary-container": "#f0dcff",
+                        "surface": "#0e0e0e",
+                        "error": "#ff7351",
+                        "on-secondary-fixed": "#4e008a",
+                        "on-error-container": "#ffd2c8",
+                        "surface-dim": "#0e0e0e",
+                        "inverse-primary": "#106f00",
+                        "on-primary-fixed": "#064200",
+                        "surface-container-low": "#131313",
+                        "on-surface-variant": "#adaaaa",
+                        "tertiary-fixed": "#ff9287",
+                        "secondary-dim": "#9c42f4",
+                        "outline-variant": "#494847",
+                        "secondary": "#bf81ff",
+                        "on-tertiary-fixed-variant": "#7a0008",
+                        "surface-bright": "#2c2c2c",
+                        "surface-container-lowest": "#000000"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "fontFamily": {
+                        "headline": ["Space Grotesk"],
+                        "display": ["Space Grotesk"],
+                        "body": ["Inter"],
+                        "label": ["Space Grotesk"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .glass-card {
+            background: rgba(26, 25, 25, 0.6);
+            backdrop-filter: blur(16px);
+        }
+        .kinetic-glow {
+            box-shadow: 0 0 20px -5px rgba(191, 129, 255, 0.3);
+        }
+        .ape-pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        .vs-gradient {
+            background: linear-gradient(135deg, #8eff71 0%, #bf81ff 100%);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface font-body min-h-screen flex flex-col items-center justify-center p-4">
+<!-- Top Navigation Anchor (Manual Override for Context) -->
+<header class="bg-[#0e0e0e] flex justify-between items-center w-full px-6 py-4 fixed top-0 z-50">
+<div class="font-['Space_Grotesk'] font-bold tracking-tight text-2xl italic text-primary">KINETIC</div>
+<div class="flex items-center gap-3 bg-surface-container-low px-3 py-1.5 rounded-lg border border-outline-variant/20">
+<span class="material-symbols-outlined text-primary text-sm">account_balance_wallet</span>
+<span class="font-label font-bold text-sm">0.42 ETH</span>
+<div class="w-6 h-6 rounded-full bg-secondary overflow-hidden">
+<img class="w-full h-full" data-alt="A futuristic identicon avatar for a digital crypto wallet user, featuring abstract geometric patterns in neon purple and lime green on a black background, matching the Kinetic Terminal aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuA4d37Z1tz0S8QvNvyCA-4a7hpRREzi47CVgsWvfOJnkLykQ8vTIM4IIOETeycdCJIFZSX2tCtH5wVOixMHEJ31aQHx4JDHGZmTT_Bztw0E38uQvi_KhiRpq8kELmWxt3ddR0rmKKGFJ4x75GufDO2IDrffTIHRMCLMo9SV9K083jOVlt94Bi7wZpoTf7yzz3lVNBNH1-beRb0b64cKYIM7meELBgvahazNBG0QwDJwEoZcGhMFq4THXrPV_jIi6i1T1Il8ZLoxdKv7"/>
+</div>
+</div>
+</header>
+<!-- Main Index Battle Card Container -->
+<main class="w-full max-w-md mt-16 mb-24 relative group">
+<!-- Visual Glow Backing -->
+<div class="absolute -inset-1 bg-secondary opacity-20 blur-2xl group-hover:opacity-30 transition-opacity duration-500"></div>
+<div class="relative bg-surface-container-low border border-secondary/30 rounded-lg overflow-hidden kinetic-glow shadow-2xl">
+<!-- Header: Violet Badge -->
+<div class="flex items-center justify-between px-5 py-4 bg-secondary/10 border-b border-secondary/20">
+<div class="flex items-center gap-2 px-3 py-1 bg-secondary text-on-secondary rounded-sm font-label font-black text-xs tracking-widest">
+<span class="material-symbols-outlined text-[14px]">swords</span>
+                    INDEX BATTLE
+                </div>
+<div class="flex gap-1.5">
+<div class="w-1.5 h-1.5 rounded-full bg-primary ape-pulse"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-secondary/50"></div>
+</div>
+</div>
+<!-- VS Comparison Layout -->
+<div class="relative grid grid-cols-2 p-1 gap-px bg-outline-variant/10">
+<!-- Left Column: MAG7 -->
+<div class="bg-surface-container p-6 flex flex-col items-center justify-center text-center">
+<div class="font-display font-bold text-on-surface-variant text-xs tracking-tighter mb-1">AGGREGATED INDEX</div>
+<div class="font-display font-black text-4xl text-on-surface mb-2">MAG7</div>
+<div class="font-label font-bold text-primary text-xl">+3.2%</div>
+<div class="w-full mt-6 bg-surface-container-highest h-2 rounded-full overflow-hidden">
+<div class="bg-primary h-full w-[70%]" style="box-shadow: 0 0 10px #8eff7180"></div>
+</div>
+<div class="mt-2 font-label text-[10px] text-on-surface-variant uppercase tracking-widest">70% MOMENTUM</div>
+</div>
+<!-- Right Column: MEME -->
+<div class="bg-surface-container p-6 flex flex-col items-center justify-center text-center">
+<div class="font-display font-bold text-on-surface-variant text-xs tracking-tighter mb-1">RISK-ON INDEX</div>
+<div class="font-display font-black text-4xl text-on-surface mb-2">MEME</div>
+<div class="font-label font-bold text-tertiary text-xl">-1.4%</div>
+<div class="w-full mt-6 bg-surface-container-highest h-2 rounded-full overflow-hidden">
+<div class="bg-tertiary h-full w-[30%]" style="box-shadow: 0 0 10px #ff716680"></div>
+</div>
+<div class="mt-2 font-label text-[10px] text-on-surface-variant uppercase tracking-widest">30% MOMENTUM</div>
+</div>
+<!-- Central VS Divider -->
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
+<div class="w-12 h-12 rounded-full vs-gradient flex items-center justify-center border-4 border-surface shadow-xl">
+<span class="font-display font-black italic text-lg text-black">VS</span>
+</div>
+</div>
+</div>
+<!-- Hook Text -->
+<div class="px-6 py-4 text-center">
+<p class="font-display font-medium text-lg text-on-surface leading-tight">MAG7 vs Meme — which sector wins this week?</p>
+</div>
+<!-- Why Now Section -->
+<div class="px-6 py-2">
+<div class="bg-secondary-container/20 border border-secondary/10 p-4 rounded-xl relative overflow-hidden">
+<div class="absolute top-0 right-0 p-2 opacity-10">
+<span class="material-symbols-outlined text-4xl">bolt</span>
+</div>
+<div class="flex items-start gap-3">
+<div class="bg-secondary p-1 rounded-sm mt-1">
+<span class="material-symbols-outlined text-on-secondary text-sm" style="font-variation-settings: 'FILL' 1;">bolt</span>
+</div>
+<div>
+<div class="font-label text-[10px] font-bold text-secondary uppercase tracking-[0.2em] mb-1">WHY NOW</div>
+<p class="font-body text-sm text-on-surface-variant leading-relaxed">
+                                Sector rotation is the <span class="text-on-surface font-semibold">#1 alpha source</span>. Whales are offloading high-cap tech for speculative liquidity pools.
+                            </p>
+</div>
+</div>
+</div>
+</div>
+<!-- Institutional Context (Chips) -->
+<div class="px-6 py-4 flex gap-3">
+<div class="flex-1 bg-surface-container-highest px-3 py-2 rounded-lg flex items-center justify-between border border-white/5">
+<span class="font-label text-[10px] text-on-surface-variant font-bold">MAG7</span>
+<span class="font-label text-xs font-black text-primary">+3.2%</span>
+</div>
+<div class="flex-1 bg-surface-container-highest px-3 py-2 rounded-lg flex items-center justify-between border border-white/5">
+<span class="font-label text-[10px] text-on-surface-variant font-bold">MEME</span>
+<span class="font-label text-xs font-black text-tertiary">-1.4%</span>
+</div>
+</div>
+<!-- Verdict Badge -->
+<div class="px-6 pb-6 pt-2">
+<div class="bg-primary/10 border border-primary/20 rounded-full py-2 flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-primary text-sm" style="font-variation-settings: 'FILL' 1;">stars</span>
+<span class="font-label font-black text-primary text-xs tracking-widest uppercase">Verdict: MAG7 leads</span>
+</div>
+</div>
+<!-- Action Buttons -->
+<div class="grid grid-cols-2 h-16 border-t border-white/5">
+<button class="flex items-center justify-center gap-2 bg-surface hover:bg-tertiary/10 transition-colors group/fade">
+<span class="material-symbols-outlined text-tertiary group-hover/fade:scale-110 transition-transform">trending_down</span>
+<span class="font-display font-black text-tertiary tracking-widest text-lg">FADE</span>
+</button>
+<button class="flex items-center justify-center gap-2 bg-primary hover:bg-primary-dim transition-all active:scale-95 duration-100 group/ape">
+<span class="material-symbols-outlined text-on-primary group-hover/ape:scale-110 transition-transform" style="font-variation-settings: 'FILL' 1;">trending_up</span>
+<span class="font-display font-black text-on-primary tracking-widest text-lg">APE</span>
+</button>
+</div>
+</div>
+</main>
+<!-- Bottom Navigation Shell (JSON Defined Styles) -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-6 pt-2 bg-[#0e0e0e]/80 backdrop-blur-md shadow-[0_-8px_32px_rgba(0,0,0,0.5)]">
+<a class="flex flex-col items-center justify-center text-[#8eff71] scale-110 font-['Inter'] font-semibold text-[10px] uppercase tracking-widest" href="#">
+<span class="material-symbols-outlined" data-icon="bolt" style="font-variation-settings: 'FILL' 1;">bolt</span>
+<span class="mt-1">Feed</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#adaaaa] opacity-50 font-['Inter'] font-semibold text-[10px] uppercase tracking-widest hover:text-[#bf81ff] transition-colors active:scale-90 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="leaderboard">leaderboard</span>
+<span class="mt-1">Leaderboard</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#adaaaa] opacity-50 font-['Inter'] font-semibold text-[10px] uppercase tracking-widest hover:text-[#bf81ff] transition-colors active:scale-90 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="account_balance_wallet">account_balance_wallet</span>
+<span class="mt-1">Portfolio</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#adaaaa] opacity-50 font-['Inter'] font-semibold text-[10px] uppercase tracking-widest hover:text-[#bf81ff] transition-colors active:scale-90 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="person">person</span>
+<span class="mt-1">Profile</span>
+</a>
+</nav>
+<!-- Interactive script for ambient terminal glow -->
+<script>
+        document.addEventListener('mousemove', (e) => {
+            const glow = document.querySelector('.blur-2xl');
+            const card = document.querySelector('.kinetic-glow');
+            if (glow) {
+                const rect = card.getBoundingClientRect();
+                const x = e.clientX - rect.left - rect.width / 2;
+                const y = e.clientY - rect.top - rect.height / 2;
+                glow.style.transform = `translate(${x * 0.05}px, ${y * 0.05}px)`;
+            }
+        });
+    </script>
+</body></html>

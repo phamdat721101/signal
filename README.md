@@ -279,6 +279,43 @@ curl -H "x-payment: <base64-PaymentPayload>" \
 
 For the exact payload shape, see [x402.org](https://x402.org) or use the `x402-fetch` SDK to do it for you.
 
+### Dual Rail — Base (CDP) + Morph Rails
+
+The same paid endpoints are served on a **second, parallel rail** at
+`https://ai.overguild.com/morph-api/api/v2/agent/*` settled on
+[Morph Rails](https://docs.morph.network/docs/morph-rails/overview)
+(Hoodi testnet, `eip155:2910`). Agents pick the rail that suits them:
+
+| Rail | URL prefix | Network | Asset | Gas | Facilitator auth |
+|---|---|---|---|---|---|
+| **Base** | `/agent-api/*` | `eip155:8453` | USDC | ETH | CDP JWT |
+| **Morph** | `/morph-api/*` | `eip155:2910` (Hoodi) | HoodiTestToken | **USDC via AltFee** — no ETH required | Morph HMAC |
+
+Each Morph response carries:
+- `x-payment-rail: morph`
+- `x-morph-reference-key: SIGNAL-<12-hex>` — merchant order ID
+- `x-payment-response: <base64-SettleResponse>`
+
+Reconcile by Reference Key (free, no auth):
+```bash
+curl 'https://ai.overguild.com/morph-api/reconcile?key=SIGNAL-AB12CD34EF56'
+# → { tx_hash, network, payer, amount, status, settled_at, explorer_url }
+```
+
+Skill Hub manifest (free): `GET /.well-known/morph-skill.json`.
+
+```mermaid
+flowchart LR
+    A["Agent (USDC-only wallet)"] -->|GET /morph-api/...| C[Caddy]
+    C --> P[FastAPI :8002<br/>agent_main.py]
+    P -->|verify+settle HMAC| F[Morph Facilitator<br/>morph-rails.morph.network/x402]
+    F -->|on-chain settle| S[Morph Hoodi sequencer<br/>AltFee deducts gas in USDC]
+    P -->|x-morph-reference-key| A
+    P -. ai.overguild.com/.well-known/morph-skill.json .-> SH[Morph Skill Hub]
+```
+
+Deploy guide: [`docs/MORPH-DEPLOY.md`](docs/MORPH-DEPLOY.md).
+
 ### Discover Through Bazaar
 
 After the first paid call settles through the CDP Facilitator, this service is automatically indexed in the [CDP Bazaar](https://docs.cdp.coinbase.com/x402/bazaar) — no separate registration step.

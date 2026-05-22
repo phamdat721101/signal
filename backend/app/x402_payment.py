@@ -106,6 +106,21 @@ def get_x402_middleware_args() -> tuple[dict, x402ResourceServer] | tuple[None, 
             "Macro market context fused from SoSoValue institutional data: BTC/ETH ETF net flows, macro economic event calendar, sector rotation signals, breaking news, plus the AI oracle's current market mood. Refreshed every 30 seconds.",
             {"sosovalue": {"etf_flows": {"btc_net_flow_24h": 150000000}, "macro_events": [], "hot_news": []}, "oracle_mood": "bullish"},
         ),
+        "GET /api/v2/agent/macro-deck": route(
+            "$0.02",
+            "Daily Macro Trading Desk cards: ETF flow signals, macro event catalysts, and momentum streak alerts. Institutional-grade research distilled into actionable APE/FADE predictions with conviction scoring.",
+            {"cards": [{"token_symbol": "BTC", "card_type": "macro_desk", "hook": "$186M ETF inflow today", "verdict": "APE"}], "total": 3},
+        ),
+        "GET /api/v2/agent/whale-alerts": route(
+            "$0.005",
+            "Real-time BTC treasury whale alerts: detects when MicroStrategy, Tesla, and other public companies change their Bitcoin holdings. Event-driven signals with directional bias.",
+            {"alerts": [{"token_symbol": "BTC", "hook": "MicroStrategy bought 5,000 BTC", "verdict": "APE"}], "total": 1},
+        ),
+        "GET /api/v2/agent/index-battles": route(
+            "$0.01",
+            "Weekly sector index battle matchups from SoSoValue SSI protocol: MAG7 vs Meme, DeFi vs AI, L1 vs L2. Sector rotation intelligence for portfolio allocation decisions.",
+            {"battles": [{"token_symbol": "MAG7vMEME", "card_type": "index_battle", "hook": "MAG7 vs Meme — which wins?", "verdict": "APE"}], "total": 2},
+        ),
     }
 
     return (routes, server)

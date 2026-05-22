@@ -55,9 +55,12 @@ export function useSession() {
   }, [cooldownKey]);
   const mockIUSDConfigured = config.mockIUSDAddress !== '0x0000000000000000000000000000000000000000';
 
-  // Read iUSD balance
+  // Read iUSD wallet balance (free balance, not locked in vault).
+  // Distinct query key from useIUSDBalance (['iusd-balance']) which returns
+  // a richer {wallet, session} shape — sharing keys was causing cache
+  // collisions where one consumer's queryFn output broke the other consumer.
   const { data: iusdBalance, refetch: refetchBalance } = useQuery({
-    queryKey: ['iusd-balance', address],
+    queryKey: ['iusd-wallet', address],
     queryFn: async () => {
       if (!address || config.mockIUSDAddress === '0x0000000000000000000000000000000000000000') return '0';
       const bal = await publicClient.readContract({
@@ -117,14 +120,29 @@ export function useSession() {
       updateStep(1, { status: 'pending' });
       const depositHash = await sendTx(config.sessionVaultAddress,
         encodeFunctionData({ abi: SESSION_VAULT_ABI, functionName: 'createSession', args: [amountWei, BigInt(durationHours * 3600)] }));
+      // Wait for the deposit tx to be mined before telling the backend.
+      // Without this, /api/energy/refill races the receipt and gets 403
+      // (tx_not_found_or_failed) because eth_getTransactionReceipt returns
+      // null for un-mined hashes. Bounded by viem's default 60s.
+      await publicClient.waitForTransactionReceipt({ hash: depositHash as `0x${string}` });
       updateStep(1, { status: 'success', txHash: depositHash });
+      // Backend verifies the receipt + SessionCreated event (idempotent on
+      // tx_hash) before resetting daily_swipes. Fire-and-forget — UI updates
+      // via the energy-query invalidation below.
+      fetch(`${config.backendUrl}/api/energy/refill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, tx_hash: depositHash }),
+      }).catch(() => { /* best-effort; backend reconciles via /api/energy GET on next poll */ });
       refetchBalance();
       queryClient.invalidateQueries({ queryKey: ['profile'] });
+      queryClient.invalidateQueries({ queryKey: ['energy'] });
+      queryClient.invalidateQueries({ queryKey: ['iusd-balance'] });
     } catch (e: any) {
       setError(e.message);
       setSteps(prev => prev.map(s => s.status === 'pending' ? { ...s, status: 'error', error: e.message } : s));
     } finally { setLoading(false); }
-  }, [sendTx, refetchBalance, queryClient]);
+  }, [sendTx, refetchBalance, queryClient, address]);
 
   // Withdraw: close active session
   const closeSession = useCallback(async () => {
@@ -153,6 +171,8 @@ export function useSession() {
       updateStep(0, { status: 'success', txHash: hash, label: 'Session closed — iUSD returned' });
       refetchBalance();
       queryClient.invalidateQueries({ queryKey: ['profile'] });
+      queryClient.invalidateQueries({ queryKey: ['energy'] });
+      queryClient.invalidateQueries({ queryKey: ['iusd-balance'] });
     } catch (e: any) {
       setError(e.message);
       updateStep(0, { status: 'error', error: e.message });

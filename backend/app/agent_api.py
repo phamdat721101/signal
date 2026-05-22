@@ -619,3 +619,34 @@ async def get_report(escrow_id: int, buyer_stellar: str = Query(...)):
     if row["status"] == "funded":
         return {"status": "generating", "message": "Report is being generated. Please wait."}
     return {"status": row["status"], "report": row.get("report_data"), "delivered_at": str(row.get("delivered_at", ""))}
+
+
+
+# ─── New Card Type Endpoints ─────────────────────────────────
+
+
+@router.get("/macro-deck")
+async def get_macro_deck():
+    """Daily Macro Trading Desk cards — ETF flows, macro events, momentum signals."""
+    import asyncio
+    from app.content_engine import generate_macro_desk_cards
+    cards = await asyncio.to_thread(generate_macro_desk_cards)
+    return {"cards": cards, "total": len(cards)}
+
+
+@router.get("/whale-alerts")
+async def get_whale_alerts():
+    """Real-time whale BTC treasury delta alerts."""
+    import asyncio
+    from app.content_engine import generate_whale_alert_cards
+    cards = await asyncio.to_thread(generate_whale_alert_cards)
+    return {"alerts": cards, "total": len(cards)}
+
+
+@router.get("/index-battles")
+async def get_index_battles():
+    """Weekly index vs index battle matchups from SSI data."""
+    import asyncio
+    from app.content_engine import generate_index_battle_cards
+    cards = await asyncio.to_thread(generate_index_battle_cards)
+    return {"battles": cards, "total": len(cards)}

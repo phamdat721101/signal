@@ -384,3 +384,198 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
     </div>
   );
 }
+
+
+/* ─── Shared sub-components for new card types ─── */
+
+function WhyNowBox({ text, accent = 'purple' }: { text: string; accent?: 'purple' | 'amber' }) {
+  const border = accent === 'amber' ? 'border-[#f59e0b]/20' : 'border-[#bf81ff]/20';
+  const bg = accent === 'amber' ? 'bg-[#f59e0b]/10' : 'bg-[#bf81ff]/10';
+  const label = accent === 'amber' ? 'text-[#f59e0b]' : 'text-[#bf81ff]';
+  return (
+    <div className={`${bg} ${border} border p-3 rounded-xl`}>
+      <div className={`text-[9px] font-bold ${label} uppercase tracking-widest mb-1`}>⚡ WHY NOW</div>
+      <p className="text-[11px] text-[#adaaaa] leading-relaxed">{text}</p>
+    </div>
+  );
+}
+
+function VerdictPill({ verdict }: { verdict: string }) {
+  const isApe = verdict === 'APE';
+  const color = isApe ? 'text-[#8eff71] bg-[#8eff71]/10 border-[#8eff71]/20' : 'text-[#ff7166] bg-[#ff7166]/10 border-[#ff7166]/20';
+  return (
+    <div className={`${color} border rounded-full py-1.5 flex items-center justify-center gap-1.5`}>
+      <span className="text-xs">✨</span>
+      <span className="font-bold text-[10px] uppercase tracking-widest">Verdict: {verdict}</span>
+    </div>
+  );
+}
+
+function ActionButtons({ onApe, onFade }: { onApe: () => void; onFade: () => void }) {
+  return (
+    <div className="grid grid-cols-2 h-14 border-t border-white/5">
+      <button onClick={onFade} className="flex items-center justify-center gap-1.5 hover:bg-[#ff7166]/10 active:scale-95 transition-all">
+        <span className="text-[#ff7166] font-black text-lg">↘ FADE</span>
+      </button>
+      <button onClick={onApe} className="flex items-center justify-center gap-1.5 bg-[#8eff71] hover:bg-[#2ff801] active:scale-95 transition-all">
+        <span className="text-[#0b5800] font-black text-lg">↗ APE</span>
+      </button>
+    </div>
+  );
+}
+
+/* ─── IndexBattleCard ─── */
+
+export function IndexBattleCard({ card, onApe, onFade }: { card: Card; onApe: () => void; onFade: () => void }) {
+  const ctx = card.institutional_context || [];
+  const left = ctx[0] || { label: '?', value: '0%' };
+  const right = ctx[1] || { label: '?', value: '0%' };
+  const leftPct = parseFloat(left.value) || 0;
+  const rightPct = parseFloat(right.value) || 0;
+  const total = Math.abs(leftPct) + Math.abs(rightPct) || 1;
+  const leftMomentum = Math.round((Math.abs(leftPct) / total) * 100);
+
+  return (
+    <div className="w-full max-w-sm mx-auto rounded-lg overflow-hidden select-none kinetic-glow border border-[#bf81ff]/30 bg-[#131313]">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-[#bf81ff]/10 border-b border-[#bf81ff]/20">
+        <div className="flex items-center gap-1.5 px-2.5 py-1 bg-[#bf81ff] rounded-sm">
+          <span className="text-[10px] font-black text-white tracking-widest">⚔️ INDEX BATTLE</span>
+        </div>
+        <div className="flex gap-1.5">
+          <div className="w-1.5 h-1.5 rounded-full bg-[#8eff71] ape-pulse" />
+          <div className="w-1.5 h-1.5 rounded-full bg-[#bf81ff]/50" />
+        </div>
+      </div>
+      {/* VS Comparison */}
+      <div className="relative grid grid-cols-2 gap-px bg-[#262626]/30">
+        <div className="bg-[#1a1919] p-5 flex flex-col items-center text-center">
+          <div className="text-[9px] font-bold text-[#adaaaa] tracking-tight mb-1">AGGREGATED INDEX</div>
+          <div className="font-bold text-3xl text-white mb-1">{left.label}</div>
+          <div className={`font-bold text-lg ${leftPct >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]'}`}>{left.value}</div>
+          <div className="w-full mt-4 bg-[#262626] h-2 rounded-full overflow-hidden">
+            <div className="bg-[#8eff71] h-full rounded-full" style={{ width: `${leftMomentum}%` }} />
+          </div>
+          <div className="mt-1 text-[9px] text-[#adaaaa] uppercase tracking-widest">{leftMomentum}% MOMENTUM</div>
+        </div>
+        <div className="bg-[#1a1919] p-5 flex flex-col items-center text-center">
+          <div className="text-[9px] font-bold text-[#adaaaa] tracking-tight mb-1">RISK-ON INDEX</div>
+          <div className="font-bold text-3xl text-white mb-1">{right.label}</div>
+          <div className={`font-bold text-lg ${rightPct >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]'}`}>{right.value}</div>
+          <div className="w-full mt-4 bg-[#262626] h-2 rounded-full overflow-hidden">
+            <div className="bg-[#ff7166] h-full rounded-full" style={{ width: `${100 - leftMomentum}%` }} />
+          </div>
+          <div className="mt-1 text-[9px] text-[#adaaaa] uppercase tracking-widest">{100 - leftMomentum}% MOMENTUM</div>
+        </div>
+        {/* VS badge */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
+          <div className="w-10 h-10 rounded-full vs-gradient flex items-center justify-center border-4 border-[#0e0e0e]">
+            <span className="font-black italic text-sm text-black">VS</span>
+          </div>
+        </div>
+      </div>
+      {/* Hook */}
+      <div className="px-5 py-3 text-center">
+        <p className="font-medium text-base text-white leading-tight">{card.hook?.replace('⚔️ ', '')}</p>
+      </div>
+      {/* Why Now */}
+      {card.why_now && <div className="px-5 pb-3"><WhyNowBox text={card.why_now} /></div>}
+      {/* Verdict */}
+      <div className="px-5 pb-4"><VerdictPill verdict={card.verdict || 'DYOR'} /></div>
+      {/* Actions */}
+      <ActionButtons onApe={onApe} onFade={onFade} />
+    </div>
+  );
+}
+
+/* ─── MacroDeskCard ─── */
+
+export function MacroDeskCard({ card, onApe, onFade }: { card: Card; onApe: () => void; onFade: () => void }) {
+  const ctx = card.institutional_context || [];
+  const heroCtx = ctx[0] || { emoji: '📊', label: 'Signal', value: '—' };
+
+  return (
+    <div className="w-full max-w-sm mx-auto rounded-lg overflow-hidden select-none kinetic-glow-amber border border-[#f59e0b]/30 bg-[#131313]">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-[#f59e0b]/10 border-b border-[#f59e0b]/20">
+        <div className="flex items-center gap-1.5 px-2.5 py-1 bg-[#f59e0b] rounded-sm">
+          <span className="text-[10px] font-black text-black tracking-widest">📊 MACRO DESK</span>
+        </div>
+        <span className="text-[8px] font-bold text-[#f59e0b]/70 uppercase">via SoSoValue</span>
+      </div>
+      {/* Hero Metric */}
+      <div className="py-6 flex flex-col items-center text-center bg-[#1a1919]">
+        <span className="text-3xl mb-1">{heroCtx.emoji}</span>
+        <div className="font-black text-4xl text-white">{heroCtx.value}</div>
+        <div className="text-[10px] font-bold text-[#adaaaa] uppercase tracking-widest mt-1">{heroCtx.label}</div>
+      </div>
+      {/* Hook */}
+      <div className="px-5 py-3 text-center">
+        <p className="font-medium text-base text-white leading-tight">{card.hook}</p>
+      </div>
+      {/* Why Now */}
+      {card.why_now && <div className="px-5 pb-3"><WhyNowBox text={card.why_now} accent="amber" /></div>}
+      {/* Context chips */}
+      {ctx.length > 0 && (
+        <div className="px-5 pb-3 flex gap-2 flex-wrap">
+          {ctx.map((c: any, i: number) => (
+            <div key={i} className="bg-[#262626] px-3 py-1.5 rounded-lg flex items-center gap-1.5 border border-white/5">
+              <span className="text-xs">{c.emoji}</span>
+              <span className="text-[9px] text-[#adaaaa] font-bold">{c.label}:</span>
+              <span className="text-[10px] text-white font-bold">{c.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {/* Verdict */}
+      <div className="px-5 pb-4"><VerdictPill verdict={card.verdict || 'DYOR'} /></div>
+      {/* Actions */}
+      <ActionButtons onApe={onApe} onFade={onFade} />
+    </div>
+  );
+}
+
+/* ─── WhaleAlertCard ─── */
+
+export function WhaleAlertCard({ card, onApe, onFade }: { card: Card; onApe: () => void; onFade: () => void }) {
+  const ctx = card.institutional_context || [];
+  const entity = ctx[0] || { emoji: '🐋', label: 'Entity', value: 'Unknown' };
+
+  return (
+    <div className="w-full max-w-sm mx-auto rounded-lg overflow-hidden select-none kinetic-glow border border-[#bf81ff]/30 bg-[#131313]">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-[#ff7166]/10 border-b border-[#ff7166]/20">
+        <div className="flex items-center gap-1.5 px-2.5 py-1 bg-gradient-to-r from-[#bf81ff] to-[#ff7166] rounded-sm">
+          <span className="text-[10px] font-black text-white tracking-widest">🐋 WHALE ALERT</span>
+        </div>
+        <div className="w-2 h-2 rounded-full bg-[#ff7166] ape-pulse" />
+      </div>
+      {/* Hero */}
+      <div className="py-6 flex flex-col items-center text-center bg-[#1a1919]">
+        <span className="text-4xl mb-2">🐋</span>
+        <div className="font-black text-3xl text-white">{entity.value}</div>
+        <div className="text-[10px] font-bold text-[#adaaaa] uppercase tracking-widest mt-1">{entity.label}</div>
+      </div>
+      {/* Hook */}
+      <div className="px-5 py-3 text-center">
+        <p className="font-medium text-base text-white leading-tight">{card.hook?.replace('🐋 ', '')}</p>
+      </div>
+      {/* Why Now */}
+      {card.why_now && <div className="px-5 pb-3"><WhyNowBox text={card.why_now} /></div>}
+      {/* Context chips */}
+      <div className="px-5 pb-3 flex gap-2 flex-wrap">
+        {ctx.map((c: any, i: number) => (
+          <div key={i} className="bg-[#262626] px-3 py-1.5 rounded-lg flex items-center gap-1.5 border border-white/5">
+            <span className="text-xs">{c.emoji}</span>
+            <span className="text-[9px] text-[#adaaaa] font-bold">{c.label}:</span>
+            <span className="text-[10px] text-white font-bold">{c.value}</span>
+          </div>
+        ))}
+      </div>
+      {/* Verdict */}
+      <div className="px-5 pb-4"><VerdictPill verdict={card.verdict || 'DYOR'} /></div>
+      {/* Actions */}
+      <ActionButtons onApe={onApe} onFade={onFade} />
+    </div>
+  );
+}

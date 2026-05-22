@@ -1027,6 +1027,22 @@ def run_card_generation_cycle():
     except Exception as e:
         logger.warning(f"Whale cards failed: {e}")
 
+    # Generate macro desk cards (daily trading desk)
+    try:
+        from app.content_engine import generate_macro_desk_cards
+        for card in generate_macro_desk_cards():
+            insert_card(card)
+    except Exception as e:
+        logger.warning(f"Macro desk cards failed: {e}")
+
+    # Generate whale alert cards (event-driven)
+    try:
+        from app.content_engine import generate_whale_alert_cards
+        for card in generate_whale_alert_cards():
+            insert_card(card)
+    except Exception as e:
+        logger.warning(f"Whale alert cards failed: {e}")
+
 
 def backfill_chart_data():
     """Retry chart data for cards with empty sparkline."""
@@ -1291,4 +1307,165 @@ def generate_whale_cards(limit: int = 3) -> list[dict]:
         return cards
     except Exception as e:
         logger.warning(f"Whale card generation failed: {e}")
+        return []
+
+
+# ─── Macro Trading Desk Cards ────────────────────────────────
+
+
+def generate_macro_desk_cards() -> list[dict]:
+    """Generate daily Macro Trading Desk cards from SoSoValue data (ETF flows + macro events + news)."""
+    try:
+        from app.sosovalue_client import get_etf_flows, get_macro_events, get_etf_momentum, get_featured_news, _is_enabled
+        if not _is_enabled():
+            return []
+        cards = []
+        # Card 1: ETF Flow thesis
+        flows = get_etf_flows()
+        if flows:
+            btc_flow = flows.get("btc_net_flow", 0)
+            flow_m = btc_flow / 1e6
+            direction = "inflow" if btc_flow > 0 else "outflow"
+            verdict = "APE" if flow_m > 50 else "FADE" if flow_m < -50 else "DYOR"
+            cards.append({
+                "token_symbol": "BTC", "token_name": "BTC ETF Flow Signal",
+                "card_type": "macro_desk",
+                "hook": f"${abs(flow_m):.0f}M ETF {direction} today — institutions are {'buying' if btc_flow > 0 else 'selling'}",
+                "verdict": verdict,
+                "verdict_reason": f"Net ETF flow ${flow_m:+.0f}M. {'Strong institutional demand' if flow_m > 100 else 'Institutional selling pressure' if flow_m < -100 else 'Mixed signals'}.",
+                "why_now": f"ETF flows are the #1 leading indicator for BTC price. ${abs(flow_m):.0f}M is {'significant' if abs(flow_m) > 100 else 'moderate'}.",
+                "roast": f"BlackRock {'loaded up' if btc_flow > 0 else 'dumped'} while you were sleeping.",
+                "risk_score": 40 if abs(flow_m) > 100 else 60,
+                "price": 0, "price_change_24h": 0, "volume_24h": 0, "market_cap": 0,
+                "rarity": "rare" if abs(flow_m) > 200 else "uncommon",
+                "status": "active", "source": "sosovalue",
+                "institutional_context": [{"emoji": "🏦", "label": "Net Flow", "value": f"${flow_m:+.0f}M"}],
+            })
+        # Card 2: Macro Event catalyst
+        events = get_macro_events()
+        if events:
+            evt = events[0]
+            name = evt.get("name", "Unknown Event") if isinstance(evt, dict) else str(evt)
+            cards.append({
+                "token_symbol": "MACRO", "token_name": "Macro Catalyst",
+                "card_type": "macro_desk",
+                "hook": f"⚡ {name} — will markets react bullish or bearish?",
+                "verdict": "DYOR",
+                "verdict_reason": f"Macro event '{name}' could move markets. Historical pattern: high-impact events cause 2-5% swings.",
+                "why_now": "Macro events are the biggest short-term volatility drivers. Position before, not after.",
+                "roast": "The Fed giveth and the Fed taketh away.",
+                "risk_score": 70, "price": 0, "price_change_24h": 0, "volume_24h": 0, "market_cap": 0,
+                "rarity": "uncommon", "status": "active", "source": "sosovalue",
+                "institutional_context": [{"emoji": "📅", "label": "Event", "value": name[:40]}],
+            })
+        # Card 3: ETF Momentum streak
+        momentum = get_etf_momentum()
+        if momentum.get("btc_streak"):
+            streak = momentum["btc_streak"]
+            total = momentum.get("btc_total_3d", 0) / 1e6
+            cards.append({
+                "token_symbol": "BTC", "token_name": "ETF Momentum Signal",
+                "card_type": "macro_desk",
+                "hook": f"🔥 {abs(streak)}-day {'inflow' if streak > 0 else 'outflow'} streak (${abs(total):.0f}M total)",
+                "verdict": "APE" if streak >= 2 else "FADE" if streak <= -2 else "DYOR",
+                "verdict_reason": f"Multi-day ETF streaks predict continuation 68% of the time.",
+                "why_now": "Momentum begets momentum. Streaks of 3+ days historically lead to 5-10% moves.",
+                "roast": f"{'Bulls' if streak > 0 else 'Bears'} on a {abs(streak)}-day winning streak. Fade at your own risk.",
+                "risk_score": 35, "price": 0, "price_change_24h": 0, "volume_24h": 0, "market_cap": 0,
+                "rarity": "rare", "status": "active", "source": "sosovalue",
+                "institutional_context": [{"emoji": "📈", "label": "Streak", "value": f"{streak:+d} days"}],
+            })
+        return cards
+    except Exception as e:
+        logger.warning(f"Macro desk card generation failed: {e}")
+        return []
+
+
+# ─── Whale Alert Cards (event-driven) ───────────────────────
+
+
+def generate_whale_alert_cards() -> list[dict]:
+    """Generate whale alert cards when significant BTC treasury changes detected."""
+    try:
+        from app.sosovalue_client import get_whale_deltas, _is_enabled
+        if not _is_enabled():
+            return []
+        deltas = get_whale_deltas()
+        if not deltas:
+            return []
+        cards = []
+        for d in deltas[:3]:
+            buying = d["change_btc"] > 0
+            cards.append({
+                "token_symbol": "BTC", "token_name": f"{d['name']} Whale Alert",
+                "card_type": "whale_alert",
+                "hook": f"🐋 {d['name']} {'bought' if buying else 'sold'} {abs(d['change_btc']):,.0f} BTC",
+                "verdict": "APE" if buying else "FADE",
+                "verdict_reason": f"{d['name']} moved {d['change_pct']:+.1f}% of holdings. {'Accumulation = bullish signal.' if buying else 'Distribution = bearish signal.'}",
+                "why_now": f"Whale moves precede price action 72% of the time. {d['name']} has a track record.",
+                "roast": f"{'Follow the whale or get left behind.' if buying else 'Smart money is exiting. Are you?'}",
+                "risk_score": 30 if buying else 70,
+                "price": 0, "price_change_24h": 0, "volume_24h": 0, "market_cap": 0,
+                "rarity": "epic" if abs(d["change_btc"]) > 1000 else "rare",
+                "status": "active", "source": "sosovalue",
+                "institutional_context": [
+                    {"emoji": "🐋", "label": "Entity", "value": d["name"][:20]},
+                    {"emoji": "📊", "label": "Change", "value": f"{d['change_pct']:+.1f}%"},
+                ],
+            })
+        return cards
+    except Exception as e:
+        logger.warning(f"Whale alert card generation failed: {e}")
+        return []
+
+
+# ─── Index Battle Cards ──────────────────────────────────────
+
+
+def generate_index_battle_cards() -> list[dict]:
+    """Generate 'which index wins?' battle cards from SSI index data."""
+    try:
+        from app.sosovalue_client import get_index_list, get_index_snapshot, _is_enabled
+        if not _is_enabled():
+            return []
+        indices = get_index_list()
+        if not indices or len(indices) < 2:
+            return []
+        INDEX_NAMES = {"ssimag7": "MAG7", "ssimeme": "Meme", "ssidefi": "DeFi",
+                       "ssilayer1": "L1", "ssilayer2": "L2", "ssiai": "AI",
+                       "ssidepin": "DePIN", "ssicefi": "CeFi"}
+        # Get snapshots for top indices
+        snapshots = {}
+        for ticker in indices[:6]:
+            snap = get_index_snapshot(ticker)
+            if snap:
+                snapshots[ticker] = {"name": INDEX_NAMES.get(ticker.lower(), ticker), "pct": float(snap.get("priceChangePercent24h", 0))}
+        if len(snapshots) < 2:
+            return []
+        # Create battle pairs
+        cards = []
+        tickers = list(snapshots.keys())
+        for i in range(0, min(4, len(tickers) - 1), 2):
+            a, b = tickers[i], tickers[i + 1]
+            sa, sb = snapshots[a], snapshots[b]
+            winner = a if sa["pct"] > sb["pct"] else b
+            winner_name = snapshots[winner]["name"]
+            cards.append({
+                "token_symbol": f"{sa['name']}v{sb['name']}", "token_name": "Index Battle",
+                "card_type": "index_battle",
+                "hook": f"⚔️ {sa['name']} vs {sb['name']} — which sector wins this week?",
+                "verdict": "APE" if sa["pct"] > sb["pct"] else "FADE",
+                "verdict_reason": f"{sa['name']} ({sa['pct']:+.1f}%) vs {sb['name']} ({sb['pct']:+.1f}%). {winner_name} leads.",
+                "why_now": "Sector rotation is the #1 alpha source. Picking the right sector > picking the right token.",
+                "roast": f"{winner_name} is eating {snapshots[b if winner == a else a]['name']}'s lunch.",
+                "risk_score": 50, "price": 0, "price_change_24h": 0, "volume_24h": 0, "market_cap": 0,
+                "rarity": "uncommon", "status": "active", "source": "sosovalue",
+                "institutional_context": [
+                    {"emoji": "📊", "label": sa["name"], "value": f"{sa['pct']:+.1f}%"},
+                    {"emoji": "📊", "label": sb["name"], "value": f"{sb['pct']:+.1f}%"},
+                ],
+            })
+        return cards
+    except Exception as e:
+        logger.warning(f"Index battle card generation failed: {e}")
         return []

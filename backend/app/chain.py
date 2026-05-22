@@ -484,3 +484,129 @@ class ChainClient:
             return int(vs.functions.currentEpoch().call())
         except Exception:
             return 0
+
+    # ─── SessionVault (read-only) ──────────────────────
+    # Two reads only; we don't write to SessionVault from the backend.
+    #   has_active_session(user)        — gates GET /api/energy "is_premium"
+    #   verify_session_creation_tx(...) — gates POST /api/energy/refill auth
+    _VAULT_ABI = [
+        {"type": "function", "name": "getUserSessions",
+         "inputs": [{"name": "user", "type": "address"}],
+         "outputs": [{"type": "uint256[]"}], "stateMutability": "view"},
+        {"type": "function", "name": "getSession",
+         "inputs": [{"name": "sessionId", "type": "uint256"}],
+         "outputs": [{"type": "tuple", "components": [
+             {"name": "depositor", "type": "address"},
+             {"name": "depositAmount", "type": "uint256"},
+             {"name": "remainingBalance", "type": "uint256"},
+             {"name": "totalRedeemed", "type": "uint256"},
+             {"name": "voucherCount", "type": "uint256"},
+             {"name": "createdAt", "type": "uint256"},
+             {"name": "expiresAt", "type": "uint256"},
+             {"name": "active", "type": "bool"},
+         ]}], "stateMutability": "view"},
+        # SessionCreated(uint256 indexed sessionId, address indexed depositor, uint256 amount, uint256 expiresAt)
+        {"type": "event", "name": "SessionCreated", "anonymous": False, "inputs": [
+            {"indexed": True, "name": "sessionId", "type": "uint256"},
+            {"indexed": True, "name": "depositor", "type": "address"},
+            {"indexed": False, "name": "amount", "type": "uint256"},
+            {"indexed": False, "name": "expiresAt", "type": "uint256"},
+        ]},
+    ]
+
+    def _vault_contract(self):
+        addr = get_settings().session_vault_address
+        if not addr:
+            return None
+        return self.w3.eth.contract(address=Web3.to_checksum_address(addr), abi=self._VAULT_ABI)
+
+    def has_active_session(self, user: str) -> bool:
+        """True iff the user has any non-expired SessionVault session.
+
+        Cached 60s in-process (no Redis dependency). Fail-open: any RPC error
+        returns False so the GET /api/energy endpoint falls back to the
+        daily_swipes path instead of 5xx-ing.
+        """
+        if not user:
+            return False
+        return _vault_active_cache_get(user.lower(), self)
+
+    def verify_session_creation_tx(self, tx_hash: str, expected_depositor: str) -> dict:
+        """Verify an on-chain tx proves `expected_depositor` opened a SessionVault session.
+
+        Returns:
+            {ok: True,  session_id, amount, expires_at}                — verified
+            {ok: False, reason: str}                                   — verification failed
+        """
+        if not (tx_hash and expected_depositor):
+            return {"ok": False, "reason": "missing_args"}
+        vc = self._vault_contract()
+        if not vc:
+            return {"ok": False, "reason": "vault_not_configured"}
+        # Bounded retry: a freshly-broadcast tx may not have a receipt for a
+        # few seconds. 6 × 2s = 12s ceiling — long enough for Initia EVM
+        # (~3s blocks) to mine, short enough to surface real failures fast.
+        import time as _t
+        receipt = None
+        for attempt in range(6):
+            try:
+                receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+                if receipt:
+                    break
+            except Exception:
+                receipt = None
+            _t.sleep(2)
+        if not receipt or receipt.get("status") != 1:
+            return {"ok": False, "reason": "tx_not_found_or_failed"}
+        try:
+            events = vc.events.SessionCreated().process_receipt(receipt)
+        except Exception as e:
+            return {"ok": False, "reason": f"log_decode_failed: {type(e).__name__}"}
+        expected = expected_depositor.lower()
+        for ev in events:
+            args = ev["args"]
+            if args["depositor"].lower() == expected:
+                return {
+                    "ok": True,
+                    "session_id": int(args["sessionId"]),
+                    "amount": str(args["amount"]),
+                    "expires_at": int(args["expiresAt"]),
+                }
+        return {"ok": False, "reason": "depositor_mismatch"}
+
+
+# ─── Module-level 60s LRU for has_active_session (mirrors _SANCTIONS_CACHE) ──
+_VAULT_ACTIVE_CACHE: dict[str, tuple[bool, float]] = {}
+_VAULT_ACTIVE_TTL = 60.0
+
+
+def _vault_active_cache_get(user_lower: str, client: "ChainClient") -> bool:
+    import time as _t
+    now = _t.time()
+    cached = _VAULT_ACTIVE_CACHE.get(user_lower)
+    if cached and cached[1] > now:
+        return cached[0]
+    active = _vault_active_uncached(user_lower, client)
+    _VAULT_ACTIVE_CACHE[user_lower] = (active, now + _VAULT_ACTIVE_TTL)
+    return active
+
+
+def _vault_active_uncached(user_lower: str, client: "ChainClient") -> bool:
+    vc = client._vault_contract()
+    if not vc:
+        return False
+    try:
+        ids = vc.functions.getUserSessions(Web3.to_checksum_address(user_lower)).call()
+        if not ids:
+            return False
+        now_ts = client.w3.eth.get_block("latest")["timestamp"]
+        # Walk newest-first; bail on first active+unexpired session.
+        for sid in reversed(ids[-5:]):
+            s = vc.functions.getSession(int(sid)).call()
+            # tuple order: depositor, depositAmount, remainingBalance, totalRedeemed,
+            #              voucherCount, createdAt, expiresAt, active
+            if s[7] and int(s[6]) > now_ts:
+                return True
+        return False
+    except Exception:
+        return False  # fail-open: caller falls back to daily_swipes path

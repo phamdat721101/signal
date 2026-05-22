@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 // import { usePrivy } from '@privy-io/react-auth';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createPublicClient, http } from 'viem';
 import { useCards } from '../hooks/useCards';
 import { config, shareToX, normalizeAddress } from '../config';
 import TokenCard from '../components/TokenCard';
+import { MacroDeskCard, WhaleAlertCard } from '../components/TokenCard';
 import { InsightCard } from '../components/InsightCard';
 import Onboarding from '../components/Onboarding';
 import Paywall from '../components/Paywall';
@@ -217,6 +218,27 @@ export default function Feed() {
 
   const evmAddress = normalizeAddress(initiaAddress);
 
+  const { data: energyData } = useQuery({
+    queryKey: ['energy', evmAddress || 'anon'],
+    queryFn: () => evmAddress
+      ? fetch(`${config.backendUrl}/api/energy/${evmAddress}`).then(r => r.json())
+      : Promise.resolve({ energy: 5, max: 5, is_premium: false }),
+    staleTime: 30_000,
+  });
+  const energy = energyData?.energy ?? 5;
+  const maxEnergy = energyData?.max ?? 5;
+  const isPremium = !!energyData?.is_premium;
+
+  const queryClient = useQueryClient();
+  const [localEnergy, setLocalEnergy] = useState<number>(() => {
+    const stored = localStorage.getItem('kinetic_energy');
+    const storedDate = localStorage.getItem('kinetic_energy_date');
+    const today = new Date().toISOString().slice(0, 10);
+    if (storedDate !== today) { localStorage.setItem('kinetic_energy_date', today); localStorage.setItem('kinetic_energy', '5'); return 5; }
+    return stored ? parseInt(stored) : 5;
+  });
+  const displayEnergy = isPremium ? 999 : (evmAddress ? energy : localEnergy);
+
   const { data: balance } = useQuery({
     queryKey: ['balance', evmAddress],
     queryFn: () => publicClient.getBalance({ address: evmAddress as `0x${string}` }),
@@ -266,6 +288,13 @@ export default function Feed() {
     setShowConviction(false);
     setPendingCard(null);
     setSwipeFeedback('ape');
+    // Consume energy
+    if (!evmAddress) {
+      const newE = Math.max(0, localEnergy - 1);
+      setLocalEnergy(newE);
+      localStorage.setItem('kinetic_energy', String(newE));
+      if (newE <= 0) { setShowPaywall(true); return; }
+    }
     // Advance immediately for snappy UX
     setTimeout(() => { setSwipeFeedback(null); setIndex(i => i + 1); }, 400);
     // Network in background
@@ -279,6 +308,7 @@ export default function Feed() {
       body: JSON.stringify({ address, tx_hash: txHash }),
     });
     if (resp.status === 402) { setShowPaywall(true); return; }
+    queryClient.invalidateQueries({ queryKey: ['energy'] });
     const data = await resp.json();
     if (data.trade) navigate(`/trade-success/${card.id}`, { state: { trade: data.trade, conviction: data.conviction } });
   };
@@ -286,6 +316,13 @@ export default function Feed() {
   const handleFade = async () => {
     if (!current) return;
     setSwipeFeedback('fade');
+    // Consume energy
+    if (!evmAddress) {
+      const newE = Math.max(0, localEnergy - 1);
+      setLocalEnergy(newE);
+      localStorage.setItem('kinetic_energy', String(newE));
+      if (newE <= 0) { setShowPaywall(true); return; }
+    }
     // Advance immediately
     setTimeout(() => { setSwipeFeedback(null); setIndex(i => i + 1); }, 300);
     // Backend in background
@@ -294,6 +331,7 @@ export default function Feed() {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Wallet-Address': address },
       body: JSON.stringify({ address }),
     }).then(r => { if (r.status === 402) setShowPaywall(true); });
+    queryClient.invalidateQueries({ queryKey: ['energy'] });
   };
 
   const onDragStart = (clientX: number) => { startX.current = clientX; setDragging(true); };
@@ -339,7 +377,6 @@ export default function Feed() {
   }
 
   // ─── Unified single-root layout (eliminates CLS across card types) ───
-  const isTrading = current.card_type !== 'pool' && current.card_type !== 'insight';
 
   return (
     <div className="flex flex-col h-full p-4 max-w-md mx-auto">
@@ -358,7 +395,7 @@ export default function Feed() {
       {showConviction && pendingCard && (
         <ConvictionOverlay card={pendingCard} onConfirm={confirmConviction} onCancel={() => { setShowConviction(false); setPendingCard(null); }} />
       )}
-      {showPaywall && <Paywall onDismiss={() => setShowPaywall(false)} />}
+      {showPaywall && <Paywall onDismiss={() => setShowPaywall(false)} isConnected={!!evmAddress} onConnect={login} />}
       {resolvedTrade && <ResolutionModal trade={resolvedTrade} onDismiss={() => setResolvedTrade(null)} />}
       {evmAddress && isCorrectChain && balance != null && balance < 10000000000000000n && (
         <div className="fixed top-16 left-4 right-4 z-40 bg-[#131313] border border-[#bf81ff]/30 p-3 rounded-xl flex items-center justify-between">
@@ -372,23 +409,27 @@ export default function Feed() {
       )}
 
       {/* Reserved header slot — fixed height prevents CLS */}
-      <div className="h-5 mb-1 text-[10px] text-[#494847] text-center">
-        {isTrading && (
-          <>
-            {index + 1} / {cards.length}
-            {(cardFilter === 'sector' || cardFilter === 'insight') && (
-              <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#6366f1]/10">
-                <span className="text-[8px] text-[#a5b4fc]">via SoSoValue</span>
-              </span>
-            )}
-          </>
+      {/* Energy bar */}
+      <div className="h-5 mb-1 flex items-center justify-center gap-2 text-[10px]">
+        <span className="text-[#8eff71]">⚡</span>
+        <span className="text-white font-bold">{displayEnergy >= 999 ? '∞' : `${displayEnergy}/${maxEnergy}`}</span>
+        {displayEnergy < 999 && (
+          <div className="w-16 h-1.5 bg-[#262626] rounded-full overflow-hidden">
+            <div className="h-full bg-[#8eff71] rounded-full transition-all" style={{ width: `${(displayEnergy / maxEnergy) * 100}%` }} />
+          </div>
         )}
+        {current.card_type === 'macro_desk' && <span className="px-1.5 py-0.5 rounded bg-[#f59e0b]/10 text-[#f59e0b] font-bold">⚡2</span>}
+        {current.card_type === 'whale_alert' && <span className="px-1.5 py-0.5 rounded bg-[#bf81ff]/10 text-[#bf81ff] font-bold">⚡2</span>}
       </div>
 
       {/* Card surface — fixed height container */}
       <div className="relative w-full max-w-md mx-auto h-[520px]">
         {current.card_type === 'insight' ? (
           <InsightCard card={current as any} onDismiss={() => setIndex(i => i + 1)} />
+        ) : current.card_type === 'macro_desk' ? (
+          <MacroDeskCard card={current} onApe={handleApe} onFade={handleFade} />
+        ) : current.card_type === 'whale_alert' ? (
+          <WhaleAlertCard card={current} onApe={handleApe} onFade={handleFade} />
         ) : current.card_type === 'pool' ? (
           <TokenCard card={current} onApe={() => setIndex(i => i + 1)} onFade={() => setIndex(i => i + 1)} />
         ) : (
