@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createPublicClient, http } from 'viem';
 import { useCards } from '../hooks/useCards';
-import { config, shareToX, normalizeAddress } from '../config';
+import { config, shareToX, normalizeAddress, isXLayer, isCardTradeable } from '../config';
 import TokenCard from '../components/TokenCard';
 import { MacroDeskCard, WhaleAlertCard } from '../components/TokenCard';
 import { InsightCard } from '../components/InsightCard';
@@ -12,6 +12,7 @@ import Onboarding from '../components/Onboarding';
 import Paywall from '../components/Paywall';
 import { useApeTransaction } from '../hooks/useApeTransaction';
 import { useWallet } from '../hooks/useWallet';
+import SummonRitual from '../components/SummonRitual';
 
 const publicClient = createPublicClient({ chain: config.chain, transport: http() });
 
@@ -135,7 +136,7 @@ function ConvictionOverlay({ card, onConfirm, onCancel }: { card: any; onConfirm
           </div>
           <button onClick={onConfirm}
             className="w-full ape-gradient text-[#0b5800] font-headline font-bold py-3 rounded-lg active:scale-95 transition-transform text-lg">
-            🔥 COMMIT ON-CHAIN
+            {typeof window !== 'undefined' && (window as any).__xlayer ? '🔮 SUMMON LP' : '🔥 COMMIT ON-CHAIN'}
           </button>
           <button onClick={onCancel}
             className="w-full bg-[#262626] text-[#adaaaa] font-headline font-bold py-2 rounded-lg text-sm">
@@ -207,12 +208,13 @@ export default function Feed() {
   const [resolvedTrade, setResolvedTrade] = useState<any>(null);
   const [generating, setGenerating] = useState(false);
   const [showConviction, setShowConviction] = useState(false);
+  const [summonCard, setSummonCard] = useState<any>(null);
   const [pendingCard, setPendingCard] = useState<any>(null);
   const [cardFilter] = useState<string>('all');
   const [showRareReveal, setShowRareReveal] = useState<string | null>(null);
 
   const { data, isLoading } = useCards(0, 50, cardFilter === 'all' ? undefined : cardFilter);
-  const { address: initiaAddress, login, isCorrectChain } = useWallet();
+  const { address: initiaAddress, login, isCorrectChain, chainId: walletChainId } = useWallet();
   const navigate = useNavigate();
   const { apeOnChain } = useApeTransaction();
 
@@ -278,6 +280,21 @@ export default function Feed() {
 
   const handleApe = async () => {
     if (!current) return;
+    // Route by the user's currently-selected wallet chain.
+    //  — X Layer (1952 / 196): SummonRitual → v4-hook LP open via SignalCardRouter.
+    //    Requires a tradeable price; non-price cards (macro_desk, whale_alert,
+    //    zero-price tokens) just advance — they are not LP recipes.
+    //  — Anywhere else (Initia default): existing ConvictionOverlay → createSignal.
+    // User opts into X Layer by switching networks via the header WalletPill.
+    if (isXLayer(walletChainId)) {
+      if (!isCardTradeable(current)) {
+        setSwipeFeedback('ape');
+        setTimeout(() => { setSwipeFeedback(null); setIndex(i => i + 1); }, 400);
+        return;
+      }
+      setSummonCard(current);
+      return;
+    }
     setPendingCard(current);
     setShowConviction(true);
   };
@@ -288,12 +305,13 @@ export default function Feed() {
     setShowConviction(false);
     setPendingCard(null);
     setSwipeFeedback('ape');
-    // Consume energy
+    // Energy gating disabled — see backend Settings.energy_gating_enabled.
+    // Local-state decrement kept for visual feedback only, never blocks swipes.
     if (!evmAddress) {
       const newE = Math.max(0, localEnergy - 1);
       setLocalEnergy(newE);
       localStorage.setItem('kinetic_energy', String(newE));
-      if (newE <= 0) { setShowPaywall(true); return; }
+      // if (newE <= 0) { setShowPaywall(true); return; }  // disabled: unlimited swipes
     }
     // Advance immediately for snappy UX
     setTimeout(() => { setSwipeFeedback(null); setIndex(i => i + 1); }, 400);
@@ -307,7 +325,8 @@ export default function Feed() {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Wallet-Address': address },
       body: JSON.stringify({ address, tx_hash: txHash }),
     });
-    if (resp.status === 402) { setShowPaywall(true); return; }
+    // 402 no_energy can no longer fire (backend gate is off); kept tolerant.
+    if (resp.status === 402) { /* setShowPaywall(true); */ return; }
     queryClient.invalidateQueries({ queryKey: ['energy'] });
     const data = await resp.json();
     if (data.trade) navigate(`/trade-success/${card.id}`, { state: { trade: data.trade, conviction: data.conviction } });
@@ -316,12 +335,12 @@ export default function Feed() {
   const handleFade = async () => {
     if (!current) return;
     setSwipeFeedback('fade');
-    // Consume energy
+    // Energy gating disabled — visual decrement only.
     if (!evmAddress) {
       const newE = Math.max(0, localEnergy - 1);
       setLocalEnergy(newE);
       localStorage.setItem('kinetic_energy', String(newE));
-      if (newE <= 0) { setShowPaywall(true); return; }
+      // if (newE <= 0) { setShowPaywall(true); return; }  // disabled: unlimited swipes
     }
     // Advance immediately
     setTimeout(() => { setSwipeFeedback(null); setIndex(i => i + 1); }, 300);
@@ -330,7 +349,7 @@ export default function Feed() {
     fetch(`${config.backendUrl}/api/cards/${current.id}/fade`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Wallet-Address': address },
       body: JSON.stringify({ address }),
-    }).then(r => { if (r.status === 402) setShowPaywall(true); });
+    }).then(_r => { /* 402 cannot fire while gating disabled */ });
     queryClient.invalidateQueries({ queryKey: ['energy'] });
   };
 
@@ -395,6 +414,17 @@ export default function Feed() {
       {showConviction && pendingCard && (
         <ConvictionOverlay card={pendingCard} onConfirm={confirmConviction} onCancel={() => { setShowConviction(false); setPendingCard(null); }} />
       )}
+      <SummonRitual
+        card={summonCard}
+        open={!!summonCard}
+        onClose={() => setSummonCard(null)}
+        onSuccess={(_tx, _chainId) => {
+          setSummonCard(null);
+          setSwipeFeedback('ape');
+          setTimeout(() => { setSwipeFeedback(null); setIndex(i => i + 1); }, 400);
+          queryClient.invalidateQueries({ queryKey: ['cards'] });
+        }}
+      />
       {showPaywall && <Paywall onDismiss={() => setShowPaywall(false)} isConnected={!!evmAddress} onConnect={login} />}
       {resolvedTrade && <ResolutionModal trade={resolvedTrade} onDismiss={() => setResolvedTrade(null)} />}
       {evmAddress && isCorrectChain && balance != null && balance < 10000000000000000n && (

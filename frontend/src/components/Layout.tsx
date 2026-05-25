@@ -1,9 +1,12 @@
 import { NavLink } from 'react-router-dom';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 // import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
-import { config } from '../config';
+import { useSwitchChain } from 'wagmi';
+import { config, xlayerTestnet, xlayerMainnet } from '../config';
 import { useWallet } from '../hooks/useWallet';
+import NetworkBadge from './NetworkBadge';
 
 const navItems = [
   { to: '/', icon: 'bolt', label: 'Feed', fill: true },
@@ -13,46 +16,98 @@ const navItems = [
   { to: '/profile', icon: 'person', label: 'Profile' },
 ];
 
-/** Inline banner — visible on every page when wallet is on the wrong EVM chain. */
-function ChainSwitchBanner() {
-  const { isConnected, isCorrectChain, isSwitchingChain, switchChainError, switchToCorrect, expectedChainName } = useWallet();
-  if (!isConnected || isCorrectChain) return null;
-  return (
-    <div className="mx-4 mt-2 bg-[#131313] border border-[#ff7166]/30 rounded-xl px-3 py-2 flex items-center justify-between gap-3">
-      <span className="text-xs text-[#adaaaa] truncate">
-        ⚠️ Wrong network — switch to <span className="text-white font-bold">{expectedChainName}</span> to continue
-        {switchChainError && <span className="block text-[10px] text-[#ff7166] mt-0.5">{switchChainError.message}</span>}
-      </span>
-      <button
-        onClick={() => { void switchToCorrect(); }}
-        disabled={isSwitchingChain}
-        className="text-xs font-bold text-[#0b5800] ape-gradient px-3 py-1 rounded-lg disabled:opacity-50 shrink-0">
-        {isSwitchingChain ? 'Switching...' : 'Switch'}
-      </button>
-    </div>
-  );
-}
+/** Persistent testnet notice. Copy is chain-neutral; actions are chain-keyed. */
+const FAUCETS: Record<number, { label: string; url: string }> = {
+  1952: { label: 'Get OKB', url: 'https://www.okx.com/xlayer/faucet' },
+  2124225178762456: { label: 'Get INIT', url: 'https://app.testnet.initia.xyz/faucet' },
+};
 
-/** Persistent testnet notice with gas faucet + bridge actions. */
 function TestnetBanner() {
-  const { openBridge, isConnected } = useWallet();
+  const { openBridge, isConnected, chainId } = useWallet();
+  const faucet = chainId !== undefined ? FAUCETS[chainId] : undefined;
+  const showBridge = isConnected && chainId === 2124225178762456;
   return (
     <div className="bg-[#1a1a00] border-b border-[#ffb84d]/20 px-4 py-2 flex items-center justify-between gap-2 shrink-0">
       <span className="text-[11px] text-[#ffb84d] font-label">
-        ⚠️ The Kinetic App is currently available only on Testnet.
+        ⚠️ The Kinetic App works on testnet only.
       </span>
       <div className="flex gap-2 shrink-0">
-        <a href="https://app.testnet.initia.xyz/faucet" target="_blank" rel="noopener noreferrer"
-          className="text-[10px] font-bold text-[#0e0e0e] bg-[#ffb84d] px-2 py-0.5 rounded">
-          Get INIT
-        </a>
-        {isConnected && (
-          <button onClick={() => openBridge({ srcChainId: 'initiation-2', srcDenom: 'uinit', dstChainId: config.chainId, dstDenom: 'uinit' })}
-            className="text-[10px] font-bold text-[#ffb84d] border border-[#ffb84d]/40 px-2 py-0.5 rounded">
+        {faucet && (
+          <a
+            href={faucet.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[10px] font-bold text-[#0e0e0e] bg-[#ffb84d] px-2 py-0.5 rounded"
+          >
+            {faucet.label}
+          </a>
+        )}
+        {showBridge && (
+          <button
+            onClick={() => openBridge({ srcChainId: 'initiation-2', srcDenom: 'uinit', dstChainId: config.chainId, dstDenom: 'uinit' })}
+            className="text-[10px] font-bold text-[#ffb84d] border border-[#ffb84d]/40 px-2 py-0.5 rounded"
+          >
             Bridge to evm-1
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Header wallet pill — current chain + clickable dropdown to switch networks + disconnect.
+ *
+ * SOLID single-responsibility: owns wallet identity + network selection. The chain
+ * list is sourced from the registered wagmi chains so adding a chain is a one-line
+ * config edit, no UI changes. Disconnect is the trailing action.
+ */
+function WalletPill({ address, streak, onLogout }: {
+  address: string;
+  streak: number;
+  onLogout: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const { chainId } = useWallet();
+  const { switchChainAsync, isPending } = useSwitchChain();
+  const chains = [config.chain.id, xlayerTestnet.id, xlayerMainnet.id];
+
+  const pick = async (id: number) => {
+    try { await switchChainAsync({ chainId: id }); } catch { /* user cancelled or wallet rejected */ }
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-2 bg-[#131313] px-3 py-1.5 rounded-lg border border-[#494847]/15">
+        <NetworkBadge chainId={chainId} />
+        <span className="text-[#8eff71] font-label font-bold text-sm tracking-tight">
+          {address.slice(0, 6)}...{address.slice(-4)}
+        </span>
+        {streak > 0 && <span className="text-[#ff7166] font-headline font-bold text-sm">🔥{streak}</span>}
+      </button>
+      {open && (
+        <>
+          {/* click-outside dismiss */}
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute top-full right-0 mt-1 bg-[#131313] rounded-lg border border-[#494847]/30 min-w-[220px] z-50 shadow-xl">
+            <div className="px-3 py-2 text-[10px] font-label uppercase tracking-widest text-[#494847]">Network</div>
+            {chains.map(id => (
+              <button key={id} disabled={isPending} onClick={() => pick(id)}
+                className="w-full flex items-center justify-between px-3 py-2 hover:bg-[#262626] disabled:opacity-50">
+                <NetworkBadge chainId={id} size="md" />
+                {chainId === id && <span className="text-[#8eff71] text-xs">✓</span>}
+              </button>
+            ))}
+            <div className="border-t border-[#494847]/20 mt-1">
+              <button onClick={() => { setOpen(false); onLogout(); }}
+                className="w-full text-left px-3 py-2 text-[#ff7166] font-label text-sm hover:bg-[#262626]">
+                Disconnect
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -81,13 +136,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           <h1 className="text-2xl font-black text-[#8eff71] italic font-headline tracking-tight">KINETIC</h1>
         </div>
         {authenticated && walletAddress ? (
-          <button onClick={logout}
-            className="flex items-center bg-[#131313] px-3 py-1.5 rounded-lg border border-[#494847]/15">
-            <span className="text-[#8eff71] font-label font-bold text-sm tracking-tight">
-              {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
-            </span>
-            {streak > 0 && <span className="text-[#ff7166] font-headline font-bold text-sm ml-1">🔥{streak}</span>}
-          </button>
+          <WalletPill address={walletAddress} streak={streak} onLogout={logout} />
         ) : (
           <button onClick={login}
             className="ape-gradient px-4 py-1.5 rounded-lg text-[#0b5800] font-headline font-bold text-sm">
@@ -98,7 +147,6 @@ export default function Layout({ children }: { children: ReactNode }) {
 
       {/* Main */}
       <main className="flex-1 overflow-y-auto overflow-x-hidden">
-        <ChainSwitchBanner />
         {children}
       </main>
 

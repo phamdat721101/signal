@@ -23,11 +23,13 @@ export function useWallet() {
   const expectedChainId = config.chain.id;
   const isCorrectChain = !isConnected || currentChainId === expectedChainId;
 
-  const sendTx = async (to: string, data: string): Promise<string> => {
+  const sendTx = async (to: string, data: string, chainId?: number): Promise<string> => {
     const hash = await sendTransactionAsync({
       to: to as `0x${string}`,
       data: data as `0x${string}`,
-      chainId: expectedChainId,
+      // Caller can target any registered chain (e.g. X Layer 1952 from useSummonTransaction).
+      // Defaults to expectedChainId (Initia) for legacy callers like useSwipeSession.
+      chainId: chainId ?? expectedChainId,
     });
     return hash;
   };

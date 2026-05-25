@@ -14,19 +14,23 @@ bin/
 *.js.map
 *.d.ts.map
 tsconfig.tsbuildinfo
-
+docs/
 # Foundry
 contracts/out/
 contracts/cache/
 contracts/broadcast/
+contracts/artifacts/
+*.abi
 
 # Python
 __pycache__/
 .pytest_cache/
+*.egg-info/
 
 # Frontend
 frontend/dist/
 frontend/dist-ssr/
+frontend/node_modules/
 
 # Agent Provider (Node)
 backend/agent-provider/dist/
@@ -39,11 +43,14 @@ node_modules/
 venv/
 env/
 package-lock.json
+frontend/package-lock.json
 
 # ── Environment & Credentials ──
 .env
 .env.local
 .env.*.local
+.env.testnet
+.env.xlayer
 *.pem
 *.key
 *.p12
@@ -57,6 +64,9 @@ id_rsa
 id_ed25519
 *.gpg
 service-account*.json
+secrets/
+backend/.env
+frontend/.env
 
 # Keep examples
 !.env.example
@@ -97,9 +107,9 @@ coverage/
 /tmp/
 backend/reports/
 signal-ui/
+deploy.log
+header-ui/
+index/
 
 # ── Keep submission ──
 !.initia/
-docs/*
-deploy-vps.sh
-deploy.sh

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Card } from '../hooks/useCards';
-import { shareToX } from '../config';
+import { shareToX, config } from '../config';
+import NetworkBadge from './NetworkBadge';
 
 function fmt(n: number): string {
   if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
@@ -163,7 +164,8 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
             </div>
             {/* Level stars */}
             <div className="flex items-center gap-0.5">
-              {rarityBadge && <span className="text-sm mr-0.5">{rarityBadge}</span>}
+              <NetworkBadge chainId={(card as any).chain_id ?? config.xlayer.testnetId} />
+              {rarityBadge && <span className="text-sm mr-0.5 ml-1">{rarityBadge}</span>}
               {Array.from({ length: stars }).map((_, i) => (
                 <span key={i} className="text-[10px] text-yellow-400">★</span>
               ))}

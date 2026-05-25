@@ -5,6 +5,7 @@ import { useSession } from '../hooks/useSession';
 import { useIUSDBalance } from '../hooks/useIUSDBalance';
 import { useConviction } from '../hooks/useConviction';
 import { useWallet } from '../hooks/useWallet';
+import CardHand from '../components/CardHand';
 
 // ── Persona + mood (pure derive — single responsibility, inlined per scope) ──
 type Persona = { emoji: string; name: string; color: string; tagline: string };
@@ -43,7 +44,7 @@ function deriveMood(opts: { total: number; wins: number; curStreak: number }): s
 }
 
 export default function Profile() {
-  const { address: walletAddr, isCorrectChain, isConnected } = useWallet();
+  const { address: walletAddr, isCorrectChain, isConnected, chainId } = useWallet();
   const address = normalizeAddress(walletAddr);
   const {
     claimFaucet, approveAndDeposit, closeSession, clearSteps,
@@ -129,6 +130,10 @@ export default function Profile() {
           <div className="font-label text-[9px] text-[#adaaaa] uppercase">Best Streak</div>
         </div>
       </div>
+
+      {/* Card Hand — X Layer SignalCardNFT collection (Hook the Future). */}
+      {/* Renders nothing on Initia; CardHand handles the chain check internally. */}
+      <CardHand address={address} chainId={chainId ?? 0} />
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-2">

@@ -344,8 +344,8 @@ async def ape_card(card_id: int, request: Request):
     card = get_card_by_id(card_id)
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
-    # Energy gate
-    if address:
+    # Energy gate (no-op when disabled — see Settings.energy_gating_enabled)
+    if address and get_settings().energy_gating_enabled:
         from app.db import consume_energy
         result = consume_energy(address, card.get("card_type", "trading"))
         if not result["ok"]:
@@ -425,6 +425,128 @@ async def ape_card(card_id: int, request: Request):
     }
 
 
+@app.post("/api/cards/{card_id}/play")
+async def get_play_calldata(card_id: int, request: Request):
+    """X Layer summon bundle — approve OKB + approve USDC + playCard.
+
+    SOLID single responsibility: the backend assembles the multi-call bundle
+    so the frontend never computes ticks or selectors. The hook contract
+    enforces the recipe at beforeAddLiquidity; we just ship the calls.
+    """
+    from app.config import get_settings
+    from app.db import get_card_by_id
+    from app import xlayer
+
+    s = get_settings()
+    body = await request.json()
+    address = normalize_address(body.get("address", ""))
+    if not address:
+        raise HTTPException(status_code=400, detail="address required")
+
+    card = get_card_by_id(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    # Hook deploy must be configured before this endpoint is usable.
+    missing = [k for k, v in {
+        "router": s.signal_card_router_address,
+        "okb": s.okb_address_xlayer,
+        "usdc": s.usdc_address_xlayer,
+    }.items() if not v]
+    if missing:
+        raise HTTPException(status_code=503, detail=f"X Layer not configured: missing {missing}")
+
+    entry = float(card.get("price") or 0)
+    card_type = (card.get("card_type") or "").lower()
+    # Single eligibility gate. Mirrors frontend isCardTradeable() so the user
+    # gets a clean message even if FE gating is bypassed. Cards without a
+    # tradeable price OR with an informational-only card_type cannot be
+    # turned into LP recipes — the v4 hook would revert anyway.
+    NON_TRADEABLE = {"macro_desk", "whale_alert", "index_battle", "insight", "pool"}
+    if entry <= 0 or card_type in NON_TRADEABLE:
+        sym = card.get("token_symbol") or f"#{card_id}"
+        raise HTTPException(
+            status_code=422,
+            detail=f"Card ${sym} is not tradeable on X Layer (no LP recipe — informational card).",
+        )
+    # Synthetic ±1.5% range when target/stop missing — keeps existing trading cards usable.
+    target = float(card.get("target_price") or entry * 1.015)
+    stop = float(card.get("stop_price") or entry * 0.985)
+    is_bull = (card.get("verdict") or "APE").upper() == "APE"
+
+    # OKB price — lazy fetch via existing price_feed; default to $50 if unavailable.
+    okb_usd_price = 50.0
+    try:
+        from app.price_feed import get_price
+        p = get_price("OKB")
+        if p and p > 0:
+            okb_usd_price = p
+    except Exception:
+        pass
+
+    bundle = xlayer.build_play_bundle(
+        card_id=card_id,
+        chain_id=1952,  # X Layer Terigon testnet — testrpc.xlayer.tech actually serves chain 1952
+        entry=entry,
+        target=target,
+        stop=stop,
+        is_bull=is_bull,
+        router=s.signal_card_router_address,
+        okb=s.okb_address_xlayer,
+        usdc=s.usdc_address_xlayer,
+        okb_usd_price=okb_usd_price,
+    )
+
+    return {
+        "cardId": bundle.card_id,
+        "chainId": bundle.chain_id,
+        "tickLower": bundle.tick_lower,
+        "tickUpper": bundle.tick_upper,
+        "router": bundle.router,
+        "okb": bundle.okb,
+        "usdc": bundle.usdc,
+        "amount0Max": str(bundle.amount0_max),
+        "amount1Max": str(bundle.amount1_max),
+        "liquidity": str(bundle.liquidity),
+        "calls": bundle.calls,
+        "deadline": bundle.deadline,
+    }
+
+
+@app.post("/api/cards/{card_id}/close")
+async def get_close_calldata(card_id: int, request: Request):
+    """X Layer close bundle — remove LP for a played card."""
+    from app.config import get_settings
+    from app.db import get_card_by_id
+    from app import xlayer
+
+    s = get_settings()
+    body = await request.json()
+    address = normalize_address(body.get("address", ""))
+    if not address:
+        raise HTTPException(status_code=400, detail="address required")
+
+    card = get_card_by_id(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    if not s.signal_card_router_address:
+        raise HTTPException(status_code=503, detail="X Layer not configured")
+
+    close_bundle = xlayer.build_close_bundle(
+        card_id=card_id,
+        chain_id=1952,
+        router=s.signal_card_router_address,
+    )
+
+    return {
+        "cardId": close_bundle.card_id,
+        "chainId": close_bundle.chain_id,
+        "calls": close_bundle.calls,
+        "deadline": close_bundle.deadline,
+    }
+
+
 @app.post("/api/cards/{card_id}/fade")
 async def fade_card(card_id: int, request: Request):
     body = await request.json()
@@ -433,8 +555,8 @@ async def fade_card(card_id: int, request: Request):
     card = get_card_by_id(card_id)
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
-    # Energy gate
-    if address:
+    # Energy gate (no-op when disabled — see Settings.energy_gating_enabled)
+    if address and get_settings().energy_gating_enabled:
         from app.db import consume_energy
         result = consume_energy(address, card.get("card_type", "trading"))
         if not result["ok"]:
@@ -455,6 +577,9 @@ async def get_user_energy(address: str):
     from app.db import get_energy
     s = get_settings()
     address = normalize_address(address)
+    # Gating disabled → unlimited for everyone (anonymous + connected).
+    if not s.energy_gating_enabled:
+        return {"energy": 999, "max": 999, "is_premium": True}
     if not address:
         return {"energy": s.energy_max, "max": s.energy_max, "is_premium": False}
 
@@ -527,7 +652,87 @@ async def get_user_card_history(address: str, offset: int = 0, limit: int = Quer
 
 
 
+# ─── Hook the Future: Card-Summon LP endpoints (X Layer testnet) ────────
+@app.post("/api/cards/{card_id}/play")
+async def get_card_play_data(card_id: int, request: Request):
+    """Return pre-computed tick range + Router calldata for a card-summon LP open.
+
+    Frontend calls this, then signs the Router.playCard tx with the returned data.
+    """
+    from app.db import get_card_by_id
+    card = get_card_by_id(card_id)
+    if not card:
+        raise HTTPException(404, "Card not found")
+    from app.config import get_settings
+    s = get_settings()
+    # Pre-compute ticks from card's entry/target/stop prices
+    # For hackathon: ticks are stored directly in the card (backend mints with pre-computed ticks)
+    import math
+    entry = card.get("price", 1.0)
+    target = entry * 1.015 if card.get("verdict") == "APE" else entry * 0.985
+    stop = entry * 0.985 if card.get("verdict") == "APE" else entry * 1.015
+    tick_spacing = 60
+    def price_to_tick(p): return int(math.log(max(p, 1e-18)) / math.log(1.0001))
+    def round_tick(t, spacing, up=False):
+        if up: return ((t + spacing - 1) // spacing) * spacing
+        return (t // spacing) * spacing
+    raw_lower = price_to_tick(stop)
+    raw_upper = price_to_tick(target)
+    tick_lower = round_tick(min(raw_lower, raw_upper), tick_spacing)
+    tick_upper = round_tick(max(raw_lower, raw_upper), tick_spacing, up=True)
+    if tick_lower == tick_upper:
+        tick_upper += tick_spacing
+    return {
+        "cardId": card_id,
+        "tickLower": tick_lower,
+        "tickUpper": tick_upper,
+        "riskScore": card.get("risk_score", 50),
+        "verdict": card.get("verdict", "APE"),
+        "rarity": card.get("rarity", "common"),
+        "routerAddress": os.environ.get("SIGNAL_CARD_ROUTER_ADDRESS", ""),
+        "nftAddress": os.environ.get("SIGNAL_CARD_NFT_ADDRESS", ""),
+        "chainId": 1952,
+    }
+
+
+@app.post("/api/cards/{card_id}/buy")
+async def buy_card_agent(card_id: int, request: Request):
+    """Agent buy path — returns 402 Payment Required with x402-compatible challenge.
+
+    Agent pays MockUSDC on X Layer testnet; backend mints the card NFT to agent's address.
+    """
+    from app.db import get_card_by_id
+    card = get_card_by_id(card_id)
+    if not card:
+        raise HTTPException(404, "Card not found")
+    # Check if agent already paid (x-payment header present)
+    x_payment = request.headers.get("x-payment")
+    if not x_payment:
+        # Return 402 challenge
+        return JSONResponse(status_code=402, content={
+            "x402Version": 2,
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:1952",
+                "asset": os.environ.get("XLAYER_MOCK_USDC", ""),
+                "amount": "1000000",  # 1 USDC (6 decimals)
+                "payTo": os.environ.get("X402_RECEIVER_ADDRESS", ""),
+            }],
+            "resource": {"url": f"/api/cards/{card_id}/buy", "type": "http"},
+        })
+    # If x-payment present, treat as paid (hackathon simplification — no real verification on testnet)
+    body = await request.json()
+    agent_address = body.get("address", "")
+    return {
+        "status": "paid",
+        "cardId": card_id,
+        "mintTo": agent_address,
+        "message": "Card NFT will be minted to your address. Call Router.playCard to open LP.",
+    }
+
+
 @app.get("/api/trades/{address}")
+
 async def get_user_trades_endpoint(address: str, offset: int = 0, limit: int = Query(default=50, le=100)):
     address = normalize_address(address)
     from app.db import get_user_trades

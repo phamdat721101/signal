@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     tucana_router_address: str = ""
     enable_payment_gating: bool = True
     free_signals_per_day: int = 3
+    # Energy gating — when False, /ape and /fade skip consume_energy and
+    # /api/energy returns is_premium=true unconditionally. Default False so
+    # demos and judge runs aren't blocked by daily-swipe caps.
+    energy_gating_enabled: bool = False
     # ── Initia-Native helpers (this PRD; populated post-deploy) ──
     oracle_adapter_address: str = ""
     cosmos_utils_view_address: str = ""
@@ -31,6 +35,15 @@ class Settings(BaseSettings):
     ibc_settlement_hook_address: str = ""
     vip_score_adapter_address: str = ""
     connect_oracle_address: str = ""        # ConnectOracle precompile/contract on the chain
+    # ── X Layer (Hook the Future) — chain 1952 testnet, 196 mainnet ──
+    xlayer_testnet_json_rpc_url: str = "https://testrpc.xlayer.tech"
+    xlayer_mainnet_json_rpc_url: str = "https://rpc.xlayer.tech"
+    signal_card_nft_address: str = ""
+    signal_card_hook_address: str = ""
+    signal_card_router_address: str = ""
+    okb_address_xlayer: str = ""
+    usdc_address_xlayer: str = ""
+    xlayer_pool_manager_address: str = ""
     # x402 Agent Payment (Base/USDC)
     x402_receiver_address: str = ""
     x402_facilitator_url: str = "https://api.cdp.coinbase.com/platform/v2/x402"

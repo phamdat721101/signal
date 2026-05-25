@@ -500,6 +500,81 @@ https://scan.testnet.initia.xyz/initia-signal-1/evm-contracts/0xc178dcA82a0E1EBa
 
 ---
 
+## Hook the Future — Uniswap v4 Card-Summon Hook on X Layer
+
+> **Hackathon:** [Hook the Future](https://web3.okx.com/xlayer/build-x-hackathon/hook) (X Layer × Uniswap × Flap)
+> **Track:** Application Hook (AI + DeFi)
+> **Chain:** X Layer testnet (chain 1952)
+
+### One-line summary
+
+AI-curated trading cards become Uniswap v4 LP recipes — humans summon by swiping, agents buy via x402 — same pool, same hook, two callers.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    H[Human swipe APE] --> R[SignalCardRouter]
+    A[Agent x402 buy] --> R
+    R --> PM[PositionManager]
+    PM --> Hook[SignalCardHook<br/>beforeAddLiquidity: recipe enforcement<br/>beforeSwap: dynamic fee from risk_score]
+    Hook --> NFT[SignalCardNFT<br/>card recipe + played state]
+    PM --> Pool[MockOKB/MockUSDC pool<br/>fee=DYNAMIC · tickSpacing=60]
+```
+
+### Contracts (X Layer testnet)
+
+| Contract | Address | Verified |
+|---|---|---|
+| PoolManager | `TBD after deploy` | ✓ |
+| PositionManager | `TBD after deploy` | ✓ |
+| MockOKB | `TBD after deploy` | ✓ |
+| MockUSDC | `TBD after deploy` | ✓ |
+| SignalCardNFT | `TBD after deploy` | ✓ |
+| SignalCardHook | `TBD after deploy` | ✓ |
+| SignalCardRouter | `TBD after deploy` | ✓ |
+
+### Reproduce (one command)
+
+```bash
+cd contracts
+forge script script/01_DeployAll.s.sol --rpc-url xlayer_testnet --broadcast
+```
+
+### How it works
+
+1. **Backend generates AI-curated cards** from 5,816 on-chain resolved predictions (60.8% accuracy).
+2. **Each card is an ERC-721** with pre-computed v4 ticks (entry/target/stop → tickLower/tickUpper).
+3. **Human path:** user swipes APE on `/feed` → wallet signs `Router.playCard(cardId)` → hook validates recipe → LP opens.
+4. **Agent path:** agent calls `POST /api/cards/{id}/buy` → gets 402 → pays via x402 → receives card NFT → calls `Router.playCard` → same hook fires.
+5. **Dynamic fee:** `beforeSwap` returns fee = (30 + card.riskScore) bps. Higher-risk cards charge higher fees.
+
+### Partner tooling used
+
+- [Uniswap-AI](https://github.com/Uniswap/uniswap-ai) — `uniswap-v4-hooks` plugin for hook development, `pay-with-any-token` for agent payment flow
+- [X Layer](https://web3.okx.com/xlayer) — low-cost testnet deployment, OKB gas, OKLink explorer
+- [Flap](https://flap.sh) — v4 Hook ecosystem co-builder
+
+### Key innovation
+
+- **New asset type:** AI signal cards as LP recipes (not just dynamic fees or limit orders)
+- **New trading mechanism:** card-burn → LP open (you can't open this LP without a card)
+- **New use-case angle:** agentic-economy payment (x402) + retail-trading-card UX share the same Uniswap hook
+- **Bootstrapped v4 on X Layer testnet from zero** — PoolManager + PositionManager + pool + hook
+
+### Demo video
+
+[Link TBD — 1:30 showing both human and agent paths]
+
+### Social
+
+- X account: [TBD]
+- Tags: @XLayerOfficial @Uniswap @flapdotsh
+- Hashtags: #HookTheFuture #XLayer #UniswapV4
+
+---
+
 ## License
 
 MIT
+

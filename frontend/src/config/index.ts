@@ -2,7 +2,7 @@ import { defineChain } from 'viem';
 
 const network = import.meta.env.VITE_NETWORK || 'local';
 
-const localChain = defineChain({
+export const localChain = defineChain({
   id: 4354150043272442,
   name: 'Minitia Local',
   nativeCurrency: { name: 'INIT', symbol: 'INIT', decimals: 18 },
@@ -11,7 +11,7 @@ const localChain = defineChain({
   },
 });
 
-const testnetChain = defineChain({
+export const testnetChain = defineChain({
   id: 2124225178762456, // 0x78bf8b733fcd8
   name: 'Initia evm-1 Testnet',
   nativeCurrency: { name: 'Initia', symbol: 'INIT', decimals: 18 },
@@ -26,6 +26,34 @@ const testnetChain = defineChain({
   testnet: true,
 });
 
+// ── X Layer (Hook the Future hackathon target) ──────────────────────────
+// Chain ids: testrpc.xlayer.tech serves the "Terigon" testnet at chain 1952
+// (NOT the chainlist.org/195 docs — that's a different RPC). Mainnet is 196.
+export const xlayerTestnet = defineChain({
+  id: 1952,
+  name: 'X Layer Testnet',
+  nativeCurrency: { name: 'OKB', symbol: 'OKB', decimals: 18 },
+  rpcUrls: {
+    default: { http: [import.meta.env.VITE_XLAYER_TESTNET_RPC_URL || 'https://testrpc.xlayer.tech'] },
+  },
+  blockExplorers: {
+    default: { name: 'OKLink', url: 'https://www.oklink.com/xlayer-test' },
+  },
+  testnet: true,
+});
+
+export const xlayerMainnet = defineChain({
+  id: 196,
+  name: 'X Layer',
+  nativeCurrency: { name: 'OKB', symbol: 'OKB', decimals: 18 },
+  rpcUrls: {
+    default: { http: [import.meta.env.VITE_XLAYER_MAINNET_RPC_URL || 'https://rpc.xlayer.tech'] },
+  },
+  blockExplorers: {
+    default: { name: 'OKLink', url: 'https://www.oklink.com/xlayer' },
+  },
+});
+
 export const config = {
   network,
   chain: network === 'testnet' ? testnetChain : localChain,
@@ -37,7 +65,36 @@ export const config = {
   sessionVaultAddress: import.meta.env.VITE_SESSION_VAULT_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
   paymentGatewayAddress: import.meta.env.VITE_PAYMENT_GATEWAY_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
   paymentEnabled: import.meta.env.VITE_PAYMENT_ENABLED === 'true',
+
+  // X Layer Hook the Future contracts (filled in post forge deploy)
+  xlayer: {
+    testnetId: 1952,
+    mainnetId: 196,
+    cardNftAddress: import.meta.env.VITE_XLAYER_CARD_NFT_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+    hookAddress: import.meta.env.VITE_XLAYER_HOOK_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+    routerAddress: import.meta.env.VITE_XLAYER_ROUTER_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+    okbAddress: import.meta.env.VITE_XLAYER_OKB_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+    usdcAddress: import.meta.env.VITE_XLAYER_USDC_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+    faucetUrl: 'https://www.okx.com/xlayer/faucet',
+  },
 };
+
+/** True when chainId matches X Layer testnet (1952) or mainnet (196). */
+export function isXLayer(chainId: number | undefined): boolean {
+  return chainId === 1952 || chainId === 196;
+}
+
+/** Card types that don't carry an LP recipe — informational only, not Summon-able. */
+const NON_TRADEABLE_CARD_TYPES = new Set([
+  'macro_desk', 'whale_alert', 'index_battle', 'insight', 'pool',
+]);
+
+/** Single source of truth for card eligibility on the X Layer Summon path. */
+export function isCardTradeable(card: { price?: number; card_type?: string } | null | undefined): boolean {
+  if (!card) return false;
+  if (NON_TRADEABLE_CARD_TYPES.has(card.card_type || '')) return false;
+  return typeof card.price === 'number' && card.price > 0;
+}
 
 // InterwovenKit custom chain definition
 const nativeDenom = import.meta.env.VITE_NATIVE_DENOM || 'umin';
@@ -97,7 +154,6 @@ export const ASSETS: Record<string, { symbol: string; name: string; icon: string
 export function getAssetInfo(address: string) {
   const known = ASSETS[address.toLowerCase()];
   if (known) return known;
-  // Try to extract symbol from address pattern (custom assets use hash-based addresses)
   return { symbol: '???', name: 'Custom', icon: '•' };
 }
 
@@ -145,7 +201,9 @@ export function normalizeAddress(addr: string): string {
 const SCAN_BASE = `https://scan.testnet.initia.xyz/${import.meta.env.VITE_CHAIN_ID || 'initia-signal-1'}`;
 const INDEXER_BASE = import.meta.env.VITE_INDEXER_URL || 'http://localhost:8080';
 
-export function explorerTxUrl(txHash: string): string {
+export function explorerTxUrl(txHash: string, chainId?: number): string {
+  if (chainId === 1952) return `https://www.oklink.com/xlayer-test/tx/${txHash}`;
+  if (chainId === 196) return `https://www.oklink.com/xlayer/tx/${txHash}`;
   const hash = txHash.replace(/^0x/i, '').toUpperCase();
   return `${SCAN_BASE}/txs/0x${hash}`;
 }
