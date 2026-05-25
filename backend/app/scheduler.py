@@ -315,6 +315,11 @@ def start_scheduler():
                       next_run_time=t + timedelta(seconds=360))
     _start_ibc_listener_thread()
 
+    # ── Gem Scanner ──
+    scheduler.add_job(_gem_scan_job, "interval", minutes=30,
+                      id="gem_scan", max_instances=1,
+                      next_run_time=t + timedelta(seconds=160))
+
     scheduler.start()
     logger.info("Scheduler started — all jobs delayed for graceful startup")
 
@@ -360,6 +365,40 @@ def _with_advisory_lock(job_id: str, fn):
                 cur.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
     finally:
         conn.close()
+
+
+def _gem_scan_job():
+    """Generate gem cards from scanner."""
+    import asyncio
+    from app.gem_scanner import scan_for_gems
+    from app.db import insert_card
+
+    async def _run():
+        gems = await scan_for_gems(limit=5)
+        for gem in gems:
+            insert_card({
+                "token_symbol": gem.symbol,
+                "token_name": gem.name,
+                "chain": gem.chain,
+                "price": gem.price,
+                "price_change_24h": gem.price_change_24h,
+                "volume_24h": gem.volume_24h,
+                "market_cap": gem.market_cap,
+                "card_type": "gem",
+                "verdict": "APE",
+                "risk_score": gem.risk,
+                "rarity": "legendary" if gem.gem_score > 85 else "epic" if gem.gem_score > 70 else "rare",
+                "hook": f"💎 Gem Score {gem.gem_score}/100",
+                "roast": " | ".join(gem.signals),
+                "metrics": [{"emoji": s.split(" ")[0], "label": s.split(" ", 1)[1] if " " in s else s, "value": "", "sentiment": "bullish"} for s in gem.signals],
+                "status": "active",
+            })
+        logger.info(f"Gem scan: {len(gems)} gems generated")
+
+    try:
+        asyncio.run(_run())
+    except Exception as e:
+        logger.error(f"Gem scan failed: {e}")
 
 
 def _chain_ops_reconcile_job():
