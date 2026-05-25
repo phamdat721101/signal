@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useSwitchChain } from 'wagmi';
-import { config, isXLayer } from '../config';
+import { config } from '../config';
 import { useWallet } from './useWallet';
 
 /**
