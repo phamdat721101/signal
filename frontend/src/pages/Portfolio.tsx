@@ -249,6 +249,48 @@ export default function Portfolio() {
           </div>
         )}
       </div>
+
+      {/* LP Transactions (X Layer Summon/Close) */}
+      <LpHistory address={address} />
+    </div>
+  );
+}
+
+function LpHistory({ address }: { address: string }) {
+  const { data } = useQuery({
+    queryKey: ['lp-history', address],
+    queryFn: async () => {
+      const resp = await fetch(`${config.backendUrl}/api/lp/history/${address}`);
+      if (!resp.ok) return { transactions: [] };
+      return resp.json() as Promise<{ transactions: Array<{ id: number; tx_hash: string; action: string; chain_id: number; token_symbol: string; created_at: string }> }>;
+    },
+    enabled: !!address,
+    staleTime: 30_000,
+  });
+  const txs = data?.transactions ?? [];
+  if (txs.length === 0) return null;
+
+  const explorerUrl = (hash: string, chainId: number) =>
+    chainId === 1952 ? `https://www.oklink.com/xlayer-test/tx/${hash}` : `https://www.oklink.com/xlayer/tx/${hash}`;
+
+  return (
+    <div>
+      <h3 className="font-headline font-bold text-sm text-white mb-2">🔮 LP Transactions</h3>
+      <div className="space-y-2">
+        {txs.map(tx => (
+          <a key={tx.id} href={explorerUrl(tx.tx_hash, tx.chain_id)} target="_blank" rel="noopener noreferrer"
+            className="flex items-center justify-between bg-[#262626] p-3 rounded-xl hover:bg-[#333]">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">{tx.action === 'summon' ? '🔮' : '🔥'}</span>
+              <div>
+                <div className="text-xs text-white font-bold">{tx.action === 'summon' ? 'Summon' : 'Banish'} ${tx.token_symbol || '?'}</div>
+                <div className="text-[10px] text-[#494847]">{new Date(tx.created_at).toLocaleDateString()}</div>
+              </div>
+            </div>
+            <span className="text-[10px] text-[#bf81ff]">{tx.tx_hash.slice(0, 8)}... ↗</span>
+          </a>
+        ))}
+      </div>
     </div>
   );
 }

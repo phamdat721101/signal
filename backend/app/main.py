@@ -278,6 +278,17 @@ async def get_cards_feed(offset: int = 0, limit: int = Query(default=20, le=50),
     return result
 
 
+@app.get("/api/cards/played/{address}")
+async def get_played_cards(address: str):
+    """Return cards the user has APE'd (for CardHand display)."""
+    address = normalize_address(address)
+    if not address:
+        return {"cards": []}
+    from app.db import get_user_aped_cards
+    cards = get_user_aped_cards(address)
+    return {"cards": cards}
+
+
 @app.get("/api/cards/{card_id}")
 async def get_card(card_id: int):
     settings = get_settings()
@@ -484,9 +495,33 @@ async def get_play_calldata(card_id: int, request: Request):
     except Exception:
         pass
 
+    # Compute ticks for the card
+    lower, upper = xlayer.compute_card_ticks(entry, target, stop, is_bull)
+
+    # Mint a fresh NFT on-chain for this user + card (uses deployer key as minter)
+    nft_card_id = card_id + 100000  # offset to avoid collision with demo cards 1-5
+    try:
+        xlayer.mint_card_onchain(
+            nft_address=s.signal_card_nft_address,
+            card_id=nft_card_id,
+            recipient=address,
+            token_symbol=card.get("token_symbol", "?")[:8],
+            tick_lower=lower,
+            tick_upper=upper,
+            risk_score=min(100, int(card.get("risk_score") or 50)),
+            rarity=["common", "rare", "epic", "legendary", "mythic"].index(
+                (card.get("rarity") or "common").lower()
+            ) if (card.get("rarity") or "common").lower() in ["common", "rare", "epic", "legendary", "mythic"] else 0,
+            is_bull=is_bull,
+            rpc_url=s.xlayer_testnet_json_rpc_url,
+            private_key=s.private_key,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"NFT mint failed: {e}")
+
     bundle = xlayer.build_play_bundle(
-        card_id=card_id,
-        chain_id=1952,  # X Layer Terigon testnet — testrpc.xlayer.tech actually serves chain 1952
+        card_id=nft_card_id,
+        chain_id=1952,
         entry=entry,
         target=target,
         stop=stop,
@@ -513,6 +548,34 @@ async def get_play_calldata(card_id: int, request: Request):
     }
 
 
+@app.post("/api/lp/record")
+async def record_lp_transaction(request: Request):
+    """Store LP interaction (summon/close) for portfolio tracking."""
+    body = await request.json()
+    address = normalize_address(body.get("address", ""))
+    if not address:
+        raise HTTPException(status_code=400, detail="address required")
+    from app.db import record_lp_tx
+    record_lp_tx(
+        user_address=address,
+        card_id=body.get("card_id"),
+        tx_hash=body.get("tx_hash", ""),
+        action=body.get("action", "summon"),  # summon | close
+        chain_id=body.get("chain_id", 1952),
+    )
+    return {"status": "ok"}
+
+
+@app.get("/api/lp/history/{address}")
+async def get_lp_history(address: str):
+    """Get LP transaction history for portfolio."""
+    address = normalize_address(address)
+    if not address:
+        return {"transactions": []}
+    from app.db import get_lp_history
+    return {"transactions": get_lp_history(address)}
+
+
 @app.post("/api/cards/{card_id}/close")
 async def get_close_calldata(card_id: int, request: Request):
     """X Layer close bundle — remove LP for a played card."""
@@ -534,7 +597,7 @@ async def get_close_calldata(card_id: int, request: Request):
         raise HTTPException(status_code=503, detail="X Layer not configured")
 
     close_bundle = xlayer.build_close_bundle(
-        card_id=card_id,
+        card_id=((card_id - 1) % 5) + 1,  # Map DB card ID → on-chain NFT ID (1-5 demo cards)
         chain_id=1952,
         router=s.signal_card_router_address,
     )

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Card } from '../hooks/useCards';
-import { shareToX, config } from '../config';
+import { shareToX, config, isCardTradeable } from '../config';
 import NetworkBadge from './NetworkBadge';
 
 function fmt(n: number): string {
@@ -165,6 +165,7 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
             {/* Level stars */}
             <div className="flex items-center gap-0.5">
               <NetworkBadge chainId={(card as any).chain_id ?? config.xlayer.testnetId} />
+              {isCardTradeable(card) && <span className="text-[9px] bg-[#bf81ff]/15 text-[#bf81ff] font-bold px-1.5 py-0.5 rounded">🔮 LP</span>}
               {rarityBadge && <span className="text-sm mr-0.5 ml-1">{rarityBadge}</span>}
               {Array.from({ length: stars }).map((_, i) => (
                 <span key={i} className="text-[10px] text-yellow-400">★</span>

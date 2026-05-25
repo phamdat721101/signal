@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { encodeFunctionData, keccak256, toHex } from 'viem';
-import { useSwitchChain } from 'wagmi';
+import { useSwitchChain, usePublicClient } from 'wagmi';
 import { config, isXLayer } from '../config';
 import { useWallet } from './useWallet';
 import type { Card } from './useCards';
@@ -77,6 +77,7 @@ export interface UseSummonTransaction {
 export function useSummonTransaction(): UseSummonTransaction {
   const { sendTx, isConnected, chainId, address } = useWallet();
   const { switchChainAsync } = useSwitchChain();
+  const publicClient = usePublicClient();
   const [isLoading, setIsLoading] = useState(false);
   const [step, setStep] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -121,14 +122,16 @@ export function useSummonTransaction(): UseSummonTransaction {
           calls: Array<{ to: string; data: string }>;
         };
 
-        // Execute calls sequentially. The router's playCard is the last call.
-        // If approve already exists (allowance >= amount), wallet will skip the prompt.
-        // Pass targetChain so wagmi signs for X Layer (1952), not Initia.
+        // Wait for each tx to be mined before sending the next.
+        // Approvals must confirm before playCard can pull tokens.
         let lastTx = '';
         for (let i = 0; i < bundle.calls.length; i++) {
           const isFinal = i === bundle.calls.length - 1;
           setStep(isFinal ? 'Summoning' : `Approving (${i + 1}/${bundle.calls.length - 1})`);
           lastTx = await sendTx(bundle.calls[i].to, bundle.calls[i].data, targetChain);
+          if (!isFinal && publicClient) {
+            await publicClient.waitForTransactionReceipt({ hash: lastTx as `0x${string}` });
+          }
         }
 
         setIsLoading(false); setStep(null);

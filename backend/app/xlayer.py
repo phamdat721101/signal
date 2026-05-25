@@ -157,17 +157,25 @@ def build_play_bundle(
     """
     lower, upper = compute_card_ticks(entry, target, stop, is_bull)
 
-    amount0_max = int(suggested_usd / max(okb_usd_price, 1e-9) * 10**18)  # OKB has 18 dec
-    amount1_max = int(suggested_usd * 10**6)  # USDC has 6 dec
+    # Pool currency order: currency0=USDC (lower address), currency1=OKB (higher address)
+    # amount0Max = USDC (6 decimals), amount1Max = OKB (18 decimals)
+    usdc_amount = int(suggested_usd * 10**6)
+    okb_amount = int(suggested_usd / max(okb_usd_price, 1e-9) * 10**18)
+    amount0_max = usdc_amount  # currency0 = USDC
+    amount1_max = okb_amount   # currency1 = OKB
 
-    # Liquidity: contract clamps via amount maxes; this is just a generous upper hint.
-    liquidity = 10**24
+    # Compute liquidity from USDC amount and tick range (conservative 80%)
+    import math as _math
+    sqrt_lower = 1.0001 ** (lower / 2)
+    sqrt_upper = 1.0001 ** (upper / 2)
+    diff = abs(sqrt_upper - sqrt_lower)
+    liquidity = int(usdc_amount * sqrt_lower * sqrt_upper / max(diff, 1e-9) * 0.8) if diff > 0 else 10**9
 
     deadline = int(time.time()) + deadline_seconds
 
     calls = [
-        encode_approve(okb, router, amount0_max),
-        encode_approve(usdc, router, amount1_max),
+        encode_approve(usdc, router, usdc_amount),
+        encode_approve(okb, router, okb_amount),
         encode_play_card(
             router,
             card_id=card_id,
@@ -265,3 +273,65 @@ def build_close_bundle(
         calls=calls,
         deadline=deadline,
     )
+
+
+def mint_card_onchain(
+    *,
+    nft_address: str,
+    card_id: int,
+    recipient: str,
+    token_symbol: str,
+    tick_lower: int,
+    tick_upper: int,
+    risk_score: int,
+    rarity: int,
+    is_bull: bool,
+    rpc_url: str,
+    private_key: str,
+) -> str:
+    """Mint a SignalCardNFT on-chain. Returns tx hash. Blocking call (~3s)."""
+    from web3 import Web3
+
+    w3 = Web3(Web3.HTTPProvider(rpc_url))
+    account = w3.eth.account.from_key(private_key)
+
+    # mint(uint256 cardId, address to, CardData calldata d)
+    # CardData = (string tokenSymbol, int24 stopTickHint, int24 targetTickHint, uint16 riskScore, uint8 rarity, bool isBull, uint64 expiresAt, bool played)
+    import time as _t
+    expires_at = int(_t.time()) + 86400  # 24h from now
+
+    abi = [{
+        "name": "mint", "type": "function", "stateMutability": "nonpayable",
+        "inputs": [
+            {"name": "cardId", "type": "uint256"},
+            {"name": "to", "type": "address"},
+            {"name": "d", "type": "tuple", "components": [
+                {"name": "tokenSymbol", "type": "string"},
+                {"name": "stopTickHint", "type": "int24"},
+                {"name": "targetTickHint", "type": "int24"},
+                {"name": "riskScore", "type": "uint16"},
+                {"name": "rarity", "type": "uint8"},
+                {"name": "isBull", "type": "bool"},
+                {"name": "expiresAt", "type": "uint64"},
+                {"name": "played", "type": "bool"},
+            ]},
+        ],
+        "outputs": [],
+    }]
+
+    contract = w3.eth.contract(address=Web3.to_checksum_address(nft_address), abi=abi)
+    tx = contract.functions.mint(
+        card_id,
+        Web3.to_checksum_address(recipient),
+        (token_symbol, tick_lower, tick_upper, risk_score, rarity, is_bull, expires_at, False),
+    ).build_transaction({
+        "from": account.address,
+        "nonce": w3.eth.get_transaction_count(account.address),
+        "gas": 300000,
+        "gasPrice": w3.eth.gas_price or 40000001,
+        "chainId": 1952,
+    })
+    signed = account.sign_transaction(tx)
+    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+    w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
+    return tx_hash.hex()

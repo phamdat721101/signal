@@ -272,6 +272,20 @@ def init_db():
             )
         """)
     logger.info("report_escrows table ready")
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS lp_transactions (
+                id SERIAL PRIMARY KEY,
+                user_address TEXT NOT NULL,
+                card_id INTEGER,
+                tx_hash TEXT UNIQUE,
+                action TEXT NOT NULL DEFAULT 'summon',
+                chain_id INTEGER NOT NULL DEFAULT 1952,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS lp_tx_user_idx ON lp_transactions (user_address, created_at DESC)")
+    logger.info("lp_transactions table ready")
     init_user_agents_table()
 
 
@@ -462,6 +476,51 @@ def record_swipe(card_id: int, user_address: str, action: str) -> int:
             (card_id, user_address, action)
         )
         return cur.fetchone()[0]
+
+
+def record_lp_tx(user_address: str, card_id: int, tx_hash: str, action: str, chain_id: int):
+    """Record an LP interaction (summon/close) for portfolio tracking."""
+    conn = _get_conn()
+    if not conn:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO lp_transactions (user_address, card_id, tx_hash, action, chain_id)
+               VALUES (%s, %s, %s, %s, %s) ON CONFLICT (tx_hash) DO NOTHING""",
+            (user_address, card_id, tx_hash, action, chain_id)
+        )
+
+
+def get_lp_history(user_address: str, limit: int = 50) -> list[dict]:
+    """Get LP transaction history for a user."""
+    conn = _get_conn()
+    if not conn:
+        return []
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """SELECT lt.*, c.token_symbol, c.price
+               FROM lp_transactions lt LEFT JOIN cards c ON c.id = lt.card_id
+               WHERE lt.user_address = %s ORDER BY lt.created_at DESC LIMIT %s""",
+            (user_address, limit)
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_user_aped_cards(user_address: str, limit: int = 20) -> list[dict]:
+    """Return cards the user swiped APE on (for CardHand / played positions)."""
+    conn = _get_conn()
+    if not conn:
+        return []
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """SELECT c.id, c.token_symbol, c.price, c.card_type, c.status, c.created_at,
+                      c.rarity, c.risk_score, s.created_at as swiped_at
+               FROM swipes s JOIN cards c ON c.id = s.card_id
+               WHERE s.user_address = %s AND s.action = 'ape'
+               ORDER BY s.created_at DESC LIMIT %s""",
+            (user_address, limit)
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 
 def get_user_swipes(user_address: str, offset: int = 0, limit: int = 50) -> tuple[list[dict], int]:

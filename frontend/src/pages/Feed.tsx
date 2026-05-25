@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createPublicClient, http } from 'viem';
 import { useCards } from '../hooks/useCards';
-import { config, shareToX, normalizeAddress, isXLayer, isCardTradeable } from '../config';
+import { config, shareToX, normalizeAddress, isCardTradeable } from '../config';
 import TokenCard from '../components/TokenCard';
 import { MacroDeskCard, WhaleAlertCard } from '../components/TokenCard';
 import { InsightCard } from '../components/InsightCard';
@@ -214,7 +214,7 @@ export default function Feed() {
   const [showRareReveal, setShowRareReveal] = useState<string | null>(null);
 
   const { data, isLoading } = useCards(0, 50, cardFilter === 'all' ? undefined : cardFilter);
-  const { address: initiaAddress, login, isCorrectChain, chainId: walletChainId } = useWallet();
+  const { address: initiaAddress, login, isCorrectChain } = useWallet();
   const navigate = useNavigate();
   const { apeOnChain } = useApeTransaction();
 
@@ -278,25 +278,29 @@ export default function Feed() {
     return <Onboarding onComplete={() => { localStorage.setItem('kinetic_onboarded', 'true'); setShowOnboarding(false); login(); }} />;
   }
 
+  const [showApeChoice, setShowApeChoice] = useState(false);
+
   const handleApe = async () => {
     if (!current) return;
-    // Route by the user's currently-selected wallet chain.
-    //  — X Layer (1952 / 196): SummonRitual → v4-hook LP open via SignalCardRouter.
-    //    Requires a tradeable price; non-price cards (macro_desk, whale_alert,
-    //    zero-price tokens) just advance — they are not LP recipes.
-    //  — Anywhere else (Initia default): existing ConvictionOverlay → createSignal.
-    // User opts into X Layer by switching networks via the header WalletPill.
-    if (isXLayer(walletChainId)) {
-      if (!isCardTradeable(current)) {
-        setSwipeFeedback('ape');
-        setTimeout(() => { setSwipeFeedback(null); setIndex(i => i + 1); }, 400);
-        return;
-      }
-      setSummonCard(current);
-      return;
+    // Tradeable cards: show choice (Predict vs Summon LP).
+    // Non-tradeable cards: go straight to conviction (prediction only).
+    if (isCardTradeable(current)) {
+      setShowApeChoice(true);
+    } else {
+      setPendingCard(current);
+      setShowConviction(true);
     }
+  };
+
+  const handleChoosePredict = () => {
+    setShowApeChoice(false);
     setPendingCard(current);
     setShowConviction(true);
+  };
+
+  const handleChooseSummon = () => {
+    setShowApeChoice(false);
+    setSummonCard(current);
   };
 
   const confirmConviction = async () => {
@@ -418,13 +422,59 @@ export default function Feed() {
         card={summonCard}
         open={!!summonCard}
         onClose={() => setSummonCard(null)}
-        onSuccess={(_tx, _chainId) => {
+        onSuccess={(txHash, txChainId) => {
           setSummonCard(null);
-          setSwipeFeedback('ape');
-          setTimeout(() => { setSwipeFeedback(null); setIndex(i => i + 1); }, 400);
+          setIndex(i => i + 1);
+          // Record LP tx for portfolio
+          if (evmAddress && current) {
+            fetch(`${config.backendUrl}/api/lp/record`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ address: evmAddress, card_id: current.id, tx_hash: txHash, action: 'summon', chain_id: txChainId }),
+            }).catch(() => {});
+          }
+          // Open explorer
+          const url = txChainId === 1952
+            ? `https://www.oklink.com/xlayer-test/tx/${txHash}`
+            : `https://www.oklink.com/xlayer/tx/${txHash}`;
+          window.open(url, '_blank');
           queryClient.invalidateQueries({ queryKey: ['cards'] });
+          queryClient.invalidateQueries({ queryKey: ['played-cards'] });
         }}
       />
+      {/* APE Choice: Predict vs Summon LP */}
+      {showApeChoice && current && (
+        <div className="fixed inset-0 z-[70] bg-black/85 flex items-center justify-center p-6" onClick={() => setShowApeChoice(false)}>
+          <div className="bg-[#131313] rounded-2xl max-w-sm w-full overflow-hidden border border-[#494847]/20" onClick={e => e.stopPropagation()}>
+            <div className="h-1.5 bg-gradient-to-r from-[#8eff71] to-[#bf81ff]" />
+            <div className="p-6 flex flex-col gap-3">
+              <h2 className="font-headline text-xl font-black text-white text-center">APE ${current.token_symbol}</h2>
+              <p className="text-xs text-[#adaaaa] text-center">Choose how to play this card</p>
+              <button onClick={handleChoosePredict}
+                className="w-full bg-[#262626] border border-[#8eff71]/20 rounded-xl p-4 text-left active:scale-95 transition-transform">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">🔥</span>
+                  <div>
+                    <div className="font-headline font-bold text-white text-sm">Predict</div>
+                    <div className="text-[10px] text-[#adaaaa]">Free · Build reputation · Resolves in 24h</div>
+                  </div>
+                </div>
+              </button>
+              <button onClick={handleChooseSummon}
+                className="w-full bg-[#262626] border border-[#bf81ff]/20 rounded-xl p-4 text-left active:scale-95 transition-transform">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">🔮</span>
+                  <div>
+                    <div className="font-headline font-bold text-white text-sm">Summon LP</div>
+                    <div className="text-[10px] text-[#adaaaa]">Earn swap fees · Requires OKB + USDC · X Layer</div>
+                  </div>
+                </div>
+              </button>
+              <button onClick={() => setShowApeChoice(false)}
+                className="w-full text-[#494847] text-xs font-label py-2">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
       {showPaywall && <Paywall onDismiss={() => setShowPaywall(false)} isConnected={!!evmAddress} onConnect={login} />}
       {resolvedTrade && <ResolutionModal trade={resolvedTrade} onDismiss={() => setResolvedTrade(null)} />}
       {evmAddress && isCorrectChain && balance != null && balance < 10000000000000000n && (
