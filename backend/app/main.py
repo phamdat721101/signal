@@ -289,6 +289,52 @@ async def get_played_cards(address: str):
     return {"cards": cards}
 
 
+@app.get("/api/featured-gem")
+async def get_featured_gem():
+    """Single highest-scoring gem from last 24h. Splash hero on first open.
+
+    Headers: max-age=60 keeps browser hot for 60s; SWR=900 lets the SW serve
+    a stale gem for up to 15min while it revalidates in the background. Combined
+    with our 60s in-process backend cache, the worst-case latency for a cold
+    SW is one DB hit per minute globally.
+    """
+    cache_key = "featured-gem"
+    headers = {"Cache-Control": "public, max-age=60, stale-while-revalidate=900"}
+    hit = cached(cache_key, ttl=60)
+    if hit:
+        return JSONResponse(content=hit, headers=headers)
+    settings = get_settings()
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="No database configured")
+    from app.db import get_top_gem
+    gem = get_top_gem()
+    if not gem:
+        raise HTTPException(status_code=503, detail="No gem available yet")
+    set_cache(cache_key, gem)
+    return JSONResponse(content=gem, headers=headers)
+
+
+@app.get("/api/ticker")
+async def get_ticker(addresses: str = Query(..., min_length=1)):
+    """Bulk live prices keyed by token address. Used by the visible-card ticker.
+
+    The 5s in-process cache coalesces concurrent requests into one upstream
+    DEXScreener call every 5s globally, regardless of DAU.
+    """
+    addrs = [a.strip() for a in addresses.split(",") if a.strip()][:30]
+    if not addrs:
+        raise HTTPException(status_code=400, detail="No addresses supplied")
+    cache_key = f"ticker:{','.join(sorted(a.lower() for a in addrs))}"
+    headers = {"Cache-Control": "public, max-age=5"}
+    hit = cached(cache_key, ttl=5)
+    if hit is not None:
+        return JSONResponse(content=hit, headers=headers)
+    from app.price_feed import get_bulk_by_address
+    data = get_bulk_by_address(addrs)
+    set_cache(cache_key, data)
+    return JSONResponse(content=data, headers=headers)
+
+
 @app.get("/api/cards/{card_id}")
 async def get_card(card_id: int):
     settings = get_settings()

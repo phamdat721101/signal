@@ -84,3 +84,47 @@ def get_price(symbol: str) -> dict | None:
 def get_prices(symbols: list[str]) -> dict[str, dict]:
     """Get latest prices for multiple symbols."""
     return {s: p for s in symbols if (p := get_price(s))}
+
+
+def get_bulk_by_address(addresses: list[str]) -> dict[str, dict]:
+    """Fetch live prices for many tokens in one DEXScreener call.
+
+    Used by /api/ticker for the live ticker overlay. Address-based
+    (not symbol-based) so the lookup is exact — no symbol collisions.
+
+    Returns {address_lower: {price_usd, volume_24h, change_24h, ts}}.
+    Unknown / unindexed addresses are absent; client keeps last known good.
+    """
+    if not addresses:
+        return {}
+    addrs = [a.lower() for a in addresses if a]
+    addrs = list(dict.fromkeys(addrs))[:30]  # dedupe, DEXScreener cap
+    if not addrs:
+        return {}
+    try:
+        resp = httpx.get(
+            f"https://api.dexscreener.com/latest/dex/tokens/{','.join(addrs)}",
+            timeout=8,
+        )
+        resp.raise_for_status()
+        pairs = resp.json().get("pairs") or []
+    except Exception as e:
+        logger.warning(f"DEXScreener bulk fetch failed for {len(addrs)} addrs: {e}")
+        return {}
+
+    now = int(time.time())
+    by_addr: dict[str, dict] = {}
+    for pair in pairs:
+        base = (pair.get("baseToken") or {}).get("address", "").lower()
+        if not base or base in by_addr:
+            continue  # keep first (highest-liquidity) pair per address
+        try:
+            by_addr[base] = {
+                "price_usd": float(pair.get("priceUsd", 0) or 0),
+                "volume_24h": float((pair.get("volume") or {}).get("h24", 0) or 0),
+                "change_24h": float((pair.get("priceChange") or {}).get("h24", 0) or 0),
+                "ts": now,
+            }
+        except (TypeError, ValueError):
+            continue
+    return by_addr

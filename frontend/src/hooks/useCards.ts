@@ -19,6 +19,7 @@ export interface Card {
   status: string;
   created_at: string;
   card_type?: string;
+  token_address?: string;
   institutional_context?: Array<{emoji: string; label: string; value: string; sentiment: string}>;
   verdict?: string;
   verdict_reason?: string;

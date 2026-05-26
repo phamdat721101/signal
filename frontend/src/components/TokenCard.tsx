@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Card } from '../hooks/useCards';
+import { useTicker } from '../hooks/useTicker';
 import { shareToX, isCardTradeable } from '../config';
 
 function fmt(n: number): string {
@@ -126,7 +127,7 @@ function CandlestickChart({ ohlc, sparkline, price, verdict, cardType }: { ohlc?
   );
 }
 
-export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: () => void; onFade: () => void }) {
+export default function TokenCard({ card, onApe, onFade, isTop = false }: { card: Card; onApe: () => void; onFade: () => void; isTop?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const verdict = card.verdict || 'DYOR';
   const vCfg = verdictConfig[verdict] || verdictConfig.DYOR;
@@ -134,7 +135,14 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
   const rarityBadge = getRarityBadge(card.rarity);
   const atk = card.confidence ?? Math.max(10, 100 - (card.risk_score ?? 50));
   const def = 100 - (card.risk_score ?? 50);
-  const pctColor = card.price_change_24h >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]';
+
+  // Live ticker for visible gem only — keeps API cost flat regardless of DAU.
+  const tickerOn = isTop && card.card_type === 'gem' && !!card.token_address;
+  const ticker = useTicker(tickerOn ? [card.token_address!] : [], tickerOn);
+  const live = card.token_address ? ticker.data?.[card.token_address.toLowerCase()] : undefined;
+  const livePrice = live?.price_usd ?? card.price;
+  const liveChange = live?.change_24h ?? card.price_change_24h;
+  const pctColor = liveChange >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]';
   const glowClass = card.rarity === 'legendary'
     ? vCfg.glow.replace('0.3)', '0.6)')
     : vCfg.glow;
@@ -156,8 +164,8 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
                   <span className="text-[9px] text-[#adaaaa]">{card.token_name}</span>
                 </div>
                 <div className="flex items-center gap-1">
-                  <span className="font-bold text-white text-sm">{fmtPrice(card.price)}</span>
-                  <span className={`text-[10px] ${pctColor}`}>{card.price_change_24h >= 0 ? '+' : ''}{card.price_change_24h.toFixed(1)}%</span>
+                  <span className="font-bold text-white text-sm">{fmtPrice(livePrice)}</span>
+                  <span className={`text-[10px] ${pctColor}`}>{liveChange >= 0 ? '+' : ''}{liveChange.toFixed(1)}%</span>
                 </div>
               </div>
             </div>

@@ -145,6 +145,7 @@ def init_db():
             ("provider", "TEXT DEFAULT ''"),
             ("signal_id", "INTEGER DEFAULT NULL"),
             ("research_summary", "JSONB DEFAULT '{}'"),
+            ("token_address", "TEXT DEFAULT ''"),
         ]:
             try:
                 cur.execute(f"ALTER TABLE cards ADD COLUMN IF NOT EXISTS {col} {defn}")
@@ -404,8 +405,8 @@ def insert_card(card: dict) -> int:
                (token_symbol, token_name, chain, hook, roast, metrics, image_url,
                 ai_image_prompt, price, price_change_24h, volume_24h, market_cap, coingecko_id,
                 verdict, verdict_reason, risk_level, risk_score, notification_hook, signals,
-                sparkline, patterns, ohlc, source, provider, signal_id, institutional_context, card_type, research_summary)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                sparkline, patterns, ohlc, source, provider, signal_id, institutional_context, card_type, research_summary, token_address)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                RETURNING id""",
             (card.get("token_symbol", ""), card.get("token_name", ""),
              card.get("chain", "initia"), card.get("hook", ""), card.get("roast", ""),
@@ -422,7 +423,8 @@ def insert_card(card: dict) -> int:
              card.get("signal_id"),
              json.dumps(card.get("institutional_context", [])),
              card.get("card_type", "trading"),
-             json.dumps(card.get("research_summary", {})))
+             json.dumps(card.get("research_summary", {})),
+             card.get("token_address", ""))
         )
         return cur.fetchone()[0]
 
@@ -455,6 +457,53 @@ def get_card_by_id(card_id: int) -> dict | None:
         cur.execute("SELECT * FROM cards WHERE id = %s", (card_id,))
         row = cur.fetchone()
     return _row_to_card(row) if row else None
+
+
+def get_recent_gem_symbols(hours: int = 6) -> set[str]:
+    """Symbols already inserted as gem cards within the last N hours.
+
+    Used by gem_scanner to dedupe the feed across cycles.
+    """
+    conn = _get_read_conn()
+    if not conn:
+        return set()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT UPPER(token_symbol) FROM cards "
+            "WHERE card_type = 'gem' AND created_at > NOW() - make_interval(hours => %s)",
+            (hours,),
+        )
+        return {r[0] for r in cur.fetchall() if r[0]}
+
+
+def get_top_gem() -> dict | None:
+    """Single highest-scoring gem card from the last 24h, for the splash hero.
+
+    Sort: gem_score from the metrics array first signal, then created_at DESC.
+    Falls back to plain created_at DESC if score parsing fails.
+    """
+    conn = _get_read_conn()
+    if not conn:
+        return None
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT * FROM cards "
+            "WHERE card_type = 'gem' "
+            "  AND status = 'active' "
+            "  AND created_at > NOW() - INTERVAL '24 hours' "
+            "ORDER BY created_at DESC "
+            "LIMIT 50"
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return None
+    # Parse score from hook ("💎 Gem Score 75/100") and pick max.
+    import re
+    def _score_of(r):
+        m = re.search(r"(\d+)/100", r.get("hook") or "")
+        return int(m.group(1)) if m else 0
+    rows.sort(key=lambda r: (_score_of(r), r["created_at"]), reverse=True)
+    return _row_to_card(rows[0])
 
 
 def get_existing_coingecko_ids() -> set[str]:
@@ -683,6 +732,7 @@ def _row_to_card(row: dict) -> dict:
         "provider": row.get("provider", ""),
         "signal_id": row.get("signal_id"),
         "card_type": row.get("card_type", "trading"),
+        "token_address": row.get("token_address", ""),
     }
 
 

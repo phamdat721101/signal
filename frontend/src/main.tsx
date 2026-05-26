@@ -71,3 +71,9 @@ createRoot(document.getElementById('root')!).render(
     </Providers>
   </StrictMode>,
 );
+
+// Tell the pre-React splash bootstrap (in index.html) we're done loading.
+// Two RAFs guarantees the first React paint has flushed before fade.
+requestAnimationFrame(() => requestAnimationFrame(() => {
+  window.dispatchEvent(new CustomEvent('app-ready'));
+}));

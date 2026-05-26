@@ -315,10 +315,11 @@ def start_scheduler():
                       next_run_time=t + timedelta(seconds=360))
     _start_ibc_listener_thread()
 
-    # ── Gem Scanner ──
-    scheduler.add_job(_gem_scan_job, "interval", minutes=30,
-                      id="gem_scan", max_instances=1,
-                      next_run_time=t + timedelta(seconds=160))
+    # ── Gem Scanner — every 15 minutes (PRD: Hidden Gem at First Open v2) ──
+    from apscheduler.triggers.cron import CronTrigger
+    scheduler.add_job(_gem_scan_job,
+                      CronTrigger(minute="*/15", timezone="UTC"),
+                      id="gem_scan", max_instances=1)
 
     scheduler.start()
     logger.info("Scheduler started — all jobs delayed for graceful startup")
@@ -368,10 +369,20 @@ def _with_advisory_lock(job_id: str, fn):
 
 
 def _gem_scan_job():
-    """Generate gem cards from scanner."""
+    """Generate gem cards from scanner. Runs daily at 09:00 GMT+7 (02:00 UTC).
+
+    Reset the module-level httpx.AsyncClient before each run. The singleton
+    binds its connection pool to the event loop that first touched it; since
+    each `asyncio.run()` here creates a fresh loop and discards it, reusing
+    the singleton across runs raises `RuntimeError: Event loop is closed`.
+    Setting `_async = None` forces re-init in the new loop.
+    """
     import asyncio
+    from app import http_client
     from app.gem_scanner import scan_for_gems
     from app.db import insert_card
+
+    http_client._async = None  # force fresh AsyncClient bound to this run's loop
 
     async def _run():
         gems = await scan_for_gems(limit=5)
@@ -380,6 +391,7 @@ def _gem_scan_job():
                 "token_symbol": gem.symbol,
                 "token_name": gem.name,
                 "chain": gem.chain,
+                "token_address": gem.address,
                 "price": gem.price,
                 "price_change_24h": gem.price_change_24h,
                 "volume_24h": gem.volume_24h,
@@ -393,7 +405,14 @@ def _gem_scan_job():
                 "metrics": [{"emoji": s.split(" ")[0], "label": s.split(" ", 1)[1] if " " in s else s, "value": "", "sentiment": "bullish"} for s in gem.signals],
                 "status": "active",
             })
-        logger.info(f"Gem scan: {len(gems)} gems generated")
+        if gems:
+            top = gems[0]
+            logger.info(
+                "gem_scan: %d gems, top=%s mc=%.0f score=%d",
+                len(gems), top.symbol, top.market_cap, top.gem_score,
+            )
+        else:
+            logger.info("gem_scan: 0 gems (filters too strict or all dupes)")
 
     try:
         asyncio.run(_run())

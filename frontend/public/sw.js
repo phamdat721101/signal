@@ -1,5 +1,6 @@
-const CACHE = 'ape-v4';
+const CACHE = 'ape-v6';
 const STATIC = ['/manifest.json', '/favicon.svg', '/icons.svg', '/app.png'];
+const FEATURED_GEM_URL = 'https://ai.overguild.com/api/featured-gem';
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(STATIC)));
@@ -15,7 +16,24 @@ self.addEventListener('fetch', e => {
   const { request } = e;
   const url = new URL(request.url);
 
-  // API calls: network only
+  // Featured gem: stale-while-revalidate. Splash gets a cached gem instantly,
+  // background refresh updates it for next visit. Keeps the moment under 200ms.
+  if (request.url === FEATURED_GEM_URL) {
+    e.respondWith(
+      caches.open(CACHE).then(c =>
+        c.match(request).then(cached => {
+          const fetchPromise = fetch(request).then(res => {
+            if (res && res.ok) c.put(request, res.clone());
+            return res;
+          }).catch(() => cached);
+          return cached || fetchPromise;
+        })
+      )
+    );
+    return;
+  }
+
+  // All other API: network only.
   if (url.pathname.startsWith('/api/')) {
     e.respondWith(fetch(request));
     return;

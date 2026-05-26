@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 // import { usePrivy } from '@privy-io/react-auth';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createPublicClient, http } from 'viem';
 import { useCards } from '../hooks/useCards';
+import { useFeaturedGem } from '../hooks/useFeaturedGem';
 import { config, shareToX, normalizeAddress, isCardTradeable } from '../config';
 import TokenCard from '../components/TokenCard';
 import { MacroDeskCard, WhaleAlertCard } from '../components/TokenCard';
@@ -214,6 +215,7 @@ export default function Feed() {
   const [showRareReveal, setShowRareReveal] = useState<string | null>(null);
 
   const { data, isLoading } = useCards(0, 50, cardFilter === 'all' ? undefined : cardFilter);
+  const { data: featuredGem } = useFeaturedGem();
   const { address: initiaAddress, login, isCorrectChain } = useWallet();
   const navigate = useNavigate();
   const { apeOnChain } = useApeTransaction();
@@ -250,7 +252,14 @@ export default function Feed() {
     if (trades.length > 0) setResolvedTrade(trades[0]);
   }, [resolvedData]);
 
-  const cards = data?.cards ?? [];
+  const cards = useMemo(() => {
+    const base = data?.cards ?? [];
+    // Pin the freshest gem as the first card on first open (Hidden Gem PRD D1=C).
+    // Skip if there's no gem yet, or if the gem is already at the top of the
+    // feed (don't double-show); dedupe by id otherwise.
+    if (!featuredGem || base[0]?.id === featuredGem.id) return base;
+    return [featuredGem, ...base.filter(c => c.id !== featuredGem.id)];
+  }, [data, featuredGem]);
   const current = cards[index];
 
   // Rare card reveal trigger
@@ -498,13 +507,13 @@ export default function Feed() {
         ) : current.card_type === 'whale_alert' ? (
           <WhaleAlertCard card={current} onApe={handleApe} onFade={handleFade} />
         ) : current.card_type === 'pool' ? (
-          <TokenCard card={current} onApe={() => setIndex(i => i + 1)} onFade={() => setIndex(i => i + 1)} />
+          <TokenCard card={current} onApe={() => setIndex(i => i + 1)} onFade={() => setIndex(i => i + 1)} isTop />
         ) : (
           <>
             {/* Next card peek */}
             {cards[index + 1] && (
               <div className="absolute inset-0 scale-95 opacity-50">
-                <TokenCard card={cards[index + 1]} onApe={() => {}} onFade={() => {}} />
+                <TokenCard card={cards[index + 1]} onApe={() => {}} onFade={() => {}} isTop={false} />
               </div>
             )}
             {/* Current card with drag */}
@@ -528,7 +537,7 @@ export default function Feed() {
               {dragX < -50 && <div className="absolute inset-0 rounded-xl border-4 border-[#ff7166] bg-[#ff7166]/10 z-10 flex items-center justify-center"><span className="text-[#ff7166] font-headline text-4xl font-black">FADE 💨</span></div>}
               {swipeFeedback && <SwipeFeedback type={swipeFeedback} />}
               {showRareReveal && <RareCardReveal rarity={showRareReveal} onDone={() => setShowRareReveal(null)} />}
-              <TokenCard card={current} onApe={handleApe} onFade={handleFade} />
+              <TokenCard card={current} onApe={handleApe} onFade={handleFade} isTop />
             </div>
           </>
         )}

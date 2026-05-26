@@ -9,6 +9,8 @@
   <link rel="manifest" href="/manifest.json" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#0e0e0e" />
+  <link rel="preconnect" href="https://ai.overguild.com" crossorigin />
+  <link rel="dns-prefetch" href="https://ai.overguild.com" />
   <link
     href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=Inter:wght@300..700&display=swap"
     rel="stylesheet">
@@ -16,11 +18,150 @@
     rel="stylesheet">
   <title>Ape or Fade | KINETIC</title>
   <meta name="base:app_id" content="69e73cd66ced5c904f619598" />
+
+  <style>
+    /* Splash — paints before React; faded out on `app-ready`. */
+    #splash{position:fixed;inset:0;z-index:9999;background:#0e0e0e;display:flex;align-items:center;justify-content:center;padding:24px;transition:opacity .32s ease-out;font-family:'Space Grotesk','Inter',system-ui,sans-serif;color:#fff}
+    #splash.fade{opacity:0;pointer-events:none}
+    #splash .card{max-width:360px;width:100%;background:#131313;border:1px solid rgba(255,215,0,.4);border-radius:16px;padding:20px;box-shadow:0 0 30px rgba(255,215,0,.18)}
+    #splash .badge{font-size:11px;color:#ffd700;letter-spacing:1px;font-weight:700;text-transform:uppercase}
+    #splash .symbol{font-size:28px;font-weight:800;margin-top:4px}
+    #splash .name{font-size:13px;color:#adaaaa;margin-bottom:16px}
+    #splash .price{font-size:22px;font-weight:700;margin-bottom:4px}
+    #splash .pct{font-size:13px;font-weight:600}
+    #splash .pct.up{color:#8eff71}
+    #splash .pct.down{color:#ff7166}
+    #splash .signals{display:flex;flex-direction:column;gap:6px;margin-top:14px;font-size:12px;color:#adaaaa}
+    #splash .skel{opacity:.4}
+    @keyframes splash-pulse{0%,100%{opacity:.4}50%{opacity:.85}}
+    #splash .pulse{animation:splash-pulse 1.2s infinite}
+  </style>
 </head>
 
 <body>
+  <div id="splash" aria-hidden="true">
+    <div class="card" id="splash-card">
+      <div class="badge pulse">💎 Finding today's gem…</div>
+      <div class="symbol skel">———</div>
+      <div class="name skel">———————</div>
+      <div class="price skel">$0.00</div>
+    </div>
+  </div>
   <div id="root"></div>
   <script type="module" src="/src/main.tsx"></script>
+  <script>
+    /* Splash bootstrap.
+       - Paints the freshest hidden gem before React boots.
+       - Decouples fade from React mount: only fades once the gem is painted
+         OR a 4s safety timeout fires, so users never see "Loading…" handed
+         off to React mid-fetch.
+       - Logs failures to console (visible in DevTools) instead of silently
+         swallowing — a previous version made it impossible to debug. */
+    (function () {
+      var BACKEND = 'https://ai.overguild.com';
+      var splash = document.getElementById('splash');
+      var card = document.getElementById('splash-card');
+      var painted = false;
+      var reactReady = false;
+
+      try { performance.mark && performance.mark('splash-script-start'); } catch (e) {}
+
+      function esc(s) { return String(s == null ? '' : s).replace(/[<>&"']/g, ''); }
+
+      function fmtPrice(p) {
+        var n = Number(p) || 0;
+        if (n >= 1) return '$' + n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+        if (n >= 0.01) return '$' + n.toFixed(4);
+        return '$' + n.toFixed(6);
+      }
+
+      function paint(g) {
+        if (!card || !g || painted) return;
+        try {
+          var change = Number(g.price_change_24h) || 0;
+          var pctCls = change >= 0 ? 'up' : 'down';
+          var pctSign = change >= 0 ? '+' : '';
+          var sigHtml = '';
+          if (Array.isArray(g.metrics)) {
+            for (var i = 0; i < Math.min(g.metrics.length, 4); i++) {
+              var s = g.metrics[i] || {};
+              var label = esc(s.label || s.emoji || '');
+              if (label) sigHtml += '<div>' + esc(s.emoji || '•') + ' ' + label + '</div>';
+            }
+          }
+          card.innerHTML =
+            '<div class="badge">' + esc(g.hook || '💎 Hidden Gem') + '</div>' +
+            '<div class="symbol">$' + esc(g.token_symbol) + '</div>' +
+            '<div class="name">' + esc(g.token_name) + '</div>' +
+            '<div class="price">' + fmtPrice(g.price) + '</div>' +
+            '<div class="pct ' + pctCls + '">' + pctSign + change.toFixed(1) + '% (24h)</div>' +
+            '<div class="signals">' + sigHtml + '</div>';
+          painted = true;
+          try { performance.mark && performance.mark('splash-painted'); } catch (e) {}
+          maybeFade();
+        } catch (e) {
+          console.warn('[splash] paint failed:', e);
+          showFallback('Splash render error');
+        }
+      }
+
+      function showFallback(reason) {
+        if (!card || painted) return;
+        card.innerHTML =
+          '<div class="badge">💎 Today\'s gems coming soon</div>' +
+          '<div class="symbol">—</div>' +
+          '<div class="name">Scanner refreshes every 15 min</div>';
+        painted = true;
+        if (reason) console.warn('[splash] fallback:', reason);
+      }
+
+      function fade() {
+        if (!splash) return;
+        splash.classList.add('fade');
+        setTimeout(function () { splash.parentNode && splash.parentNode.removeChild(splash); }, 380);
+      }
+
+      function maybeFade() {
+        // Fade only when both: gem painted AND React ready. This stops the
+        // splash from disappearing while still showing the skeleton.
+        if (painted && reactReady) fade();
+      }
+
+      // Fetch the gem. Errors are visible in console; fallback after timeout.
+      var FETCH_TIMEOUT = 3500;
+      var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      var fetchTimer = setTimeout(function () { ctrl && ctrl.abort(); }, FETCH_TIMEOUT);
+
+      fetch(BACKEND + '/api/featured-gem', {
+        credentials: 'omit',
+        signal: ctrl ? ctrl.signal : undefined,
+      })
+        .then(function (r) {
+          clearTimeout(fetchTimer);
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(paint)
+        .catch(function (err) {
+          clearTimeout(fetchTimer);
+          console.warn('[splash] fetch failed:', err && err.message);
+          showFallback('fetch failed');
+          maybeFade();
+        });
+
+      // Hard safety: even with no React, fade after 4s.
+      setTimeout(function () {
+        if (!painted) showFallback('safety timeout');
+        reactReady = true;  // promote so maybeFade can run
+        maybeFade();
+      }, 4000);
+
+      window.addEventListener('app-ready', function () {
+        reactReady = true;
+        maybeFade();
+      }, { once: true });
+    })();
+  </script>
 </body>
 
 </html>
