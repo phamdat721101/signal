@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import type { Card } from '../hooks/useCards';
-import { shareToX, config, isCardTradeable } from '../config';
-import NetworkBadge from './NetworkBadge';
+import { shareToX, isCardTradeable } from '../config';
 
 function fmt(n: number): string {
   if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
@@ -164,7 +163,6 @@ export default function TokenCard({ card, onApe, onFade }: { card: Card; onApe: 
             </div>
             {/* Level stars */}
             <div className="flex items-center gap-0.5">
-              <NetworkBadge chainId={(card as any).chain_id ?? config.xlayer.testnetId} />
               {isCardTradeable(card) && <span className="text-[9px] bg-[#bf81ff]/15 text-[#bf81ff] font-bold px-1.5 py-0.5 rounded">🔮 LP</span>}
               {card.card_type === 'gem' && <span className="text-[9px] bg-[#ffd700]/15 text-[#ffd700] font-bold px-1.5 py-0.5 rounded">💎 GEM</span>}
               {rarityBadge && <span className="text-sm mr-0.5 ml-1">{rarityBadge}</span>}

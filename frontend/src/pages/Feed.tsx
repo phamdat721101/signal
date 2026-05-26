@@ -220,17 +220,6 @@ export default function Feed() {
 
   const evmAddress = normalizeAddress(initiaAddress);
 
-  const { data: energyData } = useQuery({
-    queryKey: ['energy', evmAddress || 'anon'],
-    queryFn: () => evmAddress
-      ? fetch(`${config.backendUrl}/api/energy/${evmAddress}`).then(r => r.json())
-      : Promise.resolve({ energy: 5, max: 5, is_premium: false }),
-    staleTime: 30_000,
-  });
-  const energy = energyData?.energy ?? 5;
-  const maxEnergy = energyData?.max ?? 5;
-  const isPremium = !!energyData?.is_premium;
-
   const queryClient = useQueryClient();
   const [localEnergy, setLocalEnergy] = useState<number>(() => {
     const stored = localStorage.getItem('kinetic_energy');
@@ -239,7 +228,6 @@ export default function Feed() {
     if (storedDate !== today) { localStorage.setItem('kinetic_energy_date', today); localStorage.setItem('kinetic_energy', '5'); return 5; }
     return stored ? parseInt(stored) : 5;
   });
-  const displayEnergy = isPremium ? 999 : (evmAddress ? energy : localEnergy);
 
   const { data: balance } = useQuery({
     queryKey: ['balance', evmAddress],
@@ -500,18 +488,6 @@ export default function Feed() {
       )}
 
       {/* Reserved header slot — fixed height prevents CLS */}
-      {/* Energy bar */}
-      <div className="h-5 mb-1 flex items-center justify-center gap-2 text-[10px]">
-        <span className="text-[#8eff71]">⚡</span>
-        <span className="text-white font-bold">{displayEnergy >= 999 ? '∞' : `${displayEnergy}/${maxEnergy}`}</span>
-        {displayEnergy < 999 && (
-          <div className="w-16 h-1.5 bg-[#262626] rounded-full overflow-hidden">
-            <div className="h-full bg-[#8eff71] rounded-full transition-all" style={{ width: `${(displayEnergy / maxEnergy) * 100}%` }} />
-          </div>
-        )}
-        {current.card_type === 'macro_desk' && <span className="px-1.5 py-0.5 rounded bg-[#f59e0b]/10 text-[#f59e0b] font-bold">⚡2</span>}
-        {current.card_type === 'whale_alert' && <span className="px-1.5 py-0.5 rounded bg-[#bf81ff]/10 text-[#bf81ff] font-bold">⚡2</span>}
-      </div>
 
       {/* Card surface — fixed height container */}
       <div className="relative w-full max-w-md mx-auto h-[520px]">
