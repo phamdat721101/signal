@@ -1,7 +1,7 @@
 // import { usePrivy } from '@privy-io/react-auth';
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { config, shareToX, normalizeAddress } from '../config';
+import { config, shareToX, explorerTxUrl, normalizeAddress } from '../config';
 import { useWallet } from '../hooks/useWallet';
 
 function fmtPnl(v: number | null | undefined): string {
@@ -91,6 +91,32 @@ function pickHeroes(trades: Trade[]): { best: HeroCall | null; worst: HeroCall |
   return { best, worst };
 }
 
+// ── Unified Positions list ──────────────────────────────────────────────
+// Predict rows aggregate per-symbol (Position from aggregatePositions above).
+// Summon rows render per-tx (one LP open = one row, with explorer link).
+// Both share a `sortKey` (ms epoch) so a single sort gives chronological mix.
+interface SummonTx {
+  id: number;
+  tx_hash: string;
+  action: string;          // 'summon' | 'close'
+  chain_id: number;
+  token_symbol: string | null;
+  created_at: string;
+}
+type PortfolioRow =
+  | { kind: 'predict'; sortKey: number; data: Position }
+  | { kind: 'summon';  sortKey: number; data: SummonTx };
+
+function buildRows(positions: Position[], summons: SummonTx[]): PortfolioRow[] {
+  const rows: PortfolioRow[] = [];
+  for (const p of positions) rows.push({ kind: 'predict', sortKey: p.last_traded_at, data: p });
+  for (const s of summons) {
+    const ts = s.created_at ? Date.parse(s.created_at) : 0;
+    rows.push({ kind: 'summon', sortKey: Number.isNaN(ts) ? 0 : ts, data: s });
+  }
+  return rows.sort((a, b) => b.sortKey - a.sortKey);
+}
+
 export default function Portfolio() {
   const { address: walletAddr } = useWallet();
   const address = normalizeAddress(walletAddr);
@@ -105,11 +131,24 @@ export default function Portfolio() {
     enabled: !!address,
   });
 
+  const { data: lpData } = useQuery({
+    queryKey: ['lp-history', address],
+    queryFn: async () => {
+      const resp = await fetch(`${config.backendUrl}/api/lp/history/${address}`);
+      if (!resp.ok) return { transactions: [] as SummonTx[] };
+      return resp.json() as Promise<{ transactions: SummonTx[] }>;
+    },
+    enabled: !!address,
+    staleTime: 30_000,
+  });
+
   const trades = data?.trades ?? [];
   const summary = data?.summary;
+  const summons = lpData?.transactions ?? [];
 
   const positions = useMemo(() => aggregatePositions(trades), [trades]);
   const { best, worst } = useMemo(() => pickHeroes(trades), [trades]);
+  const rows = useMemo(() => buildRows(positions, summons), [positions, summons]);
 
   if (!address) {
     return (
@@ -193,104 +232,105 @@ export default function Portfolio() {
         </div>
       </div>
 
-      {/* Positions — aggregated by token (no more duplicates) */}
+      {/* Positions — unified: predicts aggregate per-symbol; summons render
+          per-tx with explorer link. Sorted by most recent activity desc. */}
       <div>
         <h2 className="font-headline font-bold text-lg text-white mb-3">
-          Positions {positions.length > 0 && (
-            <span className="font-label text-[10px] text-[#adaaaa] ml-2">{positions.length} unique</span>
+          Positions {rows.length > 0 && (
+            <span className="font-label text-[10px] text-[#adaaaa] ml-2">{rows.length} {rows.length === 1 ? 'entry' : 'entries'}</span>
           )}
         </h2>
         {isLoading ? (
           <div className="text-center text-[#adaaaa] text-sm py-8">Loading...</div>
-        ) : positions.length === 0 ? (
+        ) : rows.length === 0 ? (
           <div className="bg-[#131313] rounded-xl p-8 text-center">
             <p className="text-[#494847] text-sm">No trades yet. Start swiping!</p>
           </div>
         ) : (
           <div className="space-y-2">
-            {positions.map((p) => {
-              const pnlColor = p.realized_pnl_usd >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]';
-              return (
-                <div key={p.symbol} className="bg-[#131313] p-4 rounded-xl flex justify-between items-center">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-10 h-10 rounded-lg bg-[#262626] flex items-center justify-center font-headline font-bold text-[#8eff71] text-sm shrink-0">
-                      {p.symbol.slice(0, 2)}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-headline font-bold text-white text-sm">${p.symbol}</div>
-                      <div className="font-label text-[10px] text-[#adaaaa]">
-                        {p.total_amount.toFixed(4)} tokens · {p.trade_count} swipe{p.trade_count > 1 ? 's' : ''}
-                        {p.pending_count > 0 && (
-                          <span className="ml-1 text-[#bf81ff]">· {p.pending_count} pending</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    {p.resolved_count > 0 ? (
-                      <>
-                        <div className={"font-headline font-bold text-sm " + pnlColor}>
-                          {fmtPnl(p.realized_pnl_usd)} USD
-                        </div>
-                        <div className="font-label text-[10px] text-[#adaaaa]">
-                          best {fmtPct(p.best_pct)} · worst {fmtPct(p.worst_pct)}
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div className="font-label text-[11px] text-[#bf81ff]">⏳ Pending</div>
-                        <div className="font-label text-[10px] text-[#adaaaa]">${p.invested_usd.toFixed(2)} invested</div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {rows.map(r => r.kind === 'predict'
+              ? <PredictRow key={`p-${r.data.symbol}`} p={r.data} />
+              : <SummonRow  key={`s-${r.data.id}`}     s={r.data} />
+            )}
           </div>
         )}
       </div>
-
-      {/* LP Transactions (X Layer Summon/Close) */}
-      <LpHistory address={address} />
     </div>
   );
 }
 
-function LpHistory({ address }: { address: string }) {
-  const { data } = useQuery({
-    queryKey: ['lp-history', address],
-    queryFn: async () => {
-      const resp = await fetch(`${config.backendUrl}/api/lp/history/${address}`);
-      if (!resp.ok) return { transactions: [] };
-      return resp.json() as Promise<{ transactions: Array<{ id: number; tx_hash: string; action: string; chain_id: number; token_symbol: string; created_at: string }> }>;
-    },
-    enabled: !!address,
-    staleTime: 30_000,
-  });
-  const txs = data?.transactions ?? [];
-  if (txs.length === 0) return null;
-
-  const explorerUrl = (hash: string, chainId: number) =>
-    chainId === 1952 ? `https://www.oklink.com/xlayer-test/tx/${hash}` : `https://www.oklink.com/xlayer/tx/${hash}`;
-
+// ── Row components (inlined — no new file). Single responsibility each. ──
+function PredictRow({ p }: { p: Position }) {
+  const pnlColor = p.realized_pnl_usd >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]';
   return (
-    <div>
-      <h3 className="font-headline font-bold text-sm text-white mb-2">🔮 LP Transactions</h3>
-      <div className="space-y-2">
-        {txs.map(tx => (
-          <a key={tx.id} href={explorerUrl(tx.tx_hash, tx.chain_id)} target="_blank" rel="noopener noreferrer"
-            className="flex items-center justify-between bg-[#262626] p-3 rounded-xl hover:bg-[#333]">
-            <div className="flex items-center gap-2">
-              <span className="text-lg">{tx.action === 'summon' ? '🔮' : '🔥'}</span>
-              <div>
-                <div className="text-xs text-white font-bold">{tx.action === 'summon' ? 'Summon' : 'Banish'} ${tx.token_symbol || '?'}</div>
-                <div className="text-[10px] text-[#494847]">{new Date(tx.created_at).toLocaleDateString()}</div>
-              </div>
+    <div className="bg-[#131313] p-4 rounded-xl flex justify-between items-center">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="w-10 h-10 rounded-lg bg-[#262626] flex items-center justify-center font-headline font-bold text-[#8eff71] text-sm shrink-0">
+          {p.symbol.slice(0, 2)}
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="font-headline font-bold text-white text-sm">${p.symbol}</span>
+            <span className="text-[9px] font-label uppercase tracking-widest text-[#494847]">🎯 Predict</span>
+          </div>
+          <div className="font-label text-[10px] text-[#adaaaa]">
+            {p.total_amount.toFixed(4)} tokens · {p.trade_count} swipe{p.trade_count > 1 ? 's' : ''}
+            {p.pending_count > 0 && (
+              <span className="ml-1 text-[#bf81ff]">· {p.pending_count} pending</span>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="text-right shrink-0">
+        {p.resolved_count > 0 ? (
+          <>
+            <div className={"font-headline font-bold text-sm " + pnlColor}>
+              {fmtPnl(p.realized_pnl_usd)} USD
             </div>
-            <span className="text-[10px] text-[#bf81ff]">{tx.tx_hash.slice(0, 8)}... ↗</span>
-          </a>
-        ))}
+            <div className="font-label text-[10px] text-[#adaaaa]">
+              best {fmtPct(p.best_pct)} · worst {fmtPct(p.worst_pct)}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="font-label text-[11px] text-[#bf81ff]">⏳ Pending</div>
+            <div className="font-label text-[10px] text-[#adaaaa]">${p.invested_usd.toFixed(2)} invested</div>
+          </>
+        )}
       </div>
     </div>
+  );
+}
+
+function SummonRow({ s }: { s: SummonTx }) {
+  const sym = (s.token_symbol || '?').toUpperCase();
+  const isClose = s.action === 'close';
+  const label = isClose ? 'Banish' : 'Summon';
+  const icon = isClose ? '🔥' : '🔮';
+  return (
+    <a
+      href={explorerTxUrl(s.tx_hash, s.chain_id)}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="bg-[#131313] p-4 rounded-xl flex justify-between items-center hover:bg-[#191919] transition-colors"
+    >
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="w-10 h-10 rounded-lg bg-[#bf81ff]/10 flex items-center justify-center text-base shrink-0">
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="font-headline font-bold text-white text-sm">${sym}</span>
+            <span className="text-[9px] font-label uppercase tracking-widest text-[#bf81ff]">🔮 LP {label}</span>
+          </div>
+          <div className="font-label text-[10px] text-[#adaaaa]">
+            Open liquidity position · {new Date(s.created_at).toLocaleDateString()}
+          </div>
+        </div>
+      </div>
+      <div className="text-right shrink-0">
+        <div className="font-label text-[11px] text-[#bf81ff]">{s.tx_hash.slice(0, 10)}… ↗</div>
+      </div>
+    </a>
   );
 }

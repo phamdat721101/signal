@@ -422,15 +422,25 @@ export default function Feed() {
         card={summonCard}
         open={!!summonCard}
         onClose={() => setSummonCard(null)}
-        onSuccess={(txHash, txChainId) => {
+        onSuccess={async (txHash, txChainId) => {
           setSummonCard(null);
           setIndex(i => i + 1);
-          // Record LP tx for portfolio
+          // Record LP tx for portfolio — awaited with one retry on transient
+          // failure. Backend is idempotent on tx_hash UNIQUE (db.py:285), so
+          // a retry can never double-insert. Worst case both fail: explorer
+          // link still opens; user can re-summon to backfill.
           if (evmAddress && current) {
-            fetch(`${config.backendUrl}/api/lp/record`, {
+            const post = () => fetch(`${config.backendUrl}/api/lp/record`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ address: evmAddress, card_id: current.id, tx_hash: txHash, action: 'summon', chain_id: txChainId }),
-            }).catch(() => {});
+            });
+            try {
+              const r = await post();
+              if (!r.ok) throw new Error(`record failed: ${r.status}`);
+            } catch (e) {
+              console.warn('[summon] /api/lp/record retry:', e);
+              try { await post(); } catch { /* swallow — backend reconciles on next user action */ }
+            }
           }
           // Open explorer
           const url = txChainId === 1952
@@ -439,6 +449,7 @@ export default function Feed() {
           window.open(url, '_blank');
           queryClient.invalidateQueries({ queryKey: ['cards'] });
           queryClient.invalidateQueries({ queryKey: ['played-cards'] });
+          queryClient.invalidateQueries({ queryKey: ['lp-history'] });
         }}
       />
       {/* APE Choice: Predict vs Summon LP */}

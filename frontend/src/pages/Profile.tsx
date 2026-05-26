@@ -1,6 +1,6 @@
 // import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
-import { config, shareToX, explorerTxUrl, normalizeAddress } from '../config';
+import { config, shareToX, explorerTxUrl, normalizeAddress, isXLayer } from '../config';
 import { useSession } from '../hooks/useSession';
 import { useIUSDBalance } from '../hooks/useIUSDBalance';
 import { useConviction } from '../hooks/useConviction';
@@ -185,7 +185,7 @@ export default function Profile() {
           <div className="text-center py-2">
             <div className="font-label text-[11px] text-[#adaaaa] mb-1">No convictions yet</div>
             <div className="font-label text-[10px] text-[#494847]">
-              Your next APE/FADE swipe writes a verifiable, slashing-grade conviction onto Initia EVM.
+              Your next swipe writes a verifiable, slashing-grade conviction on-chain.
             </div>
           </div>
         )}
@@ -210,7 +210,9 @@ export default function Profile() {
         </div>
       )}
 
-      {/* Wallet */}
+      {/* Wallet — Initia-only (faucet + SessionVault). Hidden on X Layer
+          where Summon LP pays per-card from the connected wallet directly. */}
+      {!isXLayer(chainId) && (
       <div>
         <div className="flex justify-between items-center mb-2">
           <h2 className="font-headline font-bold text-sm text-white">Wallet</h2>
@@ -288,6 +290,7 @@ export default function Profile() {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
