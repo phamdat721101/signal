@@ -1,4 +1,4 @@
-const CACHE = 'ape-v6';
+const CACHE = 'ape-v7';
 const STATIC = ['/manifest.json', '/favicon.svg', '/icons.svg', '/app.png'];
 const FEATURED_GEM_URL = 'https://ai.overguild.com/api/featured-gem';
 

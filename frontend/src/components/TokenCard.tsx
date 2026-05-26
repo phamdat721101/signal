@@ -137,11 +137,15 @@ export default function TokenCard({ card, onApe, onFade, isTop = false }: { card
   const def = 100 - (card.risk_score ?? 50);
 
   // Live ticker for visible gem only — keeps API cost flat regardless of DAU.
+  // Flap-source cards route through /api/ticker-flap (Portal.getTokenV7) since
+  // they may not have a DEX pool yet pre-graduation.
   const tickerOn = isTop && card.card_type === 'gem' && !!card.token_address;
-  const ticker = useTicker(tickerOn ? [card.token_address!] : [], tickerOn);
+  const tickerSource: 'dex' | 'flap' = card.source === 'flap' ? 'flap' : 'dex';
+  const ticker = useTicker(tickerOn ? [card.token_address!] : [], tickerOn, tickerSource);
   const live = card.token_address ? ticker.data?.[card.token_address.toLowerCase()] : undefined;
   const livePrice = live?.price_usd ?? card.price;
   const liveChange = live?.change_24h ?? card.price_change_24h;
+  const liveProgress = live?.progress;  // Flap-only, 0-1
   const pctColor = liveChange >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]';
   const glowClass = card.rarity === 'legendary'
     ? vCfg.glow.replace('0.3)', '0.6)')
@@ -172,7 +176,12 @@ export default function TokenCard({ card, onApe, onFade, isTop = false }: { card
             {/* Level stars */}
             <div className="flex items-center gap-0.5">
               {isCardTradeable(card) && <span className="text-[9px] bg-[#bf81ff]/15 text-[#bf81ff] font-bold px-1.5 py-0.5 rounded">🔮 LP</span>}
-              {card.card_type === 'gem' && <span className="text-[9px] bg-[#ffd700]/15 text-[#ffd700] font-bold px-1.5 py-0.5 rounded">💎 GEM</span>}
+              {card.card_type === 'gem' && card.source !== 'flap' && <span className="text-[9px] bg-[#ffd700]/15 text-[#ffd700] font-bold px-1.5 py-0.5 rounded">💎 GEM</span>}
+              {card.source === 'flap' && (
+                <span className="text-[9px] bg-[#bf81ff]/15 text-[#bf81ff] font-bold px-1.5 py-0.5 rounded">
+                  🦋 FLAP {liveProgress != null ? `${Math.round(liveProgress * 100)}%` : ''}
+                </span>
+              )}
               {rarityBadge && <span className="text-sm mr-0.5 ml-1">{rarityBadge}</span>}
               {Array.from({ length: stars }).map((_, i) => (
                 <span key={i} className="text-[10px] text-yellow-400">★</span>

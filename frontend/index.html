@@ -89,8 +89,10 @@
               if (label) sigHtml += '<div>' + esc(s.emoji || '•') + ' ' + label + '</div>';
             }
           }
+          var isFlap = g.source === 'flap';
+          var badgeText = isFlap ? ('🦋 ' + (g.hook || 'Flap Gem')) : (g.hook || '💎 Hidden Gem');
           card.innerHTML =
-            '<div class="badge">' + esc(g.hook || '💎 Hidden Gem') + '</div>' +
+            '<div class="badge"' + (isFlap ? ' style="color:#bf81ff"' : '') + '>' + esc(badgeText) + '</div>' +
             '<div class="symbol">$' + esc(g.token_symbol) + '</div>' +
             '<div class="name">' + esc(g.token_name) + '</div>' +
             '<div class="price">' + fmtPrice(g.price) + '</div>' +

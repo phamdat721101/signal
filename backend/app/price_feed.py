@@ -128,3 +128,32 @@ def get_bulk_by_address(addresses: list[str]) -> dict[str, dict]:
         except (TypeError, ValueError):
             continue
     return by_addr
+
+
+# ── OKB/USD oracle (used by Flap ticker for OKB-denominated tokens) ─────────
+_okb_cache: tuple[float, float] = (0.0, 0.0)  # (ts, price)
+_OKB_TTL = 60.0
+_OKB_FALLBACK_USD = 50.0  # rough; only hits if oracle has never succeeded
+
+
+def get_okb_usd() -> float:
+    """OKB/USD with 60s in-process cache and last-known fallback.
+
+    Reuses get_bulk_by_address (DEXScreener) on the X-Layer OKB address.
+    Survives transient oracle outages by holding the last known good value.
+    """
+    global _okb_cache
+    now = time.time()
+    if _okb_cache[0] and now - _okb_cache[0] < _OKB_TTL and _okb_cache[1] > 0:
+        return _okb_cache[1]
+    from app.config import get_settings
+    okb_addr = get_settings().okb_address_xlayer or "0xF739a8aFfd096964A899B76F05a15293EDE0d0Ac"
+    try:
+        data = get_bulk_by_address([okb_addr])
+        entry = data.get(okb_addr.lower())
+        if entry and entry.get("price_usd", 0) > 0:
+            _okb_cache = (now, float(entry["price_usd"]))
+            return _okb_cache[1]
+    except Exception as e:
+        logger.warning(f"OKB price oracle failed: {e}")
+    return _okb_cache[1] or _OKB_FALLBACK_USD
