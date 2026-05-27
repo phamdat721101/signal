@@ -14,16 +14,14 @@ import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {MockOKB} from "../src/MockOKB.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
 import {SignalCardNFT} from "../src/SignalCardNFT.sol";
-import {SignalCardHook} from "../src/SignalCardHook.sol";
-import {SignalCardRouter} from "../src/SignalCardRouter.sol";
+import {SignalCardHookV2} from "../src/SignalCardHookV2.sol";
 
 contract HookTest is Test {
     PoolManager poolManager;
     MockOKB okb;
     MockUSDC usdc;
     SignalCardNFT nft;
-    SignalCardHook hook;
-    SignalCardRouter router;
+    SignalCardHookV2 hook;
     PoolKey poolKey;
 
     address deployer = address(this);
@@ -46,14 +44,18 @@ contract HookTest is Test {
         nft = new SignalCardNFT(deployer, deployer);
 
         // Deploy hook at correct address using deployCodeTo cheatcode
-        uint160 flags = uint160(Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG);
+        // V2 flags: BEFORE_ADD_LIQUIDITY | BEFORE_REMOVE_LIQUIDITY | BEFORE_SWAP | AFTER_SWAP
+        uint160 flags = uint160(
+            Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG |
+            Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
+        );
         address hookAddr = address(flags); // simplified for local test
         deployCodeTo(
-            "SignalCardHook.sol",
+            "SignalCardHookV2.sol",
             abi.encode(address(poolManager), address(nft)),
             hookAddr
         );
-        hook = SignalCardHook(hookAddr);
+        hook = SignalCardHookV2(hookAddr);
         nft.setHook(address(hook));
 
         // Sort currencies
@@ -88,7 +90,7 @@ contract HookTest is Test {
 
         // Attempt to add liquidity with played card should revert
         bytes memory hookData = abi.encode(uint256(1));
-        vm.expectRevert(SignalCardHook.CardAlreadyPlayed.selector);
+        vm.expectRevert(SignalCardHookV2.CardAlreadyPlayed.selector);
         _simulateBeforeAddLiquidity(hookData, TICK_LOWER, TICK_UPPER);
     }
 
@@ -99,7 +101,7 @@ contract HookTest is Test {
         nft.mint(2, alice, c);
 
         bytes memory hookData = abi.encode(uint256(2));
-        vm.expectRevert(SignalCardHook.CardExpired.selector);
+        vm.expectRevert(SignalCardHookV2.CardExpired.selector);
         _simulateBeforeAddLiquidity(hookData, TICK_LOWER, TICK_UPPER);
     }
 
@@ -109,7 +111,7 @@ contract HookTest is Test {
         // Alice is tx.origin but doesn't own card 3
         bytes memory hookData = abi.encode(uint256(3));
         vm.prank(alice, alice); // sets both msg.sender and tx.origin
-        vm.expectRevert(SignalCardHook.NotCardOwner.selector);
+        vm.expectRevert(SignalCardHookV2.NotCardOwner.selector);
         _simulateBeforeAddLiquidity(hookData, TICK_LOWER, TICK_UPPER);
     }
 
@@ -118,7 +120,7 @@ contract HookTest is Test {
 
         bytes memory hookData = abi.encode(uint256(4));
         vm.prank(alice, alice);
-        vm.expectRevert(SignalCardHook.TickMismatch.selector);
+        vm.expectRevert(SignalCardHookV2.TickMismatch.selector);
         // Wrong ticks
         _simulateBeforeAddLiquidity(hookData, TICK_LOWER + 60, TICK_UPPER);
     }

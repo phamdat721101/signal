@@ -1,580 +1,271 @@
-# Initia Signal (Ape or Fade)
+# Kinetic — Card-Summon DeFi on Uniswap v4
 
-Open-source AI-powered on-chain trading signal kit with **escrow-backed accountability** — pay for signals via escrow, get refunded if wrong.
+> **Swipe a card. Summon a monster. Open a real liquidity position.**
+>
+> The first product where a non-DeFi user opens a concentrated-liquidity position by performing a card-game gesture.
 
-Generate market signals from real price data, store them immutably on-chain, execute with one-click auto-signing, and access premium intelligence reports through Trustless Work escrow.
-
----
-
-## How It Works
-
-```
-┌─────────────────────────────────────────────────────┐
-│  Price Feeds (Slinky Oracle / CoinGecko OHLC)       │
-└──────────────────────┬──────────────────────────────┘
-                       ▼
-┌──────────────────────────────────────────────────────┐
-│  AI Signal Engine (Python)                           │
-│  • Multi-agent debate (Technical + Sentiment + Fund) │
-│  • EMA/RSI crossover + SoSoValue institutional data  │
-│  • Confidence scoring + risk assessment              │
-│  • Runs every 10 minutes via scheduler               │
-└──────────────────────┬───────────────────────────────┘
-                       ▼
-┌──────────────────────────────────────────────────────┐
-│  SignalRegistry Contract (Solidity / EVM)             │
-│  • createSignal() — anyone can create                │
-│  • resolveSignal() — owner resolves with exit price  │
-│  • On-chain: asset, direction, confidence, prices    │
-└──────────────────────┬───────────────────────────────┘
-                       ▼
-┌──────────────────────────────────────────────────────┐
-│  Signal Marketplace (Trustless Work / Chain)        │
-│  • Pay USDC to escrow → access premium signals       │
-│  • Signal correct → provider paid automatically      │
-│  • Signal wrong → user refunded automatically        │
-│  • Premium reports via escrow-gated access           │
-└──────────────────────┬───────────────────────────────┘
-                       ▼
-┌──────────────────────────────────────────────────────┐
-│  Frontend (React + Privy + Freighter)                │
-│  • Tinder-style swipe cards (APE / FADE)             │
-│  • One-click execute via auto-signing                │
-│  • Premium report pop-up with market intelligence    │
-│  • Portfolio P&L + Trader Leaderboard                │
-└──────────────────────────────────────────────────────┘
-```
+[![Hook the Future](https://img.shields.io/badge/Hook%20the%20Future-X%20Layer%20×%20Uniswap%20×%20Flap-blueviolet)](https://web3.okx.com/xlayer/build-x-hackathon/hook)
+[![Accuracy](https://img.shields.io/badge/Track%20Record-60.8%25%20across%205%2C816%2B%20predictions-brightgreen)](#track-record)
+[![x402](https://img.shields.io/badge/Agent%20API-x402%20Pay--per--call-blue)](https://ai.overguild.com/agent-api/api/v2/agent/decisions)
 
 ---
 
-## Signal Marketplace — Escrow-Backed Premium Access
+## The Insight
 
-### The Problem
+DeFi has a UX cliff. Concentrated liquidity (Uniswap v3/v4) is 10× more capital-efficient than passive pools — but requires users to pick `tickLower`, `tickUpper`, fee tier, and direction. **99% of crypto users never open a v3/v4 LP.**
 
-AI trading signals have zero accountability. Providers collect fees upfront and face no consequences when wrong. Users have no refund mechanism.
+Meanwhile, trading-card games ship the tightest UX primitive in software: **play a card → effect happens**. One gesture, zero configuration.
 
-### The Solution
+Kinetic bridges the gap: **AI-curated cards ARE the LP recipes. The v4 hook enforces the recipe. The user just plays the card.**
 
-**Kinetic Signal Marketplace** uses [Trustless Work](https://trustlesswork.com) escrow on Stellar to create an **accountability layer**:
+---
 
-- Users pay USDC into an escrow to access premium signals
-- Funds are only released to the provider if the signal is profitable
-- If the signal fails, the user gets an automatic refund
-- All outcomes are verifiable on-chain
+## How It Works — Three Card Types, One Swipe
 
-### How Escrow Payment Works
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                     │
+│   🃏 CARD FEED (Tinder-style swipe)                                 │
+│                                                                     │
+│   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐            │
+│   │ 💎 GEM HUNT  │  │ 🔮 PREDICT   │  │ 🐉 SUMMON LP │            │
+│   │              │  │              │  │              │            │
+│   │ Hidden gems  │  │ 24h price    │  │ Open a real  │            │
+│   │ from Flap +  │  │ prediction   │  │ Uniswap v4   │            │
+│   │ DexScreener  │  │ resolved by  │  │ LP position  │            │
+│   │              │  │ oracle       │  │ via hook     │            │
+│   │ Swipe APE =  │  │ Swipe APE =  │  │ Swipe APE =  │            │
+│   │ "I'm early"  │  │ "I'm right"  │  │ "I summon"   │            │
+│   └──────────────┘  └──────────────┘  └──────────────┘            │
+│                                                                     │
+│   Every swipe is an on-chain conviction.                            │
+│   Every card resolves. Every outcome is verifiable.                 │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Card Type 1 — 💎 Gem Hunt (Flap + DexScreener)
+
+AI scans Flap-launched tokens on X Layer + DexScreener trending pairs. Scores by bonding-curve progress, liquidity depth, holder distribution, and momentum. Surfaces as "Gem Cards" in the feed.
+
+**Swipe APE** = "I believe this gem will 3× before it rugs."
+**Resolution** = 24h later, price oracle checks. Right → reputation up. Wrong → streak resets.
+
+### Card Type 2 — 🔮 Prediction (AI Multi-Agent Debate)
+
+Three AI agents debate (Technical + Sentiment + Fundamental) using SoSoValue institutional data, ETF flows, macro events, and on-chain metrics. Produces a verdict: APE or FADE, with entry/target/stop.
+
+**Swipe APE** = "I agree with the AI's bullish call."
+**Resolution** = 24h later, Slinky oracle resolves. 60.8% accuracy across 5,816+ resolved predictions.
+
+### Card Type 3 — 🐉 Summon LP (Uniswap v4 Hook)
+
+The card's `entry/target/stop` map deterministically to v4 ticks. Swiping APE **opens a real concentrated-liquidity position** on X Layer's Uniswap v4 pool. The hook enforces the recipe. The user earns real swap fees.
+
+**Swipe APE** = "Summon this monster. I earn fees while the price trades in range."
+**Resolution** = Card expires in 24h. User can close early or let it ride.
+
+---
+
+## Uniswap v4 — The Hook That Makes Cards Financial
+
+This is the core innovation. Three contracts turn AI signal cards into the **only valid recipe** for opening an LP position:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
-│  1. USER browses Signal Marketplace                             │
-│     └── Sees providers with win rates, avg PnL, track record   │
+│  SignalCardNFT (ERC-721)                                        │
+│  ├── tokenSymbol: "BTC"                                         │
+│  ├── stopTickHint: -120    ← pre-computed by AI engine          │
+│  ├── targetTickHint: 120   ← maps to v4 tick range             │
+│  ├── riskScore: 58         ← drives dynamic fee (30+58 = 88bp) │
+│  ├── rarity: Rare          ← visual tier + fee multiplier       │
+│  ├── isBull: true          ← APE direction                      │
+│  ├── expiresAt: +24h                                            │
+│  └── played: false → true  ← flips once on summon              │
 │                                                                 │
-│  2. USER clicks "Back Signal — $5 USDC"                         │
-│     └── Backend deploys escrow (platform signs server-side)     │
-│     └── Escrow contract created on Stellar testnet              │
-│     └── tx_hash returned → clickable Stellar Explorer link      │
+│  SignalCardHookV2 (Uniswap v4 Hook)                             │
+│  ├── beforeAddLiquidity:   enforce card recipe (ticks match)    │
+│  ├── beforeRemoveLiquidity: verify card owner                   │
+│  ├── beforeSwap:           return dynamic fee = (30+risk)×100   │
+│  └── afterSwap:            track swap count per pool            │
 │                                                                 │
-│  3. USER funds escrow with Freighter wallet                     │
-│     └── USDC locked in non-custodial Stellar escrow             │
-│     └── Signal details unlocked (entry, target, stop, analysis) │
-│                                                                 │
-│  4. 24 HOURS PASS — Auto-resolution                             │
-│     └── Backend fetches current price                           │
-│     └── Compares to entry price + direction                     │
-│                                                                 │
-│  5a. SIGNAL CORRECT → Provider paid (90%), platform fee (10%)   │
-│  5b. SIGNAL WRONG → User refunded automatically                 │
-│                                                                 │
-│  6. DISPUTE (optional) → Admin reviews and resolves             │
+│  SignalCardRouterV2 (User-facing)                               │
+│  └── playCard(cardId) → unlock → modifyLiquidity → settle      │
+│      User never sees a tick. Just plays the card.               │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Premium Intelligence Reports
+### Why This Is Novel (vs. every other v4 hook)
 
-Beyond individual signals, users can purchase **AI-generated market reports** via escrow:
-
-| Report Type | Price | What You Get |
-|-------------|-------|-------------|
-| 🌐 Market Overview | $2 USDC | Top 5 signals, ETF flows, sentiment scores, macro events |
-| 🔬 Token Deep Dive | $5 USDC | Multi-agent debate analysis on specific token |
-| 💼 Portfolio Advisory | $10 USDC | Personalized allocation + risk assessment |
-
-**Report Purchase Flow:**
-
-```
-User clicks "$2 Market Overview"
-    │
-    ├── 1. Backend deploys escrow on Stellar (platform signs)
-    │      → Returns tx_hash + Stellar Explorer link ✓
-    │
-    ├── 2. User signs fund transaction with Freighter
-    │      → USDC locked in escrow ✓
-    │
-    └── 3. Report generated inline (AI engine)
-           → Pop-up modal with full market intelligence ✓
-           → Escrow milestone marked "delivered"
-           → Funds released to platform
-```
-
-### Trustless Work Integration
-
-| API Endpoint | Usage |
-|-------------|-------|
-| `POST /deployer/single-release` | Deploy escrow with milestones + roles |
-| `POST /helper/send-transaction` | Submit signed XDR to Stellar |
-| `POST /escrow/single-release/fund-escrow` | Get fund XDR for user to sign |
-| `POST /escrow/single-release/change-milestone-status` | Mark signal resolved |
-| `POST /escrow/single-release/release-funds` | Release to provider on success |
-
-### Escrow Configuration
-
-```json
-{
-  "type": "Single-Release",
-  "asset": "USDC on Stellar Testnet",
-  "milestone": "Signal resolves profitably within 24h",
-  "roles": {
-    "approver": "Platform (auto-approves via oracle)",
-    "serviceProvider": "Signal provider",
-    "disputeResolver": "Platform admin",
-    "receiver": "Signal provider"
-  },
-  "platformFee": "10%"
-}
-```
-
-### Dual-Chain Architecture
-
-| Chain | Wallet | Purpose |
-|-------|--------|---------|
-| **Initia (EVM)** | Interwoven Kit embedded wallet | Swipe cards, on-chain conviction, AI agent trading |
-| **Stellar (Soroban)** | Freighter browser extension | Fund escrows, receive USDC payouts, view escrow status |
-
----
-
-## SoSoValue Integration
-
-Deeply integrates [SoSoValue](https://sosovalue.com) as the institutional intelligence layer:
-
-```
-SoSoValue API (9 modules, smart-cached, 18 req/min)
-    │
-    ├── ETF Flows ──────→ ETF_FLOW + ETF_MOMENTUM signals
-    ├── Macro Events ───→ MACRO_CATALYST signals + Insight Cards
-    ├── SSI Indices ────→ Index Cards (DeFi, AI, Meme, L1, L2...)
-    ├── Sector Spotlight → SECTOR_ROTATION signals
-    ├── BTC Treasuries ─→ Whale Cards with accumulation tracking
-    ├── Analysis Reports → RESEARCH_CONVICTION scoring
-    └── Full Context ───→ Multi-Agent Sentiment + Divergence detection
-```
-
-| Signal | Trigger |
-|--------|---------|
-| `ETF_FLOW` | BTC/ETH ETF net flow > $50M |
-| `ETF_MOMENTUM` | 2-3 day inflow/outflow streak |
-| `MACRO_CATALYST` | Scheduled macro event today |
-| `SECTOR_ROTATION` | Sector 24h change > ±3% |
-| `RESEARCH_CONVICTION` | Analysis keywords scoring |
-| `SMART_MONEY_DIVERGENCE` | ETF flow contradicts price action |
-
----
-
-## AI Agent API (x402 Pay-per-Request)
-
-Pay-per-call market intelligence for AI agents. **No API keys. No accounts. Just USDC on Base.**
-
-| | |
+| Other hooks | Kinetic |
 |---|---|
-| **Live base URL** | `https://ai.overguild.com/agent-api/api/v2/agent/*` |
-| **Network** | Base mainnet (`eip155:8453`) |
-| **Asset** | USDC |
-| **Receiver** | `0x100690a32B562fd45e685BC2E63bbfF566d452db` |
-| **Track record** | **60.8% accuracy** across **5,816+ on-chain resolved predictions** |
-| **Discovery** | [CDP Bazaar](https://docs.cdp.coinbase.com/x402/bazaar) (auto-indexed after first settle) |
+| Dynamic fee based on volatility | Dynamic fee based on **AI risk score per card** |
+| Limit orders (port v3 pattern) | **New asset class**: NFT-as-LP-recipe |
+| MEV protection (backend-only) | **Consumer UX**: card-game gesture opens LP |
+| TWAMM (prior art, Paradigm 2021) | **Category creation**: Card-Summon DeFi |
 
-### Paid Endpoints
+The hook doesn't just customize a number — it encodes an entire AI thesis (direction, range, fee, expiry, rarity) into a single user gesture.
 
-| Endpoint | Price | Description |
-|----------|-------|-------------|
-| `GET /api/v2/agent/decisions` | $0.001 | APE/FADE verdicts with confidence, entry/target/stop, reasoning, per-token track record |
-| `GET /api/v2/agent/prices` | $0.001 | Real-time aggregated prices (CoinGecko + DexScreener) with source attribution |
-| `GET /api/v2/agent/pools` | $0.005 | DeFi LP advisory ranked by APY, TVL, IL risk |
-| `GET /api/v2/agent/track-record` | $0.01 | Historical accuracy + per-token win rates |
-| `GET /api/v2/agent/context` | $0.01 | Macro context: BTC/ETH ETF flows, macro events, sector rotation, oracle mood |
+### Deployed on X Layer (Real Uniswap v4)
 
-Full base URL is `https://ai.overguild.com/agent-api` — e.g. `https://ai.overguild.com/agent-api/api/v2/agent/decisions?limit=5`.
+| Contract | Address (testnet 1952) | Explorer |
+|---|---|---|
+| PoolManager (real v4-core) | `0xD6486d23c8906f30Cc4dF92722E2749E8Ddc1286` | [View ↗](https://www.okx.com/web3/explorer/xlayer-test/address/0xD6486d23c8906f30Cc4dF92722E2749E8Ddc1286) |
+| SignalCardNFT | `0xb8482B726001Aa7451A576fF6407593184fEDD96` | [View ↗](https://www.okx.com/web3/explorer/xlayer-test/address/0xb8482B726001Aa7451A576fF6407593184fEDD96) |
+| SignalCardHookV2 | `0xa01b3450D9891074d78496133dB8952F17cb0AC0` | [View ↗](https://www.okx.com/web3/explorer/xlayer-test/address/0xa01b3450D9891074d78496133dB8952F17cb0AC0) |
+| SignalCardRouterV2 | `0x47b9b7eF7d91F11232f38533e0F00F06b01F8cE5` | [View ↗](https://www.okx.com/web3/explorer/xlayer-test/address/0x47b9b7eF7d91F11232f38533e0F00F06b01F8cE5) |
+| MockOKB (test token) | `0xF739a8aFfd096964A899B76F05a15293EDE0d0Ac` | [View ↗](https://www.okx.com/web3/explorer/xlayer-test/address/0xF739a8aFfd096964A899B76F05a15293EDE0d0Ac) |
+| MockUSDC (test token) | `0x73BA01a4291aCccfaC2bad7470D6417643Ee9688` | [View ↗](https://www.okx.com/web3/explorer/xlayer-test/address/0x73BA01a4291aCccfaC2bad7470D6417643Ee9688) |
+| OKB/USDC Pool | `fee=DYNAMIC, tickSpacing=60, hooks=HookV2` | initialized ✓ |
 
-### Premium Report Endpoints (Stellar Escrow)
+> **Verify the hook flags:** `python3 -c "print(hex(int('0xa01b3450D9891074d78496133dB8952F17cb0AC0', 16) & 0x3FFF))"` → `0xac0` (BEFORE_ADD_LIQUIDITY | BEFORE_REMOVE_LIQUIDITY | BEFORE_SWAP | AFTER_SWAP)
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v2/agent/reports` | GET | List report types + pricing |
-| `/api/v2/agent/reports/purchase` | POST | Deploy escrow, returns tx_hash + explorer link |
-| `/api/v2/agent/reports/confirm` | POST | Fund escrow + generate report |
-| `/api/v2/agent/reports/{id}` | GET | Retrieve purchased report |
+---
 
-### How an Agent Pays (the x402 flow)
+## The 10-Second User Journey
 
 ```
-Agent ──── GET /api/v2/agent/decisions ───→  Signal Agent API
-      ←─── 402 Payment Required           ───
-           {accepts: [{network: eip155:8453, asset: USDC, amount: "1000",
-                       payTo: "0x1006..."}], extensions: {bazaar: {...}}}
-
-      ──── GET ... + x-payment: <signed-payload> ───→
-                                                       Signal Agent API
-                                                       │ verify via CDP
-                                                       │ deliver data
-                                                       │ settle in background
-      ←─── 200 OK + x-payment-response: <receipt> ────
-           {decisions: [...]}
+0s   Land on /feed → see a BTC card (Rare, 🐉, range 67k→71k)
+3s   Swipe right (APE)
+5s   "🔮 Summon BTC?" modal → confirm
+8s   Wallet signs → tx confirms
+10s  "🐉 Summoned! Earning fees while BTC trades 67k–71k."
 ```
 
-### Quickstart — TypeScript (canonical x402 SDK)
-
-```bash
-npm i x402-fetch viem
-```
-
-```ts
-import { wrapFetchWithPayment } from "x402-fetch";
-import { privateKeyToAccount } from "viem/accounts";
-
-const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
-const fetchWithPayment = wrapFetchWithPayment(fetch, account);
-
-const r = await fetchWithPayment(
-  "https://ai.overguild.com/agent-api/api/v2/agent/decisions?limit=5"
-);
-const { decisions } = await r.json();
-console.log(decisions[0]);
-// { token: "BTC", action: "APE", confidence: 85, entry: 67234.5,
-//   target: 68243.0, stop: 66225.0, reasoning: "...",
-//   track_record: { win_rate: 60.8, sample_size: 5816 } }
-```
-
-The wrapper handles 402 detection, payload signing, header attachment, and retry. Works in Node, Deno, and the browser.
-
-### Quickstart — curl (the manual 402 dance)
-
-```bash
-# 1. Hit the endpoint with no payment — you get the challenge
-curl -i https://ai.overguild.com/agent-api/api/v2/agent/decisions
-# HTTP/2 402
-# {"x402Version":2,
-#  "resource":{"url":"https://ai.overguild.com/agent-api/api/v2/agent/decisions",...},
-#  "accepts":[{"scheme":"exact","network":"eip155:8453","asset":"0x833...USDC",
-#              "amount":"1000","payTo":"0x1006..."}],
-#  "extensions":{"bazaar":{"info":{...},"schema":{...}}}}
-
-# 2. Sign a PaymentPayload, base64 it, send back as the x-payment header
-curl -H "x-payment: <base64-PaymentPayload>" \
-     https://ai.overguild.com/agent-api/api/v2/agent/decisions
-# HTTP/2 200
-# x-payment-response: <base64-SettleResponse>
-# {"decisions":[...]}
-```
-
-For the exact payload shape, see [x402.org](https://x402.org) or use the `x402-fetch` SDK to do it for you.
-
-### Dual Rail — Base (CDP) + Morph Rails
-
-The same paid endpoints are served on a **second, parallel rail** at
-`https://ai.overguild.com/morph-api/api/v2/agent/*` settled on
-[Morph Rails](https://docs.morph.network/docs/morph-rails/overview)
-(Hoodi testnet, `eip155:2910`). Agents pick the rail that suits them:
-
-| Rail | URL prefix | Network | Asset | Gas | Facilitator auth |
-|---|---|---|---|---|---|
-| **Base** | `/agent-api/*` | `eip155:8453` | USDC | ETH | CDP JWT |
-| **Morph** | `/morph-api/*` | `eip155:2910` (Hoodi) | HoodiTestToken | **USDC via AltFee** — no ETH required | Morph HMAC |
-
-Each Morph response carries:
-- `x-payment-rail: morph`
-- `x-morph-reference-key: SIGNAL-<12-hex>` — merchant order ID
-- `x-payment-response: <base64-SettleResponse>`
-
-Reconcile by Reference Key (free, no auth):
-```bash
-curl 'https://ai.overguild.com/morph-api/reconcile?key=SIGNAL-AB12CD34EF56'
-# → { tx_hash, network, payer, amount, status, settled_at, explorer_url }
-```
-
-Skill Hub manifest (free): `GET /.well-known/morph-skill.json`.
-
-```mermaid
-flowchart LR
-    A["Agent (USDC-only wallet)"] -->|GET /morph-api/...| C[Caddy]
-    C --> P[FastAPI :8002<br/>agent_main.py]
-    P -->|verify+settle HMAC| F[Morph Facilitator<br/>morph-rails.morph.network/x402]
-    F -->|on-chain settle| S[Morph Hoodi sequencer<br/>AltFee deducts gas in USDC]
-    P -->|x-morph-reference-key| A
-    P -. ai.overguild.com/.well-known/morph-skill.json .-> SH[Morph Skill Hub]
-```
-
-Deploy guide: [`docs/MORPH-DEPLOY.md`](docs/MORPH-DEPLOY.md).
-
-### Discover Through Bazaar
-
-After the first paid call settles through the CDP Facilitator, this service is automatically indexed in the [CDP Bazaar](https://docs.cdp.coinbase.com/x402/bazaar) — no separate registration step.
-
-```bash
-# Semantic search (free, no auth)
-curl 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/search?query=trading+signals'
-
-# Look up our merchant directly
-curl 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/merchant?payTo=0x100690a32B562fd45e685BC2E63bbfF566d452db'
-
-# Browse the full catalog
-curl 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=20'
-```
-
-For agent-native discovery, the Bazaar exposes an MCP server:
-
-```
-https://api.cdp.coinbase.com/platform/v2/x402/discovery/mcp
-  search_resources({query: "AI trading"})    → ranked list of paid endpoints
-  proxy_tool_call({toolName: "decisions"})   → call with payment automatic
-```
-
-See the Bazaar [MCP guide](https://docs.cdp.coinbase.com/x402/bazaar#bazaar-mcp-server).
-
-### Response Schema
-
-```json
-{
-  "decisions": [
-    {
-      "token": "BTC",
-      "action": "APE",
-      "confidence": 85,
-      "entry": 67234.5,
-      "target": 68243.0,
-      "stop": 66225.0,
-      "reasoning": "ETF 3-day inflow streak ($450M) + bullish divergence",
-      "rarity": "rare",
-      "track_record": { "win_rate": 60.8, "sample_size": 5816 }
-    }
-  ],
-  "total": 1
-}
-```
-
-### Premium Report Response
-
-```json
-{
-  "status": "delivered",
-  "escrow_id": 7,
-  "fund_tx_hash": "b8a2bdc1deded5d12e900317725a94df...",
-  "fund_explorer_url": "https://stellar.expert/explorer/testnet/tx/b8a2bdc1...",
-  "report": {
-    "type": "market_overview",
-    "market_summary": {
-      "btc_sentiment": 72,
-      "btc_direction": "bullish",
-      "eth_sentiment": 45,
-      "eth_direction": "neutral"
-    },
-    "etf_flows": {
-      "btc_net_flow": 186026106,
-      "eth_net_flow": 67847011
-    },
-    "macro_events": ["FOMC Meeting", "Core PCE Price Index"],
-    "top_signals": [
-      {
-        "token": "BTC",
-        "direction": "APE",
-        "confidence": 85,
-        "entry": 67234.5,
-        "target": 69500.0,
-        "stop": 65800.0,
-        "reasoning": "ETF inflow streak + breakout above 200 EMA"
-      }
-    ],
-    "risk_level": "medium"
-  }
-}
-```
-
-### Free Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/health` | Service health check |
-| `GET /SKILL.md` | Agent capability discovery |
-| `GET /api/v2/agent/reports` | Report types + pricing (free to browse) |
+**Zero DeFi vocabulary.** No ticks. No fee tiers. No sqrtPriceX96. Just cards.
 
 ---
 
 ## Architecture
 
 ```
-contracts/   → Foundry (Solidity) — SignalRegistry, SessionVault, ConvictionEngine
-backend/     → Python FastAPI — AI signal engine + REST API + Trustless Work client
-frontend/    → Vite + React + TailwindCSS — Trading dashboard + Marketplace
+contracts/   Foundry — SignalCardHookV2 + Router + NFT (X Layer v4)
+             + SignalRegistry, ConvictionEngine, ProofOfAlpha (Initia EVM)
+backend/     Python FastAPI — AI signal engine + card pipeline + x402 agent API
+frontend/    Vite + React 19 — Tinder-style swipe + SummonRitual + CardHand
 ```
 
-### Backend Process Model (VPS)
+### Backend — Card Pipeline (5 stages)
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  VPS (Single Machine)                                │
-│                                                      │
-│  Process 1: uvicorn (API)                            │
-│  • All endpoints (signals, cards, reports, escrow)   │
-│  • Async I/O only — zero background threads          │
-│  • Report generation inline (max 30s)                │
-│                                                      │
-│  Process 2: scheduler_worker                         │
-│  • Card generation (10min)                           │
-│  • Position monitoring (10min)                       │
-│  • Escrow resolution (30min)                         │
-│  • Report retry (5min)                               │
-│  • Sentiment + news refresh (10min)                  │
-│                                                      │
-│  Caddy: SSL + reverse proxy                          │
-└─────────────────────────────────────────────────────┘
+Harvest → Analyze → Narrate → Visual → Assemble
+   │         │         │         │         │
+   ▼         ▼         ▼         ▼         ▼
+DexScreener  EMA/RSI   AI copy   Rarity    Feed card
+CoinGecko    SoSoValue  engine   + ticks   ready
+Flap Portal  Sentiment           + risk
+GoPlus       ETF flows
 ```
+
+### Data Sources
+
+| Source | What it feeds |
+|---|---|
+| **Flap Portal** (X Layer) | Gem cards — bonding curve progress, tax rate, holder count |
+| **DexScreener** | Trending pairs, liquidity depth, volume spikes |
+| **SoSoValue** | ETF flows, macro events, sector indices, BTC treasuries |
+| **CoinGecko** | OHLC prices, market caps |
+| **CryptoPanic** | News sentiment |
+| **Slinky Oracle** | On-chain price resolution (Initia) |
+
+---
+
+## Track Record
+
+| Metric | Value | Verifier |
+|---|---|---|
+| Resolved predictions | **5,816+** | `cast call ConvictionEngine.getConvictionCount()` on Initia evm-1 |
+| Accuracy | **60.8%** | resolved-correct / resolved-total |
+| Active swipes | **1,025+** | `signal_swipes` table |
+| Paid x402 routes | **8** | `GET /agent-api/api/v2/agent/decisions` → 402 |
+| Cards generated | **20,076+** | `cards` table |
+
+---
+
+## AI Agent API (x402 Pay-per-Request)
+
+AI agents pay USDC per call. No API keys. No accounts.
+
+```bash
+# Hit the endpoint → get a 402 challenge
+curl -i https://ai.overguild.com/agent-api/api/v2/agent/decisions
+
+# Sign payment → get signals
+curl -H "x-payment: <signed-payload>" \
+     https://ai.overguild.com/agent-api/api/v2/agent/decisions
+# → { decisions: [{ token: "BTC", action: "APE", confidence: 85, ... }] }
+```
+
+| Endpoint | Price | What |
+|---|---|---|
+| `/decisions` | $0.001 | APE/FADE verdicts + entry/target/stop |
+| `/prices` | $0.001 | Aggregated prices |
+| `/pools` | $0.005 | DeFi LP advisory |
+| `/track-record` | $0.01 | Historical accuracy |
+| `/context` | $0.01 | ETF flows, macro, sector rotation |
+
+---
+
+## Quick Start
+
+```bash
+# Full stack (one command)
+./start.sh    # Backend :8001 + Frontend :5173
+
+# Contracts only
+cd contracts && forge build --via-ir && forge test --via-ir
+
+# Deploy to X Layer testnet (real Uniswap v4)
+cd contracts
+PRIVATE_KEY=0x… \
+MOCK_OKB=0xF739a8aFfd096964A899B76F05a15293EDE0d0Ac \
+MOCK_USDC=0x73BA01a4291aCccfaC2bad7470D6417643Ee9688 \
+forge script script/04_DeployRealV4.s.sol --rpc-url xlayer_testnet --broadcast --via-ir
+
+# Sync env files from deployment JSON (single source of truth)
+node scripts/sync-deployments.mjs
+```
+
+---
+
+## Why This Wins (Gstack)
+
+| Layer | What Kinetic has |
+|---|---|
+| **Insight** | "Cards ARE LP recipes" — a non-DeFi user opens concentrated liquidity via a card-game gesture. Nobody else ships this. |
+| **Mechanism** | Real Uniswap v4 hook on X Layer enforcing card recipes. 4 callbacks (add/remove/beforeSwap/afterSwap). Dynamic fee from AI risk score. |
+| **Distribution** | 5,816 resolved predictions as social proof. x402 Bazaar auto-indexed. OKX Wallet + Flap ecosystem reach. |
+| **Moat** | 12 months of prediction data no competitor can replicate. ConvictionEngine reputation primitive. Multi-rail agent payments (Base + Morph + X Layer). |
+
+---
 
 ## Tech Stack
 
 | Layer | Stack |
-|-------|-------|
-| Contract | Solidity ^0.8.24, Foundry, OpenZeppelin |
-| Backend | Python 3.11+, FastAPI, web3.py, APScheduler, stellar-sdk |
+|---|---|
+| Hook contracts | Solidity 0.8.26, Foundry, Uniswap v4-core, OpenZeppelin |
+| Backend | Python 3.11+, FastAPI, APScheduler, web3.py, stellar-sdk |
 | Frontend | React 19, TypeScript, Vite, TailwindCSS v4 |
-| Data | viem, TanStack Query, lightweight-charts |
-| Wallet (EVM) | Privy (embedded + social login) |
-| Wallet (Stellar) | Freighter (browser extension) |
-| Escrow | Trustless Work REST API (Soroban on Stellar) |
+| Wallet | OKX Wallet / MetaMask (X Layer) + InterwovenKit (Initia) |
 | AI | AWS Bedrock (Nova Lite), multi-agent debate |
+| Agent payments | x402 (USDC on Base), Morph Rails |
 | Database | PostgreSQL (Supabase) |
-| Agent Payment | x402 (USDC) |
+
+---
 
 ## Deployment
 
 | Service | URL |
-|---------|-----|
-| Backend API | `https://ai.overguild.com` |
-| Backend API (alt) | `https://47-130-193-211.sslip.io/signal-api` |
-| Stellar Explorer | `https://stellar.expert/explorer/testnet` |
-| Trustless Work API | `https://dev.api.trustlesswork.com` |
-
-## Initia-Native Features
-
-| Feature | How It's Used |
-|---------|---------------|
-| **Privy Wallet** | Embedded wallet + social login for trading |
-| **Auto-Signing** | One-click signal execution — no popups |
-| **Slinky Oracle** | Primary price feed for signal generation |
-| **On-chain Conviction** | User-signed trades stored on Initia EVM |
-
-## Explorer
-
-Stellar escrow transactions:
-```bash
-# View escrow contract
-https://stellar.expert/explorer/testnet/contract/<CONTRACT_ID>
-
-# View transaction
-https://stellar.expert/explorer/testnet/tx/<TX_HASH>
-```
-
-Initia on-chain signals:
-```bash
-https://scan.testnet.initia.xyz/initia-signal-1/evm-contracts/0xc178dcA82a0E1EBaCa5EB373E73C97cd5a0cfADd
-```
-
----
-
-### Key Differentiators
-
-1. **Real AI engine** — Multi-agent analysis with SoSoValue institutional data
-2. **Automated resolution** — No manual approval (oracle-based price verification)
-3. **Agent-to-agent commerce** — AI agents pay for signals via x402 + Stellar escrow
-4. **On-chain proof** — Both Initia (conviction) and Stellar (escrow) records
-5. **Data moat** — SoSoValue + CryptoPanic + DeFiLlama + DexScreener aggregation
-
----
-
-## Hook the Future — Uniswap v4 Card-Summon Hook on X Layer
-
-> **Hackathon:** [Hook the Future](https://web3.okx.com/xlayer/build-x-hackathon/hook) (X Layer × Uniswap × Flap)
-> **Track:** Application Hook (AI + DeFi)
-> **Chain:** X Layer testnet (chain 1952)
-
-### One-line summary
-
-AI-curated trading cards become Uniswap v4 LP recipes — humans summon by swiping, agents buy via x402 — same pool, same hook, two callers.
-
-### Architecture
-
-```mermaid
-flowchart LR
-    H[Human swipe APE] --> R[SignalCardRouter]
-    A[Agent x402 buy] --> R
-    R --> PM[PositionManager]
-    PM --> Hook[SignalCardHook<br/>beforeAddLiquidity: recipe enforcement<br/>beforeSwap: dynamic fee from risk_score]
-    Hook --> NFT[SignalCardNFT<br/>card recipe + played state]
-    PM --> Pool[MockOKB/MockUSDC pool<br/>fee=DYNAMIC · tickSpacing=60]
-```
-
-### Contracts (X Layer testnet)
-
-| Contract | Address | Verified |
-|---|---|---|
-| PoolManager | `TBD after deploy` | ✓ |
-| PositionManager | `TBD after deploy` | ✓ |
-| MockOKB | `TBD after deploy` | ✓ |
-| MockUSDC | `TBD after deploy` | ✓ |
-| SignalCardNFT | `TBD after deploy` | ✓ |
-| SignalCardHook | `TBD after deploy` | ✓ |
-| SignalCardRouter | `TBD after deploy` | ✓ |
-
-### Reproduce (one command)
-
-```bash
-cd contracts
-forge script script/01_DeployAll.s.sol --rpc-url xlayer_testnet --broadcast
-```
-
-### How it works
-
-1. **Backend generates AI-curated cards** from 5,816 on-chain resolved predictions (60.8% accuracy).
-2. **Each card is an ERC-721** with pre-computed v4 ticks (entry/target/stop → tickLower/tickUpper).
-3. **Human path:** user swipes APE on `/feed` → wallet signs `Router.playCard(cardId)` → hook validates recipe → LP opens.
-4. **Agent path:** agent calls `POST /api/cards/{id}/buy` → gets 402 → pays via x402 → receives card NFT → calls `Router.playCard` → same hook fires.
-5. **Dynamic fee:** `beforeSwap` returns fee = (30 + card.riskScore) bps. Higher-risk cards charge higher fees.
-
-### Partner tooling used
-
-- [Uniswap-AI](https://github.com/Uniswap/uniswap-ai) — `uniswap-v4-hooks` plugin for hook development, `pay-with-any-token` for agent payment flow
-- [X Layer](https://web3.okx.com/xlayer) — low-cost testnet deployment, OKB gas, OKLink explorer
-- [Flap](https://flap.sh) — v4 Hook ecosystem co-builder
-
-### Key innovation
-
-- **New asset type:** AI signal cards as LP recipes (not just dynamic fees or limit orders)
-- **New trading mechanism:** card-burn → LP open (you can't open this LP without a card)
-- **New use-case angle:** agentic-economy payment (x402) + retail-trading-card UX share the same Uniswap hook
-- **Bootstrapped v4 on X Layer testnet from zero** — PoolManager + PositionManager + pool + hook
-
-### Demo video
-
-[Link TBD — 1:30 showing both human and agent paths]
-
-### Social
-
-- X account: [TBD]
-- Tags: @XLayerOfficial @Uniswap @flapdotsh
-- Hashtags: #HookTheFuture #XLayer #UniswapV4
+|---|---|
+| Live app | `https://ai.overguild.com` |
+| Agent API (x402) | `https://ai.overguild.com/agent-api/api/v2/agent/*` |
+| X Layer Explorer | `https://www.okx.com/web3/explorer/xlayer-test` |
+| Contracts (testnet 1952) | See `contracts/deployments/1952.json` |
 
 ---
 
 ## License
 
 MIT
-

@@ -13,6 +13,7 @@ remappings = [
     "forge-std/=lib/forge-std/src/"
 ]
 solc_version = "0.8.26"
+fs_permissions = [{ access = "read-write", path = "./deployments" }]
 
 [fmt]
 line_length = 120
