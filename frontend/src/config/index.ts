@@ -54,6 +54,20 @@ export const xlayerMainnet = defineChain({
   },
 });
 
+// ── Somnia (Agentic L1 — on-chain AI agents) ────────────────────────────
+export const somniaTestnet = defineChain({
+  id: 50312,
+  name: 'Somnia Testnet',
+  nativeCurrency: { name: 'STT', symbol: 'STT', decimals: 18 },
+  rpcUrls: {
+    default: { http: ['https://api.infra.testnet.somnia.network'] },
+  },
+  blockExplorers: {
+    default: { name: 'Somnia Explorer', url: 'https://testnet.somnia.network' },
+  },
+  testnet: true,
+});
+
 export const config = {
   network,
   chain: network === 'testnet' ? testnetChain : localChain,

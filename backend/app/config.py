@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     okb_address_xlayer: str = ""
     usdc_address_xlayer: str = ""
     xlayer_pool_manager_address: str = ""
+    # ── Somnia testnet (chain 50312) ──
+    somnia_signal_registry_address: str = ""
+    somnia_conviction_engine_address: str = ""
+    somnia_oracle_adapter_address: str = ""
+    somnia_signal_agent_address: str = ""
+    somnia_session_vault_address: str = ""
+    somnia_mock_stt_address: str = ""
     # ── Flap on X-Layer (PRD: Flap Hidden Gems on X-Layer v1) ──
     flap_portal_xlayer_address: str = "0xb30D8c4216E1f21F27444D2FfAee3ad577808678"
     flap_taxed_fun_board_url: str = "https://xlayer.taxed.fun/v2/board"

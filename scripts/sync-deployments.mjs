@@ -26,47 +26,46 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Each target = one .env file with a list of (envKey ← jsonKey) mappings. */
-const TARGETS = [
-  {
-    path: "frontend/.env",
-    keys: {
-      VITE_XLAYER_CARD_NFT_ADDRESS:     "SignalCardNFT",
-      VITE_XLAYER_HOOK_ADDRESS:         "SignalCardHook",
-      VITE_XLAYER_ROUTER_ADDRESS:       "SignalCardRouter",
-      VITE_XLAYER_POOL_MANAGER_ADDRESS: "PoolManager",
-      VITE_XLAYER_OKB_ADDRESS:          "MockOKB",
-      VITE_XLAYER_USDC_ADDRESS:         "MockUSDC",
-    },
-  },
-  {
-    path: "backend/.env",
-    keys: {
-      SIGNAL_CARD_NFT_ADDRESS:    "SignalCardNFT",
-      SIGNAL_CARD_HOOK_ADDRESS:   "SignalCardHook",
-      SIGNAL_CARD_ROUTER_ADDRESS: "SignalCardRouter",
-      XLAYER_POOL_MANAGER_ADDRESS:"PoolManager",
-      OKB_ADDRESS_XLAYER:         "MockOKB",
-      USDC_ADDRESS_XLAYER:        "MockUSDC",
-    },
-  },
-];
+/** Each target = one .env file with a list of (envKey ← jsonKey) mappings, per chain. */
+const TARGETS_BY_CHAIN = {
+  1952: [
+    { path: "frontend/.env", keys: {
+      VITE_XLAYER_CARD_NFT_ADDRESS: "SignalCardNFT", VITE_XLAYER_HOOK_ADDRESS: "SignalCardHook",
+      VITE_XLAYER_ROUTER_ADDRESS: "SignalCardRouter", VITE_XLAYER_POOL_MANAGER_ADDRESS: "PoolManager",
+      VITE_XLAYER_OKB_ADDRESS: "MockOKB", VITE_XLAYER_USDC_ADDRESS: "MockUSDC",
+    }},
+    { path: "backend/.env", keys: {
+      SIGNAL_CARD_NFT_ADDRESS: "SignalCardNFT", SIGNAL_CARD_HOOK_ADDRESS: "SignalCardHook",
+      SIGNAL_CARD_ROUTER_ADDRESS: "SignalCardRouter", XLAYER_POOL_MANAGER_ADDRESS: "PoolManager",
+      OKB_ADDRESS_XLAYER: "MockOKB", USDC_ADDRESS_XLAYER: "MockUSDC",
+    }},
+  ],
+  50312: [
+    { path: "frontend/.env", keys: {
+      VITE_SOMNIA_SIGNAL_REGISTRY_ADDRESS: "SignalRegistry", VITE_SOMNIA_CONVICTION_ENGINE_ADDRESS: "ConvictionEngine",
+      VITE_SOMNIA_ORACLE_ADAPTER_ADDRESS: "SomniaOracleAdapter", VITE_SOMNIA_SIGNAL_AGENT_ADDRESS: "SomniaSignalAgent",
+      VITE_SOMNIA_SESSION_VAULT_ADDRESS: "SessionVault", VITE_SOMNIA_MOCK_STT_ADDRESS: "MockSTT",
+    }},
+    { path: "backend/.env", keys: {
+      SOMNIA_SIGNAL_REGISTRY_ADDRESS: "SignalRegistry", SOMNIA_CONVICTION_ENGINE_ADDRESS: "ConvictionEngine",
+      SOMNIA_ORACLE_ADAPTER_ADDRESS: "SomniaOracleAdapter", SOMNIA_SIGNAL_AGENT_ADDRESS: "SomniaSignalAgent",
+      SOMNIA_SESSION_VAULT_ADDRESS: "SessionVault", SOMNIA_MOCK_STT_ADDRESS: "MockSTT",
+    }},
+  ],
+};
 
 const isCheckMode = process.argv.includes("--check");
 const chainArgIdx = process.argv.indexOf("--chain");
 const chainArg    = chainArgIdx >= 0 ? parseInt(process.argv[chainArgIdx + 1], 10) : null;
 
-function pickActiveDeployment() {
+function pickActiveDeployments() {
   const dir = join(ROOT, "contracts/deployments");
-  if (!existsSync(dir)) return null;
+  if (!existsSync(dir)) return [];
   const jsons = readdirSync(dir)
     .filter(f => /^\d+\.json$/.test(f))
     .map(f => ({ chainId: parseInt(f, 10), path: join(dir, f) }));
-  if (jsons.length === 0) return null;
-  if (chainArg) return jsons.find(j => j.chainId === chainArg) || null;
-  if (jsons.length === 1) return jsons[0];
-  console.error(`Multiple chains found: ${jsons.map(j => j.chainId).join(", ")}. Pass --chain <id>.`);
-  process.exit(1);
+  if (chainArg) return jsons.filter(j => j.chainId === chainArg);
+  return jsons;
 }
 
 /** Replace existing matching lines; append any missing keys with a single header block. */
@@ -99,38 +98,45 @@ function mergeEnv(envText, kvs) {
 }
 
 function main() {
-  const active = pickActiveDeployment();
-  if (!active) {
-    const msg = "No deployments JSON found. Deploy first via 04_DeployRealV4.s.sol.";
+  const deployments = pickActiveDeployments();
+  if (deployments.length === 0) {
+    const msg = "No deployments JSON found. Deploy first.";
     if (isCheckMode) { console.log(msg); process.exit(0); }
     console.error(msg); process.exit(1);
   }
 
-  const data = JSON.parse(readFileSync(active.path, "utf8"));
-  console.log(`Active chain: ${active.chainId} (${active.path.split("/").slice(-2).join("/")})`);
-
   let anyDrift = false;
-  for (const target of TARGETS) {
-    const full = join(ROOT, target.path);
-    if (!existsSync(full)) {
-      console.warn(`  skip (not found): ${target.path}`);
+  for (const active of deployments) {
+    const data = JSON.parse(readFileSync(active.path, "utf8"));
+    console.log(`Chain ${active.chainId} (${active.path.split("/").slice(-2).join("/")})`);
+
+    const targets = TARGETS_BY_CHAIN[active.chainId];
+    if (!targets) {
+      console.warn(`  skip (no key mappings for chain ${active.chainId})`);
       continue;
     }
-    const kvs = Object.fromEntries(
-      Object.entries(target.keys)
-        .filter(([, jsonKey]) => data[jsonKey])
-        .map(([envKey, jsonKey]) => [envKey, data[jsonKey]])
-    );
-    const before = readFileSync(full, "utf8");
-    const { text, drift } = mergeEnv(before, kvs);
-    anyDrift = anyDrift || drift;
-    if (isCheckMode) {
-      console.log(`  ${drift ? "DRIFT" : "ok"}: ${target.path}`);
-    } else if (drift) {
-      writeFileSync(full, text, "utf8");
-      console.log(`  wrote: ${target.path}`);
-    } else {
-      console.log(`  ok:    ${target.path}`);
+    for (const target of targets) {
+      const full = join(ROOT, target.path);
+      if (!existsSync(full)) {
+        console.warn(`  skip (not found): ${target.path}`);
+        continue;
+      }
+      const kvs = Object.fromEntries(
+        Object.entries(target.keys)
+          .filter(([, jsonKey]) => data[jsonKey])
+          .map(([envKey, jsonKey]) => [envKey, data[jsonKey]])
+      );
+      const before = readFileSync(full, "utf8");
+      const { text, drift } = mergeEnv(before, kvs);
+      anyDrift = anyDrift || drift;
+      if (isCheckMode) {
+        console.log(`  ${drift ? "DRIFT" : "ok"}: ${target.path}`);
+      } else if (drift) {
+        writeFileSync(full, text, "utf8");
+        console.log(`  wrote: ${target.path}`);
+      } else {
+        console.log(`  ok:    ${target.path}`);
+      }
     }
   }
 

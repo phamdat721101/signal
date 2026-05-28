@@ -3,8 +3,8 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 // import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
-import { useSwitchChain } from 'wagmi';
-import { config, xlayerTestnet, xlayerMainnet } from '../config';
+import { useSwitchChain, useChains } from 'wagmi';
+import { config } from '../config';
 import { useWallet } from '../hooks/useWallet';
 import NetworkBadge from './NetworkBadge';
 
@@ -69,7 +69,9 @@ function WalletPill({ address, streak, onLogout }: {
   const [open, setOpen] = useState(false);
   const { chainId } = useWallet();
   const { switchChainAsync, isPending } = useSwitchChain();
-  const chains = [config.chain.id, xlayerTestnet.id, xlayerMainnet.id];
+  // Source of truth: registered wagmi chains (main.tsx). Adding a chain is a
+  // one-line edit there + one row in NetworkBadge.META. No UI changes here.
+  const chains = useChains().map(c => c.id);
 
   const pick = async (id: number) => {
     try { await switchChainAsync({ chainId: id }); } catch { /* user cancelled or wallet rejected */ }

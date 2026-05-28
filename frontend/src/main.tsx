@@ -10,7 +10,7 @@ import {
   TESTNET,
 } from '@initia/interwovenkit-react';
 import interwovenKitStyles from '@initia/interwovenkit-react/styles.js';
-import { config, localChain, testnetChain, xlayerTestnet, xlayerMainnet } from './config';
+import { config, localChain, testnetChain, xlayerTestnet, xlayerMainnet, somniaTestnet } from './config';
 import App from './App';
 import './index.css';
 
@@ -25,12 +25,13 @@ import './index.css';
 // satisfies the inferred `config.chain.id` union — only one is active at runtime.
 const wagmiConfig = createConfig({
   connectors: [initiaPrivyWalletConnector],
-  chains: [localChain, testnetChain, xlayerTestnet, xlayerMainnet],
+  chains: [localChain, testnetChain, xlayerTestnet, xlayerMainnet, somniaTestnet],
   transports: {
     [localChain.id]: http(),
     [testnetChain.id]: http(),
     [xlayerTestnet.id]: http(),
     [xlayerMainnet.id]: http(),
+    [somniaTestnet.id]: http(),
   },
 });
 
