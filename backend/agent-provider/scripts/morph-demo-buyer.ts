@@ -1,71 +1,122 @@
 /**
- * Morph Rails x402 demo buyer — pays for /morph-api/api/v2/agent/decisions
- * using USDC on Morph Hoodi testnet via the canonical x402-fetch SDK.
+ * E2E buyer demo — pays for /api/v2/agent/decisions on Morph Hoodi (chain 2910)
+ * via a hand-rolled EIP-3009 buyer.
+ *
+ * Why hand-rolled: n-payment v0.18's MorphX402Adapter hardcodes the EIP-712
+ * domain name "USD Coin" and provides no tokenName override, but Hoodi USDC
+ * exposes name="USDC" on-chain. We sign typed data with the correct domain
+ * via n-payment's exported buildTransferWithAuthorizationTypedData helper.
+ * Same approach is reused on the frontend (Task 10).
  *
  * Run:
- *   export MORPH_BUYER_PRIVATE_KEY=0x...   # funded with Hoodi test token
- *   export AGENT_API_URL=https://ai.overguild.com   # or http://localhost:8002
- *   npx tsx scripts/morph-demo-buyer.ts
- *
- * Prints the decisions JSON, the reference key, the on-chain tx hash, and
- * the explorer URL. Single responsibility: prove an end-to-end paid call
- * lands on the Morph rail and gets receipted.
+ *   PRIVATE_KEY=0x... npm run e2e
  */
-import { wrapFetchWithPayment, decodeXPaymentResponse } from "x402-fetch";
-import { privateKeyToAccount } from "viem/accounts";
+import {
+  CHAINS,
+  buildTransferWithAuthorizationTypedData,
+  encodeAuthorizationPayload,
+  randomEip3009Nonce,
+} from 'n-payment';
+import { config as loadEnv } from 'dotenv';
+import { privateKeyToAccount } from 'viem/accounts';
 
-const PK = process.env.MORPH_BUYER_PRIVATE_KEY;
-const BASE = (process.env.AGENT_API_URL ?? "http://localhost:8002").replace(/\/$/, "");
-const ENDPOINT = `${BASE}/morph-api/api/v2/agent/decisions?limit=3`;
+loadEnv();
+loadEnv({ path: '../.env' });
 
-if (!PK || !PK.startsWith("0x")) {
-  console.error("ERROR: set MORPH_BUYER_PRIVATE_KEY=0x... (funded on Morph Hoodi)");
+const BASE = (process.env.AGENT_API_URL ?? 'http://127.0.0.1:8002').replace(/\/$/, '');
+const FACILITATOR = process.env.FACILITATOR_URL ?? 'http://127.0.0.1:4040/x402';
+const ENDPOINT = `${BASE}/api/v2/agent/decisions?limit=3`;
+
+const PK = (process.env.MORPH_BUYER_PRIVATE_KEY ?? process.env.PRIVATE_KEY ?? '').trim();
+if (!/^0x[0-9a-fA-F]{64}$/.test(PK)) {
+  console.error('ERROR: set MORPH_BUYER_PRIVATE_KEY (or PRIVATE_KEY) in env');
   process.exit(1);
 }
+const buyer = privateKeyToAccount(PK as `0x${string}`);
+const chain = CHAINS['morph-hoodi-testnet']!;
 
-const account = privateKeyToAccount(PK as `0x${string}`);
-console.log("buyer:", account.address);
-console.log("GET   ", ENDPOINT);
+console.log('buyer:  ', buyer.address);
+console.log('GET    ', ENDPOINT);
 
-const fetchWithPayment = wrapFetchWithPayment(fetch, account);
-
+// 1. Fetch — expect 402 with `payment-required` envelope.
 const t0 = Date.now();
-const r = await fetchWithPayment(ENDPOINT);
-const ms = Date.now() - t0;
-
-console.log("status:", r.status, `(${ms}ms)`);
-console.log("rail:  ", r.headers.get("x-payment-rail"));
-console.log("refkey:", r.headers.get("x-morph-reference-key"));
-
-const xpr = r.headers.get("x-payment-response");
-if (xpr) {
-  try {
-    const receipt = decodeXPaymentResponse(xpr);
-    console.log("tx:    ", receipt.transaction);
-    console.log("net:   ", receipt.network);
-    console.log("payer: ", receipt.payer);
-  } catch (e) {
-    console.warn("could not decode x-payment-response:", e);
-  }
-}
-
-if (!r.ok) {
-  console.error("body:", await r.text());
+const res402 = await fetch(ENDPOINT);
+if (res402.status !== 402) {
+  console.error(`expected 402, got ${res402.status}`);
   process.exit(2);
 }
-
-const body = await r.json();
-console.log("\n— decisions —");
-console.log(JSON.stringify(body, null, 2));
-
-// Reconcile by reference key — proves the Morph Reference Key flow end-to-end
-const refKey = r.headers.get("x-morph-reference-key");
-if (refKey) {
-  const reconcileURL = `${BASE}/morph-api/reconcile?key=${refKey}`;
-  console.log("\nGET   ", reconcileURL);
-  // Settlement is fire-and-forget; give it a beat to land on-chain
-  await new Promise((rs) => setTimeout(rs, 4000));
-  const rec = await fetch(reconcileURL);
-  console.log("status:", rec.status);
-  console.log(JSON.stringify(await rec.json(), null, 2));
+const envelopeB64 = res402.headers.get('payment-required') ?? res402.headers.get('x-payment-required');
+if (!envelopeB64) {
+  console.error('no payment-required header');
+  process.exit(3);
 }
+const envelope = JSON.parse(Buffer.from(envelopeB64, 'base64').toString('utf8'));
+const accept = envelope.accepts?.[0];
+if (!accept || accept.network !== chain.caip2 || accept.scheme !== 'eip3009') {
+  console.error('unexpected envelope', envelope);
+  process.exit(4);
+}
+console.log(`402 → pay ${accept.maxAmountRequired} USDC base-units to ${accept.payTo}`);
+
+// 2. Build EIP-3009 authorization + sign with the correct domain.
+const now = Math.floor(Date.now() / 1000);
+const authorization = {
+  from: buyer.address as `0x${string}`,
+  to: accept.payTo as `0x${string}`,
+  value: BigInt(accept.maxAmountRequired),
+  validAfter: 0n,
+  validBefore: BigInt(now + 300),
+  nonce: randomEip3009Nonce(),
+};
+const td = buildTransferWithAuthorizationTypedData({
+  verifyingContract: accept.asset as `0x${string}`,
+  chainId: chain.chainId,
+  tokenName: 'USDC',     // pinned to match on-chain Hoodi USDC contract
+  tokenVersion: '2',
+  authorization,
+});
+const signature = await buyer.signTypedData({
+  domain: td.domain,
+  types: td.types,
+  primaryType: 'TransferWithAuthorization',
+  message: td.message as never,
+});
+
+// 3. Submit to facilitator's /v2/settle — relays the on-chain tx via sponsor.
+const settleRes = await fetch(`${FACILITATOR}/v2/settle`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    x402Version: 2,
+    paymentPayload: {
+      x402Version: 2,
+      scheme: 'eip3009',
+      network: chain.caip2,
+      authorization: encodeAuthorizationPayload(authorization),
+      signature,
+    },
+    paymentRequirements: accept,
+  }),
+});
+const settleJson: any = await settleRes.json();
+if (!settleRes.ok || !settleJson.success) {
+  console.error('settle failed:', settleRes.status, JSON.stringify(settleJson, null, 2));
+  process.exit(5);
+}
+console.log(`settled tx ${settleJson.transaction} (${Date.now() - t0}ms)`);
+
+// 4. Retry original URL with proof headers — createPaywall lets it through.
+const r = await fetch(ENDPOINT, {
+  headers: {
+    'x-payment-tx': settleJson.transaction,
+    'x-payment-network': chain.caip2,
+    'x-payment-payer': buyer.address,
+  },
+});
+console.log('status:', r.status, `(${Date.now() - t0}ms total)`);
+if (!r.ok) {
+  console.error('body:', await r.text());
+  process.exit(6);
+}
+console.log('\n— decisions —');
+console.log(JSON.stringify(await r.json(), null, 2));

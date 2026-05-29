@@ -10,7 +10,6 @@ import NetworkBadge from './NetworkBadge';
 
 const navItems = [
   { to: '/', icon: 'bolt', label: 'Feed', fill: true },
-  { to: '/marketplace', icon: 'storefront', label: 'Market' },
   { to: '/agent', icon: 'smart_toy', label: 'Agent' },
   { to: '/portfolio', icon: 'account_balance_wallet', label: 'Portfolio' },
   { to: '/profile', icon: 'person', label: 'Profile' },
@@ -20,6 +19,7 @@ const navItems = [
 const FAUCETS: Record<number, { label: string; url: string }> = {
   1952: { label: 'Get OKB', url: 'https://www.okx.com/xlayer/faucet' },
   2124225178762456: { label: 'Get INIT', url: 'https://app.testnet.initia.xyz/faucet' },
+  2910: { label: 'Get Hoodi ETH', url: import.meta.env.VITE_MORPH_HOODI_FAUCET_URL || 'https://hoodi.ethpandaops.io/' },
 };
 
 function TestnetBanner() {

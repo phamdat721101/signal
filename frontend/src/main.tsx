@@ -10,28 +10,26 @@ import {
   TESTNET,
 } from '@initia/interwovenkit-react';
 import interwovenKitStyles from '@initia/interwovenkit-react/styles.js';
-import { config, localChain, testnetChain, xlayerTestnet, xlayerMainnet, somniaTestnet } from './config';
+import { config, localChain, testnetChain, xlayerTestnet, xlayerMainnet, somniaTestnet, morphHoodi } from './config';
 import App from './App';
 import './index.css';
 
 // Multi-chain wagmi config — single connector (InterwovenKit's Privy wallet),
 // multiple chains. Privy embedded wallet is chain-agnostic, so a wagmi
-// switchChainAsync({ chainId: 1952 }) routes through it transparently.
+// switchChainAsync({ chainId: ... }) routes through it transparently.
 //
-// Per project decision (2026-05-24): no separate `injected` / WalletConnect
-// connectors. InterwovenKit owns the wallet UX end-to-end.
-//
-// Both Initia chains (local + testnet) are registered so the transports map
-// satisfies the inferred `config.chain.id` union — only one is active at runtime.
+// Adding a chain here is a one-row edit in this array + one row in
+// NetworkBadge META + one row in Layout FAUCETS (if testnet).
 const wagmiConfig = createConfig({
   connectors: [initiaPrivyWalletConnector],
-  chains: [localChain, testnetChain, xlayerTestnet, xlayerMainnet, somniaTestnet],
+  chains: [localChain, testnetChain, xlayerTestnet, xlayerMainnet, somniaTestnet, morphHoodi],
   transports: {
     [localChain.id]: http(),
     [testnetChain.id]: http(),
     [xlayerTestnet.id]: http(),
     [xlayerMainnet.id]: http(),
     [somniaTestnet.id]: http(),
+    [morphHoodi.id]: http(),
   },
 });
 

@@ -68,6 +68,24 @@ export const somniaTestnet = defineChain({
   testnet: true,
 });
 
+// ── Morph Hoodi (Agentic Payment Rail — n-payment v0.18) ────────────────
+// Single chain that serves the paid /agent endpoints. USDC pinned to the
+// operator-supplied test deploy. The faucet URL is overridable via env.
+export const MORPH_HOODI_USDC_ADDRESS = '0x7433b41C6c5e1d58D4Da99483609520255ab661B' as const;
+
+export const morphHoodi = defineChain({
+  id: 2910,
+  name: 'Morph Hoodi Testnet',
+  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+  rpcUrls: {
+    default: { http: [import.meta.env.VITE_MORPH_HOODI_RPC || 'https://rpc-hoodi.morph.network'] },
+  },
+  blockExplorers: {
+    default: { name: 'Morph Hoodi Explorer', url: 'https://explorer-hoodi.morph.network' },
+  },
+  testnet: true,
+});
+
 export const config = {
   network,
   chain: network === 'testnet' ? testnetChain : localChain,
@@ -90,6 +108,23 @@ export const config = {
     okbAddress: import.meta.env.VITE_XLAYER_OKB_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
     usdcAddress: import.meta.env.VITE_XLAYER_USDC_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
     faucetUrl: 'https://www.okx.com/xlayer/faucet',
+  },
+
+  // Somnia Agentathon contracts (chain 50312). Source of truth: contracts/deployments/50312.json
+  somnia: {
+    testnetId: 50312,
+    cardExecutorAddress: import.meta.env.VITE_SOMNIA_CARD_EXECUTOR_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+    signalAgentAddress: import.meta.env.VITE_SOMNIA_SIGNAL_AGENT_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+    agentMarketAddress: import.meta.env.VITE_SOMNIA_AGENT_MARKET_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+  },
+
+  // Morph Hoodi (paid agent-data services rail — n-payment v0.18)
+  morphHoodi: {
+    chainId: 2910,
+    usdcAddress: MORPH_HOODI_USDC_ADDRESS,
+    agentApiUrl: import.meta.env.VITE_AGENT_API_URL || 'http://127.0.0.1:8002',
+    faucetUrl: import.meta.env.VITE_MORPH_HOODI_FAUCET_URL || 'https://hoodi.ethpandaops.io/',
+    usdcFaucetUrl: import.meta.env.VITE_MORPH_HOODI_USDC_FAUCET_URL || '',
   },
 };
 
@@ -218,6 +253,8 @@ const INDEXER_BASE = import.meta.env.VITE_INDEXER_URL || 'http://localhost:8080'
 export function explorerTxUrl(txHash: string, chainId?: number): string {
   if (chainId === 1952) return `https://www.oklink.com/xlayer-test/tx/${txHash}`;
   if (chainId === 196) return `https://www.oklink.com/xlayer/tx/${txHash}`;
+  if (chainId === 2910) return `https://explorer-hoodi.morph.network/tx/${txHash}`;
+  if (chainId === 50312) return `https://testnet.somnia.network/tx/${txHash}`;
   const hash = txHash.replace(/^0x/i, '').toUpperCase();
   return `${SCAN_BASE}/txs/0x${hash}`;
 }

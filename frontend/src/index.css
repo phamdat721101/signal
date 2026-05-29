@@ -1,5 +1,20 @@
 @import "tailwindcss";
 
+/* Cyber-terminal tokens (per agent-ui/DESIGN.md) — applied to /agent only.
+   Exposed as utilities via @theme so Tailwind generates bg-cyber-green etc. */
+@theme {
+  --color-cyber-green: #39ff14;
+  --color-cyber-green-dim: #2ae500;
+  --color-cyber-carbon: #0a0a0a;
+  --color-cyber-surface: #131313;
+  --color-cyber-surface-high: #2a2a2a;
+  --color-cyber-outline: #3c4b35;
+  --color-cyber-pink: #ffb2b8;
+  --color-cyber-cyan: #00eefc;
+  --font-cyber: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  --font-cyber-display: 'Space Grotesk', system-ui, sans-serif;
+}
+
 :root {
   --color-bg: #0e0e0e;
   --color-surface: #131313;

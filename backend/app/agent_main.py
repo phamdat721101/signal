@@ -31,7 +31,17 @@ from app import db_async, x402_settler
 from app.agent_api import router as agent_router
 from app.config import get_settings
 from app.x402_payment import get_x402_middleware_args
-from app.morph_payment import get_morph_x402_middleware_args
+from app.somnia_payment import get_somnia_x402_middleware_args
+
+
+# Morph rail is now served by the standalone TS agent-provider on Morph Hoodi
+# (see backend/agent-provider/). The legacy Python HMAC rail against
+# morph-rails.morph.network has been retired. Keep this stub so the existing
+# rail-dispatch wiring below stays inert without code churn — it always
+# returns (None, None) which makes every `_morph_server is not None` guard
+# short-circuit cleanly.
+def get_morph_x402_middleware_args(prefix: str = "/morph-api"):
+    return (None, None)
 
 # ─── Logging (mirror main.py — same format, request-id contextvar) ──────
 _request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
@@ -59,6 +69,11 @@ _x402_server = None
 _morph_routes: dict[str, object] | None = None
 _morph_server = None
 _MORPH_PREFIX = "/morph-api"
+# Somnia rail — Agentathon REST mirror of the on-chain SomniaAgentMarket.
+# Independent of Base + Morph; failure here leaves the other rails intact.
+_somnia_routes: dict[str, object] | None = None
+_somnia_server = None
+_SOMNIA_PREFIX = "/somnia-api"
 
 
 def _build_resource_url(request: Request) -> str:
@@ -116,6 +131,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Morph rail initialize failed: %s — Morph endpoints UNPAID", e)
             _morph_server = None
+    # Somnia rail (additive). Same independence guarantee.
+    global _somnia_routes, _somnia_server
+    _somnia_routes, _somnia_server = get_somnia_x402_middleware_args(prefix=_SOMNIA_PREFIX)
+    if _somnia_server is not None:
+        try:
+            await asyncio.to_thread(_somnia_server.initialize)
+            logger.info("Somnia rail initialized; %d routes priced", len(_somnia_routes or {}))
+        except Exception as e:
+            logger.error("Somnia rail initialize failed: %s — Somnia endpoints UNPAID", e)
+            _somnia_server = None
     reconciler = asyncio.create_task(_reconcile_loop())
     try:
         yield
@@ -171,9 +196,12 @@ def _serialize_settle_resp(resp) -> str:
 
 @app.middleware("http")
 async def x402_gate(request: Request, call_next):
-    # Pick the right rail by path prefix. Morph gets priority because its
-    # routes are keyed with the /morph-api prefix; Base routes are not.
-    if request.url.path.startswith(_MORPH_PREFIX):
+    # Pick the right rail by path prefix. Somnia + Morph routes are keyed with
+    # their respective prefixes so a single dispatch table can serve all rails.
+    if request.url.path.startswith(_SOMNIA_PREFIX):
+        routes, server = _somnia_routes, _somnia_server
+        rail = "somnia"
+    elif request.url.path.startswith(_MORPH_PREFIX):
         routes, server = _morph_routes, _morph_server
         rail = "morph"
     else:
@@ -272,6 +300,8 @@ async def x402_gate(request: Request, call_next):
 app.include_router(agent_router)
 if get_settings().morph_x402_enabled:
     app.include_router(agent_router, prefix=_MORPH_PREFIX)
+if get_settings().somnia_x402_enabled:
+    app.include_router(agent_router, prefix=_SOMNIA_PREFIX)
 
 
 # ─── Public meta + health ───────────────────────────────────────────────

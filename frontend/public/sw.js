@@ -16,6 +16,10 @@ self.addEventListener('fetch', e => {
   const { request } = e;
   const url = new URL(request.url);
 
+  // Skip non-http(s) schemes (chrome-extension://, blob:, ...) — Cache API
+  // rejects them and the resulting promise rejection spams the console.
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+
   // Featured gem: stale-while-revalidate. Splash gets a cached gem instantly,
   // background refresh updates it for next visit. Keeps the moment under 200ms.
   if (request.url === FEATURED_GEM_URL) {

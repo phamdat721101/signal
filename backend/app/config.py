@@ -51,6 +51,16 @@ class Settings(BaseSettings):
     somnia_signal_agent_address: str = ""
     somnia_session_vault_address: str = ""
     somnia_mock_stt_address: str = ""
+    # Agentathon additions: executor + B2B verdict market.
+    somnia_card_executor_address: str = ""
+    somnia_agent_market_address: str = ""
+    # Somnia x402 REST rail (parallel to Base CDP + Morph; route prefix /somnia-api).
+    # Toggle via SOMNIA_X402_ENABLED=true. Receiver falls back to x402_receiver_address.
+    somnia_x402_enabled: bool = False
+    somnia_x402_network: str = "eip155:50312"
+    somnia_x402_facilitator_url: str = "https://api.cdp.coinbase.com/platform/v2/x402"
+    somnia_x402_receiver_address: str = ""
+    somnia_x402_public_base_url: str = ""
     # ── Flap on X-Layer (PRD: Flap Hidden Gems on X-Layer v1) ──
     flap_portal_xlayer_address: str = "0xb30D8c4216E1f21F27444D2FfAee3ad577808678"
     flap_taxed_fun_board_url: str = "https://xlayer.taxed.fun/v2/board"

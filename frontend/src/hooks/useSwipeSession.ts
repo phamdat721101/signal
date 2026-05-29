@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { encodeFunctionData, keccak256, parseEther, toHex } from 'viem';
+import { useChainId } from 'wagmi';
 import { useInterwovenKit } from '@initia/interwovenkit-react';
 import { useWallet } from './useWallet';
 import { config } from '../config';
@@ -48,6 +49,10 @@ export interface QueuedSwipe {
   entry_wei: string;            // 18-dec, off-chain card price
   target_wei: string;           // off-chain ±1.5% of entry
   queued_at: number;
+  /** Token symbol — populated since Somnia Agentathon (chain 50312) needs the
+   * raw symbol string for the on-chain agent prompt. Optional so legacy queue
+   * entries (pre-2026-05-28) deserialise without breaking. */
+  symbol?: string;
 }
 
 export interface SwipeSession {
@@ -82,6 +87,17 @@ const SIGNAL_REGISTRY_ABI = [
              { name: 'confidence', type: 'uint8' }, { name: 'targetPrice', type: 'uint256' },
              { name: 'entryPrice', type: 'uint256' }],
     outputs: [{ name: '', type: 'uint256' }] },
+] as const;
+
+// Somnia executor — batchExecuteFromQueue takes an array of {symbol, context}.
+// One sendTx settles N validator-consensus agent calls atomically per-card.
+const SOMNIA_EXECUTOR_ABI = [
+  { name: 'batchExecuteFromQueue', type: 'function', stateMutability: 'payable',
+    inputs: [{ name: 'queue', type: 'tuple[]', components: [
+      { name: 'symbol',  type: 'string' },
+      { name: 'context', type: 'string' },
+    ] }],
+    outputs: [{ name: 'verdictIds', type: 'uint256[]' }] },
 ] as const;
 
 function symbolToAddress(symbol: string): `0x${string}` {
@@ -136,6 +152,7 @@ function saveSession(user: string, session: SwipeSession | null) {
 export function useSwipeSession() {
   const { address, sendTx, isConnected } = useWallet();
   const { requestTxBlock } = useInterwovenKit() as any;  // requestTxBlock typed loosely; SDK exposes it
+  const chainId = useChainId();
   const [queue, setQueueState] = useState<QueuedSwipe[]>([]);
   const [session, setSessionState] = useState<SwipeSession | null>(null);
   const [isSettling, setIsSettling] = useState(false);
@@ -223,6 +240,7 @@ export function useSwipeSession() {
       entry_wei: entryWei.toString(),
       target_wei: targetWei.toString(),
       queued_at: Date.now(),
+      symbol: card.token_symbol,
     };
     const next = [...queue, swipe];
     setQueue(next);
@@ -284,6 +302,51 @@ export function useSwipeSession() {
     if (!address || !session || queue.length === 0) return null;
     setIsSettling(true); setError(null);
     try {
+      // ── Single chain-id switch point. CI grep must report exactly one
+      // match for the literal Somnia branch below. Initia/X Layer paths run
+      // unchanged through buildSettleMessages() further down.
+      // Somnia mode: one sendTx into SomniaCardExecutor.batchExecuteFromQueue.
+      // The executor fans out per-card validator-consensus agent calls; the
+      // user signs once. Filtered to APE swipes (FADE has no on-chain side
+      // effect on Somnia — it stays mirrored in the off-chain swipes table).
+      if (chainId === 50312) {
+        const executor = config.somnia.cardExecutorAddress;
+        if (!executor || executor === '0x0000000000000000000000000000000000000000') {
+          throw new Error('Somnia executor not configured');
+        }
+        const apeQueue = queue.filter(q => q.is_bull && (q.symbol || '').length > 0);
+        if (apeQueue.length === 0) {
+          // Nothing on-chain to settle — clear local queue (FADE-only batch).
+          setQueue([]);
+          setIsSettling(false);
+          return null;
+        }
+        const swipesArg = apeQueue.map(q => ({
+          symbol: q.symbol as string,
+          context: `score=${q.score} entry_wei=${q.entry_wei} target_wei=${q.target_wei}`,
+        }));
+        const data = encodeFunctionData({
+          abi: SOMNIA_EXECUTOR_ABI,
+          functionName: 'batchExecuteFromQueue',
+          args: [swipesArg],
+        });
+        // Per-call deposit: 0.07 STT × 3 validators + 0.07 floor ≈ 0.28 STT.
+        // Overestimate slightly to stay above the floor under Somnia pricing tweaks.
+        const depositPerCall = parseEther('0.3');
+        const totalValue = depositPerCall * BigInt(apeQueue.length);
+        const txHash = await sendTx(executor, data, /* chainId */ 50312, totalValue);
+        if (txHash) {
+          void fetch(`${config.backendUrl}/api/swipe-session/${session.session_id}/settle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tx_hash: txHash, chain_id: 50312 }),
+          }).catch(() => {});
+        }
+        setQueue([]);
+        setIsSettling(false);
+        return txHash;
+      }
+
       const msgs = buildSettleMessages();
       if (msgs.length === 0) throw new Error('Nothing to settle');
       let txHash: string | null = null;
@@ -320,7 +383,7 @@ export function useSwipeSession() {
       setIsSettling(false);
       return null;
     }
-  }, [address, session, queue, atomicMode, requestTxBlock, sendTx, buildSettleMessages, setQueue]);
+  }, [address, session, queue, atomicMode, chainId, requestTxBlock, sendTx, buildSettleMessages, setQueue]);
 
   const clearQueue = useCallback(() => setQueue([]), [setQueue]);
   const closeSession = useCallback(() => setSession(null), [setSession]);

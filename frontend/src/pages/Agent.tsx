@@ -1,128 +1,153 @@
-import { useState } from 'react';
-// import { usePrivy } from '@privy-io/react-auth';
-import { useAgent, useAgentStats, useAgentNotifications, useSaveAgent, useToggleAgent } from '../hooks/useAgent';
-import { normalizeAddress } from '../config';
-import { useWallet } from '../hooks/useWallet';
+/**
+ * /agent — cyber-terminal command center for paid Morph Hoodi services.
+ *
+ * Layout:
+ *   [hero]                                — system status strip, public
+ *   [pre-flight]   inside <ChainGate>     — wallet + USDC balance + faucets
+ *   [bundle grid]                         — copy-only prompt cards (any chain)
+ *      └─ <TryItRunner>  inside <ChainGate>  — non-custodial paid call
+ *
+ * Read-only stays public; mutating actions are gated to chain 2910 only.
+ */
+import { useMemo, useState } from 'react';
+import { useAccount, useReadContract } from 'wagmi';
+import { erc20Abi, formatUnits } from 'viem';
+import ChainGate from '../components/ChainGate';
+import { config, MORPH_HOODI_USDC_ADDRESS } from '../config';
+import { BUNDLES, type Bundle, fillVars, formatPrice } from './agent/bundles';
+import TryItRunner from './agent/TryItRunner';
 
-const STRATEGIES = [
-  { id: 'conservative', label: '🛡️ Conservative', desc: 'Low risk, high confidence only' },
-  { id: 'balanced', label: '⚖️ Balanced', desc: 'Mix of safety and opportunity' },
-  { id: 'degen', label: '🔥 Degen', desc: 'High risk, high reward' },
-] as const;
+const PERSONA_COLOR: Record<Bundle['persona'], string> = {
+  analyst: 'text-cyber-green border-cyber-green',
+  oracle:  'text-cyber-cyan border-cyber-cyan',
+  forensic:'text-cyber-pink border-cyber-pink',
+};
 
-export default function Agent() {
-  const { address: walletAddr } = useWallet();
-  const address = walletAddr ? normalizeAddress(walletAddr) : undefined;
-  const { data } = useAgent(address);
-  const { data: stats } = useAgentStats(address);
-  const { data: notifs } = useAgentNotifications(address);
-  const save = useSaveAgent();
-  const toggle = useToggleAgent();
-
-  const agent = data?.agent;
-  const learned = data?.learned || agent?.learned_preferences || {};
-
-  const [strategy, setStrategy] = useState(agent?.strategy || 'balanced');
-  const [budget, setBudget] = useState(agent?.max_position_usd || 50);
-  const [confidence, setConfidence] = useState(agent?.min_confidence || 60);
-  const [autoExec, setAutoExec] = useState(agent?.auto_execute || false);
-  const [risk, setRisk] = useState(agent?.risk_tolerance || 'medium');
-
-  if (!address) return <div className="p-6 text-center text-gray-400">Connect wallet to configure your agent</div>;
-
-  const handleSave = () => {
-    save.mutate({ address, strategy, max_position_usd: budget, min_confidence: confidence, auto_execute: autoExec, risk_tolerance: risk, is_active: agent?.is_active ?? false });
-  };
+function PreflightStrip() {
+  const { address } = useAccount();
+  const { data: bal, isLoading } = useReadContract({
+    chainId: config.morphHoodi.chainId,
+    address: MORPH_HOODI_USDC_ADDRESS,
+    abi: erc20Abi,
+    functionName: 'balanceOf',
+    args: address ? [address] : undefined,
+    query: { enabled: !!address, refetchInterval: 15_000 },
+  });
+  const usdc = bal ? Number(formatUnits(bal as bigint, 6)) : 0;
+  const usdcFaucet = config.morphHoodi.usdcFaucetUrl;
 
   return (
-    <div className="max-w-md mx-auto p-4 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">🤖 My Agent</h1>
-        <button onClick={() => toggle.mutate(address)} className={`px-4 py-1.5 rounded-full text-sm font-medium ${agent?.is_active ? 'bg-[#8eff71]/20 text-[#8eff71]' : 'bg-gray-800 text-gray-400'}`}>
-          {agent?.is_active ? '● Active' : '○ Inactive'}
-        </button>
+    <div className="border border-cyber-outline bg-cyber-carbon p-4 font-cyber text-xs flex flex-wrap items-center justify-between gap-3">
+      <div className="flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full bg-cyber-green animate-pulse" />
+        <span className="uppercase tracking-widest text-white/60">Connected</span>
+        <span className="text-cyber-green">{address ? `${address.slice(0, 6)}…${address.slice(-4)}` : '—'}</span>
       </div>
-
-      {/* Stats */}
-      {stats && stats.total > 0 && (
-        <div className="grid grid-cols-3 gap-3 text-center">
-          <div className="bg-gray-900 rounded-lg p-3"><div className="text-lg font-bold">{stats.total}</div><div className="text-xs text-gray-400">Trades</div></div>
-          <div className="bg-gray-900 rounded-lg p-3"><div className="text-lg font-bold">{stats.win_rate}%</div><div className="text-xs text-gray-400">Win Rate</div></div>
-          <div className="bg-gray-900 rounded-lg p-3"><div className={`text-lg font-bold ${stats.pnl_usd >= 0 ? 'text-[#8eff71]' : 'text-[#ff7166]'}`}>${stats.pnl_usd}</div><div className="text-xs text-gray-400">PnL</div></div>
-        </div>
+      <div className="flex items-center gap-2">
+        <span className="uppercase tracking-widest text-white/60">USDC</span>
+        <span className="text-cyber-green">{isLoading ? '…' : usdc.toFixed(3)}</span>
+      </div>
+      {usdcFaucet ? (
+        <a href={usdcFaucet} target="_blank" rel="noopener noreferrer"
+           className="text-cyber-cyan hover:underline uppercase tracking-widest">
+          Get test USDC →
+        </a>
+      ) : (
+        <span className="text-white/40 uppercase tracking-widest">USDC faucet · operator-supplied</span>
       )}
+    </div>
+  );
+}
 
-      {/* Strategy */}
-      <div>
-        <label className="text-sm text-gray-400 mb-2 block">Strategy</label>
-        <div className="grid grid-cols-3 gap-2">
-          {STRATEGIES.map(s => (
-            <button key={s.id} onClick={() => setStrategy(s.id)} className={`p-3 rounded-lg text-center text-xs ${strategy === s.id ? 'bg-[#8eff71]/20 border border-[#8eff71]' : 'bg-gray-900 border border-gray-800'}`}>
-              <div className="text-lg">{s.label.split(' ')[0]}</div>
-              <div className="mt-1">{s.label.split(' ')[1]}</div>
-            </button>
-          ))}
-        </div>
-      </div>
+function BundleCard({ bundle }: { bundle: Bundle }) {
+  const [vars, setVars] = useState<Record<string, string>>(
+    () => Object.fromEntries(bundle.vars.map((v) => [v.key, v.default])),
+  );
+  const filledPrompt = useMemo(() => fillVars(bundle.prompt, vars), [bundle.prompt, vars]);
+  const [copied, setCopied] = useState(false);
 
-      {/* Budget */}
-      <div>
-        <label className="text-sm text-gray-400">Budget per trade: ${budget}</label>
-        <input type="range" min={10} max={500} step={10} value={budget} onChange={e => setBudget(+e.target.value)} className="w-full mt-1 accent-[#8eff71]" />
-      </div>
+  const onCopy = async () => {
+    await navigator.clipboard.writeText(filledPrompt);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
 
-      {/* Confidence */}
-      <div>
-        <label className="text-sm text-gray-400">Min confidence: {confidence}%</label>
-        <input type="range" min={30} max={95} step={5} value={confidence} onChange={e => setConfidence(+e.target.value)} className="w-full mt-1 accent-[#8eff71]" />
-      </div>
+  // Token-aware highlighting of `{{VAR}}` slots in the prompt block.
+  const segments = filledPrompt.split(/(\b\d+(?:\.\d+)?\s*USDC\b|https?:\/\/[^\s]+|morph-hoodi-testnet)/g);
 
-      {/* Risk */}
-      <div>
-        <label className="text-sm text-gray-400 mb-2 block">Risk tolerance</label>
-        <div className="flex gap-2">
-          {(['low', 'medium', 'high'] as const).map(r => (
-            <button key={r} onClick={() => setRisk(r)} className={`flex-1 py-2 rounded-lg text-sm ${risk === r ? 'bg-[#8eff71]/20 text-[#8eff71]' : 'bg-gray-900 text-gray-400'}`}>{r}</button>
-          ))}
-        </div>
-      </div>
-
-      {/* Auto-execute */}
-      <div className="flex items-center justify-between bg-gray-900 rounded-lg p-4">
-        <div><div className="text-sm font-medium">Auto-execute trades</div><div className="text-xs text-gray-400">{autoExec ? 'Agent trades automatically' : 'Notify only'}</div></div>
-        <button onClick={() => setAutoExec(!autoExec)} className={`w-12 h-6 rounded-full transition ${autoExec ? 'bg-[#8eff71]' : 'bg-gray-700'}`}>
-          <div className={`w-5 h-5 rounded-full bg-white transition-transform ${autoExec ? 'translate-x-6' : 'translate-x-0.5'}`} />
-        </button>
-      </div>
-
-      {/* Save */}
-      <button onClick={handleSave} disabled={save.isPending} className="w-full py-3 rounded-lg bg-[#8eff71] text-black font-bold">
-        {save.isPending ? 'Saving...' : 'Save Agent Config'}
-      </button>
-
-      {/* Learned */}
-      {learned?.preferred_tokens?.length > 0 && (
-        <div className="bg-gray-900 rounded-lg p-4">
-          <div className="text-sm text-gray-400 mb-2">🧠 Learned from your swipes</div>
-          <div className="flex flex-wrap gap-1">
-            {learned.preferred_tokens.map((t: string) => <span key={t} className="px-2 py-0.5 bg-gray-800 rounded text-xs">{t}</span>)}
-          </div>
-          {learned.avg_risk_score && <div className="text-xs text-gray-500 mt-2">Avg risk: {learned.avg_risk_score} | Style confidence: {learned.confidence_floor}%</div>}
-        </div>
-      )}
-
-      {/* Notifications */}
-      {(notifs?.notifications?.length ?? 0) > 0 && (
+  return (
+    <div className="border border-cyber-outline bg-cyber-surface flex flex-col">
+      <header className="bg-cyber-surface-high border-b border-cyber-outline px-4 py-3 flex items-start justify-between gap-3">
         <div>
-          <div className="text-sm text-gray-400 mb-2">Recent signals</div>
-          <div className="space-y-2">
-            {notifs!.notifications.slice(0, 5).map((n: any) => (
-              <div key={n.id} className="bg-gray-900 rounded-lg p-3 text-xs">{n.message}</div>
-            ))}
-          </div>
+          <span className={`text-[10px] uppercase tracking-widest border px-1.5 py-0.5 ${PERSONA_COLOR[bundle.persona]}`}>
+            {bundle.persona}
+          </span>
+          <h3 className="font-cyber-display font-bold uppercase text-white mt-2">{bundle.title}</h3>
+          <p className="text-white/60 text-xs font-cyber mt-1">{bundle.tagline}</p>
+        </div>
+        <span className="text-cyber-green font-cyber text-sm whitespace-nowrap">{formatPrice(bundle.priceUsdc)}</span>
+      </header>
+
+      {bundle.vars.length > 0 && (
+        <div className="px-4 py-3 border-b border-cyber-outline flex flex-wrap gap-3">
+          {bundle.vars.map((v) => (
+            <label key={v.key} className="flex flex-col gap-1 font-cyber text-[11px] text-white/60">
+              <span className="uppercase tracking-widest">{v.label}</span>
+              <input
+                value={vars[v.key]}
+                onChange={(e) => setVars((s) => ({ ...s, [v.key]: e.target.value }))}
+                placeholder={v.placeholder}
+                className="bg-cyber-carbon border border-cyber-outline text-white px-2 py-1 w-32 focus:border-cyber-green outline-none"
+              />
+            </label>
+          ))}
         </div>
       )}
+
+      <pre className="bg-cyber-carbon p-4 font-cyber text-[11px] leading-relaxed text-white/80 whitespace-pre-wrap overflow-x-auto">
+        {segments.map((seg, i) => /^https?|USDC|morph-hoodi-testnet/.test(seg)
+          ? <span key={i} className="text-cyber-green">{seg}</span>
+          : <span key={i}>{seg}</span>)}
+      </pre>
+
+      <footer className="px-4 py-3 border-t border-cyber-outline flex items-center justify-between gap-3">
+        <button onClick={onCopy}
+          className="border border-cyber-green text-cyber-green font-cyber-display text-[11px] uppercase tracking-widest px-3 py-1.5 hover:bg-cyber-green/10 active:scale-95 transition">
+          {copied ? '✓ Copied' : '⧉ Copy Bundle'}
+        </button>
+        <ChainGate chainId={config.morphHoodi.chainId}>
+          <TryItRunner bundle={bundle} values={vars} />
+        </ChainGate>
+      </footer>
+    </div>
+  );
+}
+
+export default function Agent() {
+  return (
+    <div className="min-h-full bg-cyber-carbon text-white">
+      <div className="max-w-6xl mx-auto p-6 space-y-6">
+        {/* Hero */}
+        <header className="border border-cyber-outline bg-cyber-surface p-6">
+          <p className="text-cyber-green font-cyber text-[11px] uppercase tracking-widest">Agent Command Center</p>
+          <h1 className="font-cyber-display font-bold text-3xl uppercase mt-1">Pay-per-call agent data</h1>
+          <p className="text-white/60 text-sm mt-2 font-cyber max-w-2xl">
+            Five paid endpoints on <span className="text-cyber-green">Morph Hoodi Testnet</span>.
+            Copy a one-line prompt for any external LLM, or run it in-app — wallet pays USDC,
+            sponsor pays gas (EIP-3009), 0 ETH required from you.
+          </p>
+        </header>
+
+        {/* Gated zone — preflight + runners */}
+        <ChainGate chainId={config.morphHoodi.chainId}>
+          <PreflightStrip />
+        </ChainGate>
+
+        {/* Bundle grid — copy works on any chain. Try-It (inside each card footer) is gated. */}
+        <section className="grid gap-5 md:grid-cols-2">
+          {BUNDLES.map((b) => <BundleCard key={b.id} bundle={b} />)}
+        </section>
+      </div>
     </div>
   );
 }
