@@ -5,8 +5,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createPublicClient, http } from 'viem';
 import { useCards } from '../hooks/useCards';
 import { useFeaturedGem } from '../hooks/useFeaturedGem';
+import { useFeedMode } from '../hooks/useFeedMode';
 import { config, shareToX, normalizeAddress, isCardTradeable } from '../config';
-import TokenCard from '../components/TokenCard';
+import TokenCard, { TokenCardDetail, hasTokenCardDetail } from '../components/TokenCard';
 import { MacroDeskCard, WhaleAlertCard } from '../components/TokenCard';
 import { InsightCard } from '../components/InsightCard';
 import Onboarding from '../components/Onboarding';
@@ -199,11 +200,18 @@ function RareCardReveal({ rarity, onDone }: { rarity: string; onDone: () => void
 export default function Feed() {
   const [showOnboarding, setShowOnboarding] = useState(!localStorage.getItem('kinetic_onboarded'));
   const [showQuickOnboarding, setShowQuickOnboarding] = useState(() => !localStorage.getItem('onboarded'));
-  const [index, setIndex] = useState(0);
+  // Active mode (URL ?mode=) + per-mode swipe index (localStorage). Single source of truth.
+  const { activeMode, currentIndex: index, setCurrentIndex: setIndex } = useFeedMode();
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [exiting, setExiting] = useState<'left' | 'right' | null>(null);
   const startX = useRef(0);
+  const startY = useRef(0);
+  const axisLock = useRef<'x' | 'y' | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [chevronDismissed, setChevronDismissed] = useState(
+    () => sessionStorage.getItem('kinetic_chevron_dismissed') === '1'
+  );
   const [showPaywall, setShowPaywall] = useState(false);
   const [swipeFeedback, setSwipeFeedback] = useState<'ape' | 'fade' | null>(null);
   const [resolvedTrade, setResolvedTrade] = useState<any>(null);
@@ -211,10 +219,9 @@ export default function Feed() {
   const [showConviction, setShowConviction] = useState(false);
   const [summonCard, setSummonCard] = useState<any>(null);
   const [pendingCard, setPendingCard] = useState<any>(null);
-  const [cardFilter] = useState<string>('all');
   const [showRareReveal, setShowRareReveal] = useState<string | null>(null);
 
-  const { data, isLoading } = useCards(0, 50, cardFilter === 'all' ? undefined : cardFilter);
+  const { data, isLoading } = useCards(0, 50, activeMode.cardTypes as string[]);
   const { data: featuredGem } = useFeaturedGem();
   const { address: initiaAddress, login, isCorrectChain } = useWallet();
   const navigate = useNavigate();
@@ -254,13 +261,32 @@ export default function Feed() {
 
   const cards = useMemo(() => {
     const base = data?.cards ?? [];
-    // Pin the freshest gem as the first card on first open (Hidden Gem PRD D1=C).
-    // Skip if there's no gem yet, or if the gem is already at the top of the
-    // feed (don't double-show); dedupe by id otherwise.
+    // Pin the freshest gem only inside the Tokens mode (News mode shouldn't
+    // surface trade-able gem cards). Skip if no gem, or if already at the top.
+    if (activeMode.id !== 'tokens') return base;
     if (!featuredGem || base[0]?.id === featuredGem.id) return base;
     return [featuredGem, ...base.filter(c => c.id !== featuredGem.id)];
-  }, [data, featuredGem]);
+  }, [data, featuredGem, activeMode.id]);
   const current = cards[index];
+
+  // Auto-reset detail scroll to top when card advances (TikTok-comments pattern).
+  useEffect(() => {
+    scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+  }, [index, activeMode.id]);
+
+  // Mark chevron dismissed after first non-trivial scroll, once per session.
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || chevronDismissed) return;
+    const onScroll = () => {
+      if (el.scrollTop > 40) {
+        sessionStorage.setItem('kinetic_chevron_dismissed', '1');
+        setChevronDismissed(true);
+      }
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [chevronDismissed, index, activeMode.id]);
 
   // Rare card reveal trigger
   useEffect(() => {
@@ -354,10 +380,28 @@ export default function Feed() {
     queryClient.invalidateQueries({ queryKey: ['energy'] });
   };
 
-  const onDragStart = (clientX: number) => { startX.current = clientX; setDragging(true); };
-  const onDragMove = (clientX: number) => { if (dragging) setDragX(clientX - startX.current); };
+  const onDragStart = (clientX: number, clientY: number) => {
+    startX.current = clientX;
+    startY.current = clientY;
+    axisLock.current = null;
+    setDragging(true);
+  };
+  const onDragMove = (clientX: number, clientY: number) => {
+    if (!dragging) return;
+    const dx = clientX - startX.current;
+    const dy = clientY - startY.current;
+    // Decide axis on first meaningful move; once locked to vertical, let the
+    // browser scroll. Once locked to horizontal, engage the swipe.
+    if (axisLock.current === null && Math.abs(dx) + Math.abs(dy) > 8) {
+      axisLock.current = Math.abs(dy) > Math.abs(dx) ? 'y' : 'x';
+    }
+    if (axisLock.current === 'x') setDragX(dx);
+  };
   const onDragEnd = () => {
     setDragging(false);
+    const lockedX = axisLock.current === 'x';
+    axisLock.current = null;
+    if (!lockedX) { setDragX(0); return; }
     if (dragX > 100) { setExiting('right'); setTimeout(() => { handleApe(); setExiting(null); setDragX(0); }, 300); }
     else if (dragX < -100) { setExiting('left'); setTimeout(() => { handleFade(); setExiting(null); setDragX(0); }, 300); }
     else setDragX(0);
@@ -498,48 +542,74 @@ export default function Feed() {
 
       {/* Reserved header slot — fixed height prevents CLS */}
 
-      {/* Card surface — fixed height container */}
-      <div className="relative w-full max-w-md mx-auto h-[520px]">
-        {current.card_type === 'insight' ? (
-          <InsightCard card={current as any} onDismiss={() => setIndex(i => i + 1)} />
-        ) : current.card_type === 'macro_desk' ? (
-          <MacroDeskCard card={current} onApe={handleApe} onFade={handleFade} />
-        ) : current.card_type === 'whale_alert' ? (
-          <WhaleAlertCard card={current} onApe={handleApe} onFade={handleFade} />
-        ) : current.card_type === 'pool' ? (
-          <TokenCard card={current} onApe={() => setIndex(i => i + 1)} onFade={() => setIndex(i => i + 1)} isTop />
-        ) : (
-          <>
-            {/* Next card peek */}
-            {cards[index + 1] && (
-              <div className="absolute inset-0 scale-95 opacity-50">
-                <TokenCard card={cards[index + 1]} onApe={() => {}} onFade={() => {}} isTop={false} />
-              </div>
+      {/* Scroll-snap surface — card pinned at top, optional detail below.
+          UX invariant exception (§10.4): inline detail is allowed because the
+          card snap-point retains its fixed height; horizontal-drag area is
+          axis-locked so vertical scroll never accidentally fires APE/FADE. */}
+      <div
+        ref={scrollContainerRef}
+        className="relative w-full max-w-md mx-auto flex-1 feed-snap overflow-y-auto"
+      >
+        {/* === SNAP POINT 1: card === */}
+        <div className="feed-snap-item relative w-full min-h-full flex flex-col items-center justify-start pt-2">
+          <div className="relative w-full h-[520px]">
+            {current.card_type === 'insight' ? (
+              <InsightCard card={current as any} onApe={handleApe} onFade={handleFade} />
+            ) : current.card_type === 'macro_desk' ? (
+              <MacroDeskCard card={current} onApe={handleApe} onFade={handleFade} />
+            ) : current.card_type === 'whale_alert' ? (
+              <WhaleAlertCard card={current} onApe={handleApe} onFade={handleFade} />
+            ) : current.card_type === 'pool' ? (
+              <TokenCard card={current} onApe={() => setIndex(i => i + 1)} onFade={() => setIndex(i => i + 1)} isTop />
+            ) : (
+              <>
+                {/* Next card peek */}
+                {cards[index + 1] && (
+                  <div className="absolute inset-0 scale-95 opacity-50 pointer-events-none">
+                    <TokenCard card={cards[index + 1]} onApe={() => {}} onFade={() => {}} isTop={false} />
+                  </div>
+                )}
+                {/* Current card with drag */}
+                <div
+                  className={`absolute inset-0 transition-transform ${exiting ? 'duration-300' : dragging ? 'duration-0' : 'duration-200'}`}
+                  style={{
+                    transform: exiting === 'right' ? 'translateX(120%) rotate(15deg)'
+                      : exiting === 'left' ? 'translateX(-120%) rotate(-15deg)'
+                      : `translateX(${dragX}px) rotate(${dragX * 0.05}deg)`,
+                    opacity: exiting ? 0 : 1,
+                  }}
+                  onMouseDown={(e) => onDragStart(e.clientX, e.clientY)}
+                  onMouseMove={(e) => onDragMove(e.clientX, e.clientY)}
+                  onMouseUp={onDragEnd}
+                  onMouseLeave={() => { if (dragging) onDragEnd(); }}
+                  onTouchStart={(e) => onDragStart(e.touches[0].clientX, e.touches[0].clientY)}
+                  onTouchMove={(e) => onDragMove(e.touches[0].clientX, e.touches[0].clientY)}
+                  onTouchEnd={onDragEnd}
+                >
+                  {dragX > 50 && <div className="absolute inset-0 rounded-xl border-4 border-[#8eff71] bg-[#8eff71]/10 z-10 flex items-center justify-center"><span className="text-[#8eff71] font-headline text-4xl font-black">APE 🦍</span></div>}
+                  {dragX < -50 && <div className="absolute inset-0 rounded-xl border-4 border-[#ff7166] bg-[#ff7166]/10 z-10 flex items-center justify-center"><span className="text-[#ff7166] font-headline text-4xl font-black">FADE 💨</span></div>}
+                  {swipeFeedback && <SwipeFeedback type={swipeFeedback} />}
+                  {showRareReveal && <RareCardReveal rarity={showRareReveal} onDone={() => setShowRareReveal(null)} />}
+                  <TokenCard card={current} onApe={handleApe} onFade={handleFade} isTop />
+                </div>
+              </>
             )}
-            {/* Current card with drag */}
-            <div
-              className={`absolute inset-0 transition-transform ${exiting ? 'duration-300' : dragging ? 'duration-0' : 'duration-200'}`}
-              style={{
-                transform: exiting === 'right' ? 'translateX(120%) rotate(15deg)'
-                  : exiting === 'left' ? 'translateX(-120%) rotate(-15deg)'
-                  : `translateX(${dragX}px) rotate(${dragX * 0.05}deg)`,
-                opacity: exiting ? 0 : 1,
-              }}
-              onMouseDown={(e) => onDragStart(e.clientX)}
-              onMouseMove={(e) => onDragMove(e.clientX)}
-              onMouseUp={onDragEnd}
-              onMouseLeave={() => { if (dragging) onDragEnd(); }}
-              onTouchStart={(e) => onDragStart(e.touches[0].clientX)}
-              onTouchMove={(e) => onDragMove(e.touches[0].clientX)}
-              onTouchEnd={onDragEnd}
-            >
-              {dragX > 50 && <div className="absolute inset-0 rounded-xl border-4 border-[#8eff71] bg-[#8eff71]/10 z-10 flex items-center justify-center"><span className="text-[#8eff71] font-headline text-4xl font-black">APE 🦍</span></div>}
-              {dragX < -50 && <div className="absolute inset-0 rounded-xl border-4 border-[#ff7166] bg-[#ff7166]/10 z-10 flex items-center justify-center"><span className="text-[#ff7166] font-headline text-4xl font-black">FADE 💨</span></div>}
-              {swipeFeedback && <SwipeFeedback type={swipeFeedback} />}
-              {showRareReveal && <RareCardReveal rarity={showRareReveal} onDone={() => setShowRareReveal(null)} />}
-              <TokenCard card={current} onApe={handleApe} onFade={handleFade} isTop />
+          </div>
+
+          {/* Bouncing chevron hint — shows once per session, only if there's detail to scroll to. */}
+          {!chevronDismissed && hasTokenCardDetail(current) && (
+            <div className="mt-3 flex flex-col items-center pointer-events-none">
+              <span className="text-[10px] text-[#adaaaa] font-label uppercase tracking-widest">scroll for analysis</span>
+              <span className="text-2xl text-[#8eff71]" style={{ animation: 'chevronBounce 1.4s ease-in-out infinite' }}>↓</span>
             </div>
-          </>
+          )}
+        </div>
+
+        {/* === SNAP POINT 2: detail (only rendered if card has analysis content) === */}
+        {hasTokenCardDetail(current) && (
+          <div className="feed-snap-item w-full min-h-full px-2 pb-6 pt-3">
+            <TokenCardDetail card={current} />
+          </div>
         )}
       </div>
     </div>

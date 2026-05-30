@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import type { Card } from '../hooks/useCards';
 import { useTicker } from '../hooks/useTicker';
 import { shareToX, isCardTradeable } from '../config';
@@ -128,7 +127,6 @@ function CandlestickChart({ ohlc, sparkline, price, verdict, cardType }: { ohlc?
 }
 
 export default function TokenCard({ card, onApe, onFade, isTop = false }: { card: Card; onApe: () => void; onFade: () => void; isTop?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
   const verdict = card.verdict || 'DYOR';
   const vCfg = verdictConfig[verdict] || verdictConfig.DYOR;
   const stars = getStars(card);
@@ -190,7 +188,7 @@ export default function TokenCard({ card, onApe, onFade, isTop = false }: { card
           </div>
 
           {/* === CARD ART: Candlestick Chart === */}
-          <div className="px-2 cursor-pointer" onClick={() => setExpanded(!expanded)}>
+          <div className="px-2">
             <div className="bg-[#0a0a0a] rounded-xl border border-[#262626] overflow-hidden">
               {card.image_url && card.card_type === 'insight' ? (
                 <img src={card.image_url} alt="" className="w-full h-32 object-cover rounded-xl" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
@@ -250,125 +248,8 @@ export default function TokenCard({ card, onApe, onFade, isTop = false }: { card
             </div>
           )}
 
-          {/* === EXPANDABLE ANALYSIS (bottom-sheet overlay — no CLS) === */}
-          {expanded && (
-            <div className="fixed inset-0 z-50 bg-black/70 flex items-end" onClick={() => setExpanded(false)}>
-              <div className="w-full max-w-md mx-auto bg-[#0e0e0e] rounded-t-2xl p-4 max-h-[80vh] overflow-y-auto animate-[slideUp_0.25s_ease-out]" onClick={e => e.stopPropagation()}>
-                <div className="w-10 h-1 bg-[#494847] rounded-full mx-auto mb-3" />
-                <div className="space-y-2">
-              {/* Verdict reason */}
-              {card.verdict_reason && (
-                <div className="bg-[#1a1a1a] p-2 rounded-lg">
-                  <div className="text-[8px] text-[#bf81ff] uppercase font-bold mb-0.5">Analysis</div>
-                  <p className="text-[11px] text-[#ccc]">{card.verdict_reason}</p>
-                  {card.roast && <p className="text-[10px] text-[#bf81ff]/70 italic mt-1">{card.roast}</p>}
-                </div>
-              )}
-
-              {/* AI Prediction / Trade Plan */}
-              {card.trade_plan && (
-                <div className="bg-[#0e1a0e] border border-[#8eff71]/20 p-2 rounded-lg">
-                  <div className="text-[8px] text-[#8eff71] uppercase font-bold mb-1">🎯 AI Prediction</div>
-                  <div className="grid grid-cols-2 gap-1 text-[10px]">
-                    {card.trade_plan.entry && <div><span className="text-[#888]">Entry:</span> <span className="text-white">{card.trade_plan.entry}</span></div>}
-                    {card.trade_plan.target && <div><span className="text-[#888]">Target:</span> <span className="text-[#8eff71]">{card.trade_plan.target}</span></div>}
-                    {card.trade_plan.stop && <div><span className="text-[#888]">Stop:</span> <span className="text-[#ff7166]">{card.trade_plan.stop}</span></div>}
-                    {card.trade_plan.position_size && <div><span className="text-[#888]">Size:</span> <span className="text-white">{card.trade_plan.position_size}</span></div>}
-                  </div>
-                </div>
-              )}
-
-              {/* Why Now */}
-              {card.why_now && (
-                <div className="bg-[#1a1a2e] border border-[#bf81ff]/20 p-2 rounded-lg">
-                  <div className="text-[8px] text-[#bf81ff] uppercase font-bold">⚡ Why Now</div>
-                  <p className="text-[10px] text-[#ccc] mt-0.5">{card.why_now}</p>
-                </div>
-              )}
-
-              {/* Agent Reports */}
-              {card.agent_reports && (
-                <div className="space-y-1">
-                  <div className="text-[8px] text-[#adaaaa] uppercase font-bold">🤖 Agent Reports</div>
-                  {card.agent_reports.technical && <p className="text-[9px] text-[#8eff71]/80 bg-[#0e1a0e] p-1.5 rounded">📊 {card.agent_reports.technical.slice(0, 120)}</p>}
-                  {card.agent_reports.sentiment && <p className="text-[9px] text-[#bf81ff]/80 bg-[#1a1a2e] p-1.5 rounded">💬 {card.agent_reports.sentiment.slice(0, 120)}</p>}
-                  {card.agent_reports.fundamentals && <p className="text-[9px] text-[#60a5fa]/80 bg-[#0e1a2e] p-1.5 rounded">📈 {card.agent_reports.fundamentals.slice(0, 120)}</p>}
-                </div>
-              )}
-
-              {/* Debate summary */}
-              {card.debate_summary && (
-                <p className="text-[9px] text-[#888] italic">⚖️ {card.debate_summary}</p>
-              )}
-
-              {card.institutional_context && card.institutional_context.length > 0 && (
-                <div className="bg-[#0e0e1a] border border-[#6366f1]/30 p-2 rounded-lg">
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="text-[8px] text-[#8eff71] uppercase font-bold">🏦 Smart Money Intel</div>
-                    <a href="https://sosovalue.com" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#6366f1]/15 hover:bg-[#6366f1]/25 transition-colors">
-                      <span className="text-[7px] font-bold text-[#a5b4fc]">SoSoValue</span>
-                    </a>
-                  </div>
-                  <div className="space-y-1">
-                    {card.institutional_context.map((item: any, i: number) => (
-                      <div key={i} className="flex items-center gap-1.5 text-[10px]">
-                        <span>{item.emoji}</span>
-                        <span className="text-[#888]">{item.label}:</span>
-                        <span className="text-white">{item.value}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {card.research_summary?.summary && (
-                <div className="bg-[#0e0e1a] border border-[#6366f1]/20 p-2 rounded-lg">
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="text-[8px] text-[#bf81ff] uppercase font-bold">🔬 AI Research</div>
-                    <a href="https://sosovalue.com/research" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#6366f1]/10 hover:bg-[#6366f1]/20 transition-colors">
-                      <span className="text-[7px] font-bold text-[#a5b4fc]">SoSoValue →</span>
-                    </a>
-                  </div>
-                  <p className="text-[10px] text-[#ccc]">{card.research_summary.summary.slice(0, 200)}</p>
-                  {card.research_summary.key_findings?.length > 0 && (
-                    <div className="mt-1 space-y-0.5">
-                      {card.research_summary.key_findings.slice(0, 3).map((f: string, i: number) => (
-                        <p key={i} className="text-[9px] text-[#888]">• {f}</p>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Metrics row */}
-              <div className="flex gap-1.5">
-                <div className="flex-1 bg-[#1a1a1a] p-1.5 rounded text-center">
-                  <div className="text-[7px] text-[#888] uppercase">MCap</div>
-                  <div className="text-[10px] text-white font-bold">{fmt(card.market_cap)}</div>
-                </div>
-                <div className="flex-1 bg-[#1a1a1a] p-1.5 rounded text-center">
-                  <div className="text-[7px] text-[#888] uppercase">Vol</div>
-                  <div className="text-[10px] text-white font-bold">{fmt(card.volume_24h)}</div>
-                </div>
-                {card.position_guide && (
-                  <div className="flex-1 bg-[#1a1a1a] p-1.5 rounded text-center">
-                    <div className="text-[7px] text-[#888] uppercase">Size</div>
-                    <div className="text-[9px] text-white">{card.position_guide.slice(0, 20)}</div>
-                  </div>
-                )}
-              </div>
-                </div>
-                <button className="w-full mt-3 bg-[#262626] text-[#adaaaa] py-2 rounded-lg text-sm" onClick={() => setExpanded(false)}>Close</button>
-              </div>
-            </div>
-          )}
-
-          {/* Analyze trigger */}
-          <div className="text-center pb-1">
-            <button onClick={() => setExpanded(true)} className="text-[9px] text-[#494847] hover:text-[#adaaaa] transition-colors">
-              ▼ tap to analyze
-            </button>
-          </div>
+          {/* Detail panel removed — rendered inline by Feed scroll-snap container.
+              See <TokenCardDetail /> exported below + Feed.tsx FeedScrollContainer. */}
 
           {/* Source badge */}
           {card.source === "sosovalue" && (
@@ -595,6 +476,138 @@ export function WhaleAlertCard({ card, onApe, onFade }: { card: Card; onApe: () 
       <div className="px-5 pb-4"><VerdictPill verdict={card.verdict || 'DYOR'} /></div>
       {/* Actions */}
       <ActionButtons onApe={onApe} onFade={onFade} />
+    </div>
+  );
+}
+
+
+/* ─── TokenCardDetail (inline detail panel — replaces the old modal) ───
+ *
+ * Pure presentational component. Rendered BELOW the card by Feed.tsx's
+ * scroll-snap container (TikTok-comments pattern). No state of its own.
+ *
+ * Uses `hasTokenCardDetail(card)` so callers can omit the snap-point
+ * entirely when there's nothing to show (UX invariant §10.1).
+ */
+export function hasTokenCardDetail(card: Card): boolean {
+  return !!(
+    card.verdict_reason ||
+    card.trade_plan ||
+    card.why_now ||
+    card.agent_reports ||
+    card.debate_summary ||
+    (card.institutional_context && card.institutional_context.length > 0) ||
+    card.research_summary?.summary
+  );
+}
+
+export function TokenCardDetail({ card }: { card: Card }) {
+  return (
+    <div className="w-full max-w-sm mx-auto space-y-2 p-1">
+      {card.verdict_reason && (
+        <div className="bg-[#1a1a1a] p-3 rounded-lg">
+          <div className="text-[9px] text-[#bf81ff] uppercase font-bold mb-1">Analysis</div>
+          <p className="text-xs text-[#ccc] leading-relaxed">{card.verdict_reason}</p>
+          {card.roast && <p className="text-[10px] text-[#bf81ff]/70 italic mt-1">{card.roast}</p>}
+        </div>
+      )}
+
+      {card.trade_plan && (
+        <div className="bg-[#0e1a0e] border border-[#8eff71]/20 p-3 rounded-lg">
+          <div className="text-[9px] text-[#8eff71] uppercase font-bold mb-1.5">🎯 AI Prediction</div>
+          <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+            {card.trade_plan.entry && <div><span className="text-[#888]">Entry:</span> <span className="text-white">{card.trade_plan.entry}</span></div>}
+            {card.trade_plan.target && <div><span className="text-[#888]">Target:</span> <span className="text-[#8eff71]">{card.trade_plan.target}</span></div>}
+            {card.trade_plan.stop && <div><span className="text-[#888]">Stop:</span> <span className="text-[#ff7166]">{card.trade_plan.stop}</span></div>}
+            {card.trade_plan.position_size && <div><span className="text-[#888]">Size:</span> <span className="text-white">{card.trade_plan.position_size}</span></div>}
+          </div>
+        </div>
+      )}
+
+      {card.why_now && (
+        <div className="bg-[#1a1a2e] border border-[#bf81ff]/20 p-3 rounded-lg">
+          <div className="text-[9px] text-[#bf81ff] uppercase font-bold">⚡ Why Now</div>
+          <p className="text-[11px] text-[#ccc] mt-1 leading-relaxed">{card.why_now}</p>
+        </div>
+      )}
+
+      {card.agent_reports && (
+        <div className="space-y-1.5">
+          <div className="text-[9px] text-[#adaaaa] uppercase font-bold">🤖 Agent Reports</div>
+          {card.agent_reports.technical && (
+            <p className="text-[10px] text-[#8eff71]/90 bg-[#0e1a0e] p-2 rounded">📊 {card.agent_reports.technical}</p>
+          )}
+          {card.agent_reports.sentiment && (
+            <p className="text-[10px] text-[#bf81ff]/90 bg-[#1a1a2e] p-2 rounded">💬 {card.agent_reports.sentiment}</p>
+          )}
+          {card.agent_reports.fundamentals && (
+            <p className="text-[10px] text-[#60a5fa]/90 bg-[#0e1a2e] p-2 rounded">📈 {card.agent_reports.fundamentals}</p>
+          )}
+        </div>
+      )}
+
+      {card.debate_summary && (
+        <p className="text-[10px] text-[#888] italic px-1">⚖️ {card.debate_summary}</p>
+      )}
+
+      {card.institutional_context && card.institutional_context.length > 0 && (
+        <div className="bg-[#0e0e1a] border border-[#6366f1]/30 p-3 rounded-lg">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="text-[9px] text-[#8eff71] uppercase font-bold">🏦 Smart Money Intel</div>
+            <a href="https://sosovalue.com" target="_blank" rel="noopener noreferrer"
+               className="px-1.5 py-0.5 rounded bg-[#6366f1]/15 hover:bg-[#6366f1]/25 transition-colors">
+              <span className="text-[8px] font-bold text-[#a5b4fc]">SoSoValue</span>
+            </a>
+          </div>
+          <div className="space-y-1">
+            {card.institutional_context.map((item: any, i: number) => (
+              <div key={i} className="flex items-center gap-1.5 text-[11px]">
+                <span>{item.emoji}</span>
+                <span className="text-[#888]">{item.label}:</span>
+                <span className="text-white">{item.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {card.research_summary?.summary && (
+        <div className="bg-[#0e0e1a] border border-[#6366f1]/20 p-3 rounded-lg">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="text-[9px] text-[#bf81ff] uppercase font-bold">🔬 AI Research</div>
+            <a href="https://sosovalue.com/research" target="_blank" rel="noopener noreferrer"
+               className="px-1.5 py-0.5 rounded bg-[#6366f1]/10 hover:bg-[#6366f1]/20 transition-colors">
+              <span className="text-[8px] font-bold text-[#a5b4fc]">SoSoValue →</span>
+            </a>
+          </div>
+          <p className="text-[11px] text-[#ccc] leading-relaxed">{card.research_summary.summary}</p>
+          {card.research_summary.key_findings?.length > 0 && (
+            <div className="mt-1.5 space-y-0.5">
+              {card.research_summary.key_findings.map((f: string, i: number) => (
+                <p key={i} className="text-[10px] text-[#888]">• {f}</p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Metrics row */}
+      <div className="flex gap-1.5">
+        <div className="flex-1 bg-[#1a1a1a] p-2 rounded text-center">
+          <div className="text-[8px] text-[#888] uppercase">MCap</div>
+          <div className="text-[11px] text-white font-bold">{fmt(card.market_cap)}</div>
+        </div>
+        <div className="flex-1 bg-[#1a1a1a] p-2 rounded text-center">
+          <div className="text-[8px] text-[#888] uppercase">Vol</div>
+          <div className="text-[11px] text-white font-bold">{fmt(card.volume_24h)}</div>
+        </div>
+        {card.position_guide && (
+          <div className="flex-1 bg-[#1a1a1a] p-2 rounded text-center">
+            <div className="text-[8px] text-[#888] uppercase">Size</div>
+            <div className="text-[10px] text-white">{card.position_guide.slice(0, 20)}</div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -436,8 +436,15 @@ def get_cards(offset: int = 0, limit: int = 20, status: str = "active", card_typ
     where = "WHERE status = %s AND (expires_at > NOW() OR expires_at IS NULL)"
     params: list = [status]
     if card_type:
-        where += " AND card_type = %s"
-        params.append(card_type)
+        # Accept either a single value ("trading") or a comma-separated list
+        # ("trading,gem,pool"). Comma-separated drives the feed mode picker.
+        types = [t.strip() for t in card_type.split(",") if t.strip()]
+        if len(types) == 1:
+            where += " AND card_type = %s"
+            params.append(types[0])
+        elif len(types) > 1:
+            where += " AND card_type = ANY(%s)"
+            params.append(types)
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(f"SELECT COUNT(*) as cnt FROM cards {where}", params)
         total = cur.fetchone()["cnt"]

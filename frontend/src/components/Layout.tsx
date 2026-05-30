@@ -1,12 +1,14 @@
-import { NavLink } from 'react-router-dom';
-import { useState } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
+import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 // import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
 import { useSwitchChain, useChains } from 'wagmi';
 import { config } from '../config';
 import { useWallet } from '../hooks/useWallet';
+import { useFeedMode } from '../hooks/useFeedMode';
 import NetworkBadge from './NetworkBadge';
+import ModePicker from './ModePicker';
 
 const navItems = [
   { to: '/', icon: 'bolt', label: 'Feed', fill: true },
@@ -116,6 +118,13 @@ function WalletPill({ address, streak, onLogout }: {
 
 export default function Layout({ children }: { children: ReactNode }) {
   const { address: walletAddress, isConnected: authenticated, login, logout } = useWallet();
+  const location = useLocation();
+  // The mode picker only makes sense on the feed (which lives at '/').
+  const isFeed = location.pathname === '/';
+  const { activeMode, setActiveMode } = useFeedMode();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pillRef = useRef<HTMLButtonElement>(null);
+
   const { data: rewardsData } = useQuery({
     queryKey: ['rewards', walletAddress],
     queryFn: async () => {
@@ -133,9 +142,22 @@ export default function Layout({ children }: { children: ReactNode }) {
       <TestnetBanner />
       {/* Header */}
       <header className="flex justify-between items-center px-5 py-3 shrink-0 z-50">
-        <div className="flex items-center gap-3">
-          <img src="/app.png" alt="KINETIC" className="w-8 h-8 rounded-full object-cover" />
-          <h1 className="text-2xl font-black text-[#8eff71] italic font-headline tracking-tight">KINETIC</h1>
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <img src="/app.png" alt="KINETIC" className="w-8 h-8 rounded-full object-cover shrink-0" />
+          <h1 className="text-xl sm:text-2xl font-black text-[#8eff71] italic font-headline tracking-tight">KINETIC</h1>
+          {isFeed && (
+            <button
+              ref={pillRef}
+              onClick={() => setPickerOpen((o) => !o)}
+              aria-haspopup="dialog"
+              aria-expanded={pickerOpen}
+              className="ml-1 flex items-center gap-1.5 bg-[#131313] px-2.5 py-1.5 rounded-lg border border-[#494847]/30 hover:border-[#8eff71]/40 active:scale-95 transition-all"
+            >
+              <span className="text-base leading-none">{activeMode.emoji}</span>
+              <span className="hidden sm:inline text-[#adaaaa] font-label font-bold text-xs">{activeMode.label}</span>
+              <span className="text-[#494847] text-[10px] leading-none">▾</span>
+            </button>
+          )}
         </div>
         {authenticated && walletAddress ? (
           <WalletPill address={walletAddress} streak={streak} onLogout={logout} />
@@ -146,6 +168,15 @@ export default function Layout({ children }: { children: ReactNode }) {
           </button>
         )}
       </header>
+      {isFeed && (
+        <ModePicker
+          open={pickerOpen}
+          onOpenChange={setPickerOpen}
+          activeId={activeMode.id}
+          onSelect={setActiveMode}
+          anchorRef={pillRef}
+        />
+      )}
 
       {/* Main */}
       <main className="flex-1 overflow-y-auto overflow-x-hidden">

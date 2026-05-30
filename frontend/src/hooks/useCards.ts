@@ -49,17 +49,20 @@ export interface Card {
   research_summary?: { source: string; summary: string; sentiment: string; key_findings: string[]; chart_url: string };
 }
 
-async function fetchCards(offset = 0, limit = 20, cardType?: string) {
-  const url = cardType
-    ? `${config.backendUrl}/api/cards?offset=${offset}&limit=${limit}&card_type=${cardType}`
-    : `${config.backendUrl}/api/cards?offset=${offset}&limit=${limit}`;
-  const resp = await fetch(url);
+async function fetchCards(offset = 0, limit = 20, cardType?: string | string[]) {
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  if (cardType) {
+    const value = Array.isArray(cardType) ? cardType.join(',') : cardType;
+    if (value) params.set('card_type', value);
+  }
+  const resp = await fetch(`${config.backendUrl}/api/cards?${params.toString()}`);
   if (!resp.ok) throw new Error('Failed to fetch cards');
   return resp.json() as Promise<{ cards: Card[]; total: number }>;
 }
 
-export function useCards(offset = 0, limit = 20, cardType?: string) {
-  return useQuery({ queryKey: ['cards', offset, limit, cardType], queryFn: () => fetchCards(offset, limit, cardType) });
+export function useCards(offset = 0, limit = 20, cardType?: string | string[]) {
+  const key = Array.isArray(cardType) ? cardType.join(',') : cardType;
+  return useQuery({ queryKey: ['cards', offset, limit, key], queryFn: () => fetchCards(offset, limit, cardType) });
 }
 
 function swipeMutation(action: 'ape' | 'fade') {
