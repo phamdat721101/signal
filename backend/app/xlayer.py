@@ -208,6 +208,46 @@ def explorer_tx_url(tx_hash: str, chain_id: int) -> str:
     return f"{base}/tx/{tx_hash}"
 
 
+# ────────────────────────────────────────────────────────────────────
+#  Pair support + range→tick helpers (used by /api/cards/{id}/lp-recipe)
+# ────────────────────────────────────────────────────────────────────
+
+def _norm(a: str | None) -> str:
+    return (a or "").lower()
+
+
+def is_pair_supported(token_a: str | None, token_b: str | None, chain_id: int | None) -> bool:
+    """True iff the (tokenA, tokenB) pair has a deployed Kinetic V4 pool.
+
+    v1 — static allowlist of {OKB, USDC} on X Layer testnet (1952) and
+    mainnet (196). Order-insensitive. The contract probe extension point
+    lives in `_probe_pool_manager` for when more pools are deployed; until
+    then the allowlist is the single source of truth so tests are
+    deterministic and no RPC traffic is generated on every page load.
+    """
+    if not token_a or not token_b or chain_id not in (1952, 196):
+        return False
+    from app.config import get_settings
+    s = get_settings()
+    okb = _norm(s.okb_address_xlayer)
+    usdc = _norm(s.usdc_address_xlayer)
+    if not okb or not usdc:
+        return False
+    pair = {_norm(token_a), _norm(token_b)}
+    return pair == {okb, usdc}
+
+
+def compute_range_ticks(min_price: float, max_price: float, *, spacing: int = TICK_SPACING) -> tuple[int, int]:
+    """Convert a (min_price, max_price) band into spacing-rounded ticks."""
+    if min_price <= 0 or max_price <= 0 or max_price <= min_price:
+        raise ValueError(f"invalid range: min={min_price} max={max_price}")
+    lower = round_to_spacing(price_to_tick(min_price), ceil=False, spacing=spacing)
+    upper = round_to_spacing(price_to_tick(max_price), ceil=True, spacing=spacing)
+    if upper <= lower:
+        upper = lower + spacing
+    return lower, upper
+
+
 @dataclass(frozen=True)
 class CloseBundle:
     card_id: int

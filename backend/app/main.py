@@ -385,6 +385,96 @@ async def get_card(card_id: int):
     return card
 
 
+@app.get("/api/cards/{card_id}/lp-recipe")
+async def get_card_lp_recipe(
+    card_id: int,
+    amount_a: float = Query(default=0.0, ge=0.0),
+    preset: str = Query(default="balanced", pattern="^(conservative|balanced|aggressive)$"),
+):
+    """Range + tick + token-B + fee projection for a pool card.
+
+    Used by the FE LpConfigurator (free). Mirrored on the paid agent API
+    at /api/v2/agent/lp-recipes.
+    """
+    from app.db import get_card_by_id
+    from app.lp_recipe import build_recipe
+    card = get_card_by_id(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    if (card.get("card_type") or "") != "pool":
+        raise HTTPException(status_code=422, detail="Card is not a liquidity pool card")
+    return build_recipe(card, amount_a=amount_a, preset=preset)
+
+
+
+
+@app.post("/api/cards/{card_id}/execute")
+async def execute_trading_signal(card_id: int, payload: dict):
+    """Execute a trading_signal card on SoDex perps.
+
+    Five guard layers (kill-switch / type / symbol / idempotency / daily-cap)
+    are enforced inside `trading_signal_engine.safe_execute`; this route is
+    the thin HTTP adapter. Body: `{ "address": "0x..." }`.
+    """
+    user_address = (payload or {}).get("address", "").strip()
+    if not user_address:
+        raise HTTPException(status_code=422, detail="address required")
+    from app.db import get_card_by_id
+    from app.trading_signal_engine import ExecuteError, safe_execute
+    card = get_card_by_id(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    try:
+        return safe_execute(card, user_address)
+    except ExecuteError as e:
+        raise HTTPException(status_code=e.http_status,
+                            detail={"code": e.code, **e.extra})
+    except Exception as e:
+        error_tracker.track("SODEX_EXECUTE_ERROR", str(e),
+                            {"card_id": card_id, "address": user_address})
+        raise HTTPException(status_code=500, detail="execute_failed")
+
+
+@app.get("/api/positions/{address}")
+async def get_positions(address: str):
+    """Live SoDex perps account state for `address`.
+
+    Thin proxy over `sodex_client.get_account_state` — surfaces open
+    positions, balance, free margin so the FE can render a live
+    "you have X open" panel after a successful execute. Returns a
+    shape designed to be small and FE-friendly (not the raw SoDex
+    envelope). Empty result when SoDex is disabled or the address has
+    no SoDex account.
+    """
+    from app.sodex_client import get_sodex_client
+    if not address:
+        raise HTTPException(status_code=422, detail="address required")
+    client = get_sodex_client()
+    if client is None:
+        return {"enabled": False, "balance": None, "positions": []}
+    try:
+        resp = client.get_account_state(address)
+    except Exception:
+        resp = None
+    data = (resp or {}).get("data") or {}
+    balances = data.get("B") or []
+    positions = data.get("P") or []
+    return {
+        "enabled": True,
+        "account_id": data.get("aid"),
+        "balance": (balances[0].get("wb") if balances else None),
+        "free_margin": data.get("amw"),
+        "positions": [
+            {
+                "symbol": p.get("s"),
+                "size": p.get("sz"),
+                "entry_price": p.get("ep"),
+                "unrealized_pnl_ratio": p.get("ur"),
+                "margin_mode": p.get("m"),
+            }
+            for p in positions
+        ],
+    }
 
 
 @app.get("/api/cards/{card_id}/image")

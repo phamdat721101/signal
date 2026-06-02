@@ -168,6 +168,11 @@ def harvest_pools(limit: int = 5) -> list[dict]:
             "status": "active",
             "source": "defillama",
         })
+        # Lazy import — lp_advisory imports `_fetch_llama_pools` from this
+        # module, so a top-level import would cycle. Per-call import is fine
+        # here (this loop runs ≤ 5 times, every 5 min via the scheduler).
+        from app.lp_advisory import pool_enrichment
+        cards[-1].update(pool_enrichment(p))
         # Fetch sparkline for primary constituent
         primary = symbol.split("-")[0].split("/")[0].upper()
         from app.signal_engine import COINGECKO_IDS

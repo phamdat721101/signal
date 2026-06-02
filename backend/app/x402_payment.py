@@ -96,6 +96,11 @@ def get_x402_middleware_args() -> tuple[dict, x402ResourceServer] | tuple[None, 
             "DeFi LP pool advisory ranked by APY and TVL with impermanent-loss risk scoring across multiple chains and protocols. Returns curated APE/FADE recommendations for liquidity provision opportunities.",
             {"pools": [{"pair": "ETH/USDC", "apy": 12.5, "tvl": 5000000, "risk_score": 35}], "total": 1},
         ),
+        "GET /api/v2/agent/lp-recipes": route(
+            "$0.005",
+            "Concentrated-LP recipe for any pool card with volatility-based price range, tick math, Token-A→Token-B derivation, pool-share, and 24h fee projection. Three presets (Conservative/Balanced/Aggressive) map to k·σ_7d bands. Returns ZAP-ready X Layer V4 ticks for supported pairs and a deep-link for everything else.",
+            {"preset": "balanced", "sigma_7d": 0.042, "min_price": 1850.0, "max_price": 2100.0, "ticks": [-720, 720], "amount_a": 1.0, "token_b_amount": 1924.5, "pool_share_pct": 0.0001, "est_fee_24h_usd": 0.045, "supported": True, "dex_link": "https://defillama.com/yields/pool/abc"},
+        ),
         "GET /api/v2/agent/track-record": route(
             "$0.01",
             "Historical prediction accuracy and per-token win rates from 5,816+ on-chain resolved predictions. Includes overall accuracy, per-token breakdown, sample size, and average PnL.",

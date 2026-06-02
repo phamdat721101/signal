@@ -10,6 +10,10 @@ import { config, shareToX, normalizeAddress, isCardTradeable } from '../config';
 import TokenCard, { TokenCardDetail, hasTokenCardDetail } from '../components/TokenCard';
 import { MacroDeskCard, WhaleAlertCard } from '../components/TokenCard';
 import { InsightCard } from '../components/InsightCard';
+import LpBattleCard from '../components/LpBattleCard';
+import TradingSignalCard from '../components/TradingSignalCard';
+import { useExecuteSignal } from '../hooks/useExecuteSignal';
+import LpConfigurator from '../components/LpConfigurator';
 import Onboarding from '../components/Onboarding';
 import Paywall from '../components/Paywall';
 import { useApeTransaction } from '../hooks/useApeTransaction';
@@ -34,6 +38,24 @@ const LOSS_LINES = [
 ];
 
 function pickRandom(arr: string[]) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+/** Map a structured execute error code to a user-facing line.
+ *  Pure, no React, easy to unit-test. New codes only need one row. */
+function humanizeExecError(code: string, raw?: string): string {
+  switch (code) {
+    case 'trading_disabled':         return 'Trading temporarily paused — try again later.';
+    case 'symbol_not_listed_on_sodex': return 'This asset is not yet listed on SoDex testnet.';
+    case 'symbol_not_supported':     return 'Asset not supported by Kinetic.';
+    case 'already_executed':         return 'You already executed this card. Open positions in Portfolio.';
+    case 'daily_cap_reached':        return 'Daily execution cap reached (5/day).';
+    case 'qty_below_step':           return 'Order size too small for this asset — bump notional.';
+    case 'notional_below_min':       return 'Notional below SoDex $10 minimum.';
+    case 'sodex_rejected':           return raw ? `SoDex rejected: ${raw}` : 'SoDex rejected the order.';
+    case 'missing_mark_price':       return 'No live price — try again in a moment.';
+    case 'sodex_disabled':           return 'SoDex execution is disabled in this environment.';
+    default:                         return raw || `Failed (${code}).`;
+  }
+}
 
 function fmtPrice(p: number): string {
   if (p >= 1) return `$${p.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
@@ -208,10 +230,9 @@ export default function Feed() {
   const startX = useRef(0);
   const startY = useRef(0);
   const axisLock = useRef<'x' | 'y' | null>(null);
+  const wasDragged = useRef(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [chevronDismissed, setChevronDismissed] = useState(
-    () => sessionStorage.getItem('kinetic_chevron_dismissed') === '1'
-  );
+  const [expanded, setExpanded] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
   const [swipeFeedback, setSwipeFeedback] = useState<'ape' | 'fade' | null>(null);
   const [resolvedTrade, setResolvedTrade] = useState<any>(null);
@@ -220,12 +241,27 @@ export default function Feed() {
   const [summonCard, setSummonCard] = useState<any>(null);
   const [pendingCard, setPendingCard] = useState<any>(null);
   const [showRareReveal, setShowRareReveal] = useState<string | null>(null);
+  const [lpConfigCard, setLpConfigCard] = useState<any>(null);
+
+  // Execute toast state — minimal, single source. Auto-dismisses (see effect below).
+  const [execToast, setExecToast] = useState<{
+    kind: 'success' | 'error';
+    title: string;
+    message: string;
+    orderId?: string;
+  } | null>(null);
+  useEffect(() => {
+    if (!execToast) return;
+    const t = setTimeout(() => setExecToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [execToast]);
 
   const { data, isLoading } = useCards(0, 50, activeMode.cardTypes as string[]);
   const { data: featuredGem } = useFeaturedGem();
   const { address: initiaAddress, login, isCorrectChain } = useWallet();
   const navigate = useNavigate();
   const { apeOnChain } = useApeTransaction();
+  const executeSignal = useExecuteSignal();
 
   const evmAddress = normalizeAddress(initiaAddress);
 
@@ -269,24 +305,22 @@ export default function Feed() {
   }, [data, featuredGem, activeMode.id]);
   const current = cards[index];
 
-  // Auto-reset detail scroll to top when card advances (TikTok-comments pattern).
+  // Reset detail expansion + scroll position whenever the visible card advances.
   useEffect(() => {
+    setExpanded(false);
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'auto' });
   }, [index, activeMode.id]);
 
-  // Mark chevron dismissed after first non-trivial scroll, once per session.
-  useEffect(() => {
-    const el = scrollContainerRef.current;
-    if (!el || chevronDismissed) return;
-    const onScroll = () => {
-      if (el.scrollTop > 40) {
-        sessionStorage.setItem('kinetic_chevron_dismissed', '1');
-        setChevronDismissed(true);
-      }
-    };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [chevronDismissed, index, activeMode.id]);
+  // Tap-to-expand: tapping the card body toggles the inline analysis panel.
+  // Skip taps that landed on an interactive child (FADE/APE/Share buttons)
+  // and taps that follow a real drag gesture (horizontal or vertical move
+  // beyond 8px — tracked by the wasDragged ref in onDragMove).
+  const handleCardTap = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (wasDragged.current) return;
+    if ((e.target as Element).closest?.('button, a, [role="button"]')) return;
+    if (!hasTokenCardDetail(current)) return;
+    setExpanded(prev => !prev);
+  };
 
   // Rare card reveal trigger
   useEffect(() => {
@@ -359,6 +393,34 @@ export default function Feed() {
     if (data.trade) navigate(`/trade-success/${card.id}`, { state: { trade: data.trade, conviction: data.conviction } });
   };
 
+  const handleExecute = async () => {
+    if (!current || !evmAddress) {
+      if (!evmAddress) login();
+      return;
+    }
+    try {
+      const r = await executeSignal.mutateAsync({ cardId: current.id, address: evmAddress });
+      console.info('SoDex order placed:', r.order_id, r.symbol, r.side);
+      setExecToast({
+        kind: 'success',
+        title: '🎯 Order Filled',
+        message: `${r.side.toUpperCase()} ${r.qty} ${r.symbol} @ $${r.avg_price}`,
+        orderId: r.order_id,
+      });
+    } catch (e: unknown) {
+      const err = e as { body?: { detail?: { code?: string; raw?: { error?: string } } | string }; message?: string };
+      const detail = err.body?.detail;
+      const code = (typeof detail === 'object' && detail?.code) || err.message || 'execute_failed';
+      const raw = (typeof detail === 'object' && detail?.raw?.error) || '';
+      console.warn('Execute failed:', code, raw);
+      setExecToast({
+        kind: 'error',
+        title: '❌ Order Rejected',
+        message: humanizeExecError(code, raw),
+      });
+    }
+  };
+
   const handleFade = async () => {
     if (!current) return;
     setSwipeFeedback('fade');
@@ -384,6 +446,7 @@ export default function Feed() {
     startX.current = clientX;
     startY.current = clientY;
     axisLock.current = null;
+    wasDragged.current = false;
     setDragging(true);
   };
   const onDragMove = (clientX: number, clientY: number) => {
@@ -391,9 +454,12 @@ export default function Feed() {
     const dx = clientX - startX.current;
     const dy = clientY - startY.current;
     // Decide axis on first meaningful move; once locked to vertical, let the
-    // browser scroll. Once locked to horizontal, engage the swipe.
+    // browser scroll. Once locked to horizontal, engage the swipe. Either
+    // way, mark the gesture as a drag so the click that follows is ignored
+    // by handleCardTap.
     if (axisLock.current === null && Math.abs(dx) + Math.abs(dy) > 8) {
       axisLock.current = Math.abs(dy) > Math.abs(dx) ? 'y' : 'x';
+      wasDragged.current = true;
     }
     if (axisLock.current === 'x') setDragX(dx);
   };
@@ -529,6 +595,41 @@ export default function Feed() {
       )}
       {showPaywall && <Paywall onDismiss={() => setShowPaywall(false)} isConnected={!!evmAddress} onConnect={login} />}
       {resolvedTrade && <ResolutionModal trade={resolvedTrade} onDismiss={() => setResolvedTrade(null)} />}
+      {lpConfigCard && <LpConfigurator card={lpConfigCard} onClose={() => setLpConfigCard(null)} />}
+
+      {/* Execute toast — fixed bottom; success or error. SOLID: a single
+          state drives one rendering surface; click to dismiss; auto-clear
+          via the useEffect above. */}
+      {execToast && (
+        <div
+          onClick={() => setExecToast(null)}
+          className={`fixed bottom-24 left-4 right-4 z-50 max-w-md mx-auto rounded-xl p-4 cursor-pointer animate-[fadeIn_0.2s_ease-out] ${
+            execToast.kind === 'success'
+              ? 'bg-[#0e1a0e] border-2 border-[#8eff71] shadow-[0_0_24px_-6px_rgba(142,255,113,0.5)]'
+              : 'bg-[#1a0e0e] border-2 border-[#ff7166] shadow-[0_0_24px_-6px_rgba(255,113,102,0.5)]'
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          <div className={`font-headline font-bold text-sm ${execToast.kind === 'success' ? 'text-[#8eff71]' : 'text-[#ff7166]'}`}>
+            {execToast.title}
+          </div>
+          <div className="text-white text-sm mt-1">{execToast.message}</div>
+          {execToast.kind === 'success' && (
+            <div className="flex items-center justify-between mt-2">
+              {execToast.orderId && (
+                <span className="text-[10px] text-[#adaaaa] font-mono">#{execToast.orderId}</span>
+              )}
+              <button
+                onClick={(e) => { e.stopPropagation(); navigate('/portfolio'); }}
+                className="text-[11px] font-headline font-bold text-[#bf81ff] uppercase tracking-widest hover:underline"
+              >
+                View Positions →
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       {evmAddress && isCorrectChain && balance != null && balance < 10000000000000000n && (
         <div className="fixed top-16 left-4 right-4 z-40 bg-[#131313] border border-[#bf81ff]/30 p-3 rounded-xl flex items-center justify-between">
           <span className="text-xs text-[#adaaaa]">⛽ Low INIT — bridge from L1 to trade</span>
@@ -542,17 +643,19 @@ export default function Feed() {
 
       {/* Reserved header slot — fixed height prevents CLS */}
 
-      {/* Scroll-snap surface — card pinned at top, optional detail below.
-          UX invariant exception (§10.4): inline detail is allowed because the
-          card snap-point retains its fixed height; horizontal-drag area is
-          axis-locked so vertical scroll never accidentally fires APE/FADE. */}
+      {/* Tap-to-expand surface — single column. Tap the card body to toggle
+          the analysis panel below; horizontal drag still drives APE/FADE.
+          The previous 2-snap-point scroll layout was replaced because users
+          could not discover the panel was below. */}
       <div
         ref={scrollContainerRef}
-        className="relative w-full max-w-md mx-auto flex-1 feed-snap overflow-y-auto"
+        className="relative w-full max-w-md mx-auto flex-1 overflow-y-auto no-scrollbar"
       >
-        {/* === SNAP POINT 1: card === */}
-        <div className="feed-snap-item relative w-full min-h-full flex flex-col items-center justify-start pt-2">
-          <div className="relative w-full h-[520px]">
+        <div className="relative w-full pt-2">
+          <div
+            className={`relative w-full h-[520px] ${hasTokenCardDetail(current) ? 'cursor-pointer' : ''}`}
+            onClick={handleCardTap}
+          >
             {current.card_type === 'insight' ? (
               <InsightCard card={current as any} onApe={handleApe} onFade={handleFade} />
             ) : current.card_type === 'macro_desk' ? (
@@ -560,7 +663,19 @@ export default function Feed() {
             ) : current.card_type === 'whale_alert' ? (
               <WhaleAlertCard card={current} onApe={handleApe} onFade={handleFade} />
             ) : current.card_type === 'pool' ? (
-              <TokenCard card={current} onApe={() => setIndex(i => i + 1)} onFade={() => setIndex(i => i + 1)} isTop />
+              <LpBattleCard
+                card={current}
+                onConfigure={() => setLpConfigCard(current)}
+                onViewStrategy={() => setLpConfigCard(current)}
+              />
+            ) : current.card_type === 'trading_signal' ? (
+              <TradingSignalCard
+                card={current}
+                onApe={handleApe}
+                onFade={handleFade}
+                onExecute={handleExecute}
+                isExecuting={executeSignal.isPending}
+              />
             ) : (
               <>
                 {/* Next card peek */}
@@ -596,21 +711,36 @@ export default function Feed() {
             )}
           </div>
 
-          {/* Bouncing chevron hint — shows once per session, only if there's detail to scroll to. */}
-          {!chevronDismissed && hasTokenCardDetail(current) && (
-            <div className="mt-3 flex flex-col items-center pointer-events-none">
-              <span className="text-[10px] text-[#adaaaa] font-label uppercase tracking-widest">scroll for analysis</span>
+          {/* Tap-to-expand affordance — only when there is analysis to show. */}
+          {hasTokenCardDetail(current) && !expanded && (
+            <button
+              onClick={() => setExpanded(true)}
+              className="mt-3 w-full flex flex-col items-center py-2 active:text-[#8eff71] transition-colors"
+              aria-controls="token-card-detail"
+              aria-expanded={false}
+            >
+              <span className="text-[10px] text-[#adaaaa] font-label uppercase tracking-widest">tap card for analysis</span>
               <span className="text-2xl text-[#8eff71]" style={{ animation: 'chevronBounce 1.4s ease-in-out infinite' }}>↓</span>
+            </button>
+          )}
+
+          {/* Expanded analysis — rendered inline; collapses on another tap on
+              the card body or on this footer button. */}
+          {hasTokenCardDetail(current) && expanded && (
+            <div id="token-card-detail" className="w-full px-2 pb-6 pt-3 animate-[fadeIn_0.25s_ease-out]">
+              <TokenCardDetail card={current} />
+              <button
+                onClick={() => setExpanded(false)}
+                className="mt-4 w-full flex flex-col items-center py-3 text-[#adaaaa] hover:text-white active:text-[#8eff71] transition-colors"
+                aria-controls="token-card-detail"
+                aria-expanded={true}
+              >
+                <span className="text-2xl text-[#bf81ff]">↑</span>
+                <span className="text-[10px] font-label uppercase tracking-widest">tap to collapse</span>
+              </button>
             </div>
           )}
         </div>
-
-        {/* === SNAP POINT 2: detail (only rendered if card has analysis content) === */}
-        {hasTokenCardDetail(current) && (
-          <div className="feed-snap-item w-full min-h-full px-2 pb-6 pt-3">
-            <TokenCardDetail card={current} />
-          </div>
-        )}
       </div>
     </div>
   );

@@ -97,10 +97,16 @@ class Settings(BaseSettings):
 
     # SoDex DEX integration
     sodex_enabled: bool = False
-    sodex_private_key: str = ""
+    sodex_private_key: str = ""           # legacy (master wallet); kept for backward-compat
+    sodex_api_key_name: str = ""          # name string passed in `X-API-Key` (e.g. "kinetic-bot-01")
+    sodex_api_key_privkey: str = ""       # private key whose pubkey is the API-key's registered EVM addr
     sodex_account_id: str = ""
-    sodex_chain_id: int = 286623
-    sodex_max_order_usd: float = 100.0
+    sodex_chain_id: int = 138565          # default = SoDex testnet (mainnet = 286623)
+    sodex_max_order_usd: float = 25.0     # tight risk cap (Wave-2 demo)
+    sodex_max_leverage: int = 2           # tight risk cap
+    sodex_daily_executes_per_user: int = 5
+    sodex_trading_enabled: bool = False   # global kill-switch for /execute endpoint
+    sodex_target_assets: str = "BTC,ETH,SOL,AVAX,SUI,ARB,OP,LINK,INIT,ATOM"
 
     # SosoValue
     sosovalue_api_key: str = ""

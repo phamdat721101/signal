@@ -47,6 +47,17 @@ export interface Card {
   sentiment_score?: number;
   sentiment_direction?: 'bullish' | 'bearish' | 'neutral';
   research_summary?: { source: string; summary: string; sentiment: string; key_findings: string[]; chart_url: string };
+  // ── Liquidity-Pool enrichment (populated for card_type === 'pool') ──
+  token0_address?: string;
+  token1_address?: string;
+  token0_symbol?: string;
+  token1_symbol?: string;
+  token0_decimals?: number;
+  token1_decimals?: number;
+  pool_address?: string;
+  chain_id?: number;
+  dex_link?: string;
+  volatility_7d_sigma?: number | null;
 }
 
 async function fetchCards(offset = 0, limit = 20, cardType?: string | string[]) {

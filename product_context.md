@@ -269,3 +269,160 @@ These are hard rules. Violating them re-introduces the CLS and broken-copy bugs 
 | Component | Reason | Backend impact |
 |---|---|---|
 | `OracleWidget` | Awkward copy ("Oracle is feeling Sleeping"), CLS source, low user value | None — `degen_oracle.py` still powers paid `/api/v2/agent/context`. Consumer endpoints `/api/oracle/mood` and `/api/oracle/takes` removed from `:8001`. |
+
+
+---
+
+## 12. LP Cards — Liquidity Pools mode (added 2026-06-01)
+
+**Wedge:** the swipe primitive turns prediction-only cards into composable on-chain *positions*. LP cards are the first persistent asset Kinetic mints into the user's wallet (predictions are ephemeral; LP NFTs sit there earning fees).
+
+**Feed picker.** `FEED_MODES` now exposes `tokens` + `liquidity_pools`; the legacy `news` mode is `hidden: true` — it's still reachable via `?mode=news` for QA but is filtered out of the picker UI by `VISIBLE_FEED_MODES`. News cards keep generating (insight/macro_desk/whale_alert/index/etc.) and continue to feed the paid agent API on Base unchanged.
+
+**LP card pipeline.** `lp_advisory.py` runs every 15 min and writes `card_type='pool'` rows. Each pool card is enriched (via `pool_enrichment(p)`) with 10 new columns:
+
+| Column | Source |
+|---|---|
+| `token0_address`, `token1_address` | DefiLlama `underlyingTokens[0..1]` |
+| `token0_symbol`, `token1_symbol` | DefiLlama `symbol` split on `-` / `/` |
+| `token0_decimals`, `token1_decimals` | `_KNOWN_DECIMALS` map (USDC/USDT=6, WBTC=8, else 18) |
+| `pool_address` | DefiLlama `pool` |
+| `chain_id` | `dex_links._CHAIN_ID` map (DefiLlama chain string → numeric) |
+| `dex_link` | `dex_links.build_dex_link(p)` — top-5 DEX templates + DefiLlama fallback |
+| `volatility_7d_sigma` | `volatility.compute_sigma_7d(symbol)` — daily σ of log-returns from CoinGecko hourly market_chart, 30-min cache |
+
+**Range presets.** `[Pₘᵢₙ, Pₘₐₓ] = [P · (1 − k·σ), P · (1 + k·σ)]` with k ∈ {2.0, 1.0, 0.5} (Conservative / Balanced / Aggressive). When σ is unavailable, fixed bands ±15/7/3% are used. Clamped at σ ≤ 0.5 to bound degenerate inputs. Both backend (`lp_math.range_for_preset`) and frontend (`useLpRange`) implement the same constants — keep them in sync if you change one.
+
+**Endpoints.**
+
+| Route | Auth | Notes |
+|---|---|---|
+| `GET /api/cards/{id}/lp-recipe?amount_a=&preset=` | none | Consumer endpoint used by `LpConfigurator`. |
+| `GET /api/v2/agent/lp-recipes?pool_card_id=&amount_a=&preset=` | x402 | Paid mirror, $0.005, `type: liquidity_recipe`. Bazaar-indexed via `x402_payment.RESOURCE_DESCRIPTIONS`. |
+
+**ZAP path.** `xlayer.is_pair_supported(token0, token1, chain_id)` decides between two CTAs:
+- **Supported (today: only `OKB/USDC` on chain 1952/196)** → "ZAP INTO POOL" calls `useSummonTransaction.summon(card)` which posts to `/api/cards/{id}/play` and executes the existing approve+approve+playCard bundle on X Layer V4. Tick conversion uses `xlayer.compute_range_ticks(min_price, max_price)` — tick-spacing 60.
+- **Unsupported** → "OPEN ON DEX" opens `card.dex_link` in a new tab. Uniswap V3 / PancakeSwap V3 / Aerodrome / Curve / Balancer V2 deep-links are pre-built; everything else falls back to `https://defillama.com/yields/pool/{pool_id}`.
+
+**Module map.**
+
+```
+backend/app/
+  volatility.py    pure σ_7d helper, http_client routed, 30-min cache
+  dex_links.py     top-5 DEX templates + DefiLlama fallback + _CHAIN_ID map
+  lp_math.py       pure quote math (derive_token_b, range_for_preset, PRESETS, FIXED_BANDS)
+  lp_advisory.py   pool_enrichment(p) + generate_lp_advisories (scheduler 15-min job)
+  lp_recipe.py     glue: build_recipe(card, amount_a, preset) — used by both routes
+  xlayer.py        + is_pair_supported, + compute_range_ticks
+  agent_api.py     + /lp-recipes route ($0.005)
+  x402_payment.py  + RESOURCE_PRICES["GET /api/v2/agent/lp-recipes"]
+  db.py            + 10 nullable cards columns; insert_card persists them
+  content_engine.py harvest_pools merges pool_enrichment lazily
+
+frontend/src/
+  config/cardModes.ts          + hidden flag, + liquidity_pools mode, + VISIBLE_FEED_MODES
+  components/ModePicker.tsx    filters by VISIBLE_FEED_MODES
+  components/LpBattleCard.tsx  feed-style pool card (token-pair header + range overlay)
+  components/LpConfigurator.tsx full-screen sheet (Token-A input → Token-B readout → ZAP/DEX)
+  hooks/useLpRange.ts          pure preset → {min, max} (mirrors lp_math)
+  hooks/useLpQuote.ts          react-query → /api/cards/{id}/lp-recipe
+  hooks/useERC20Balance.ts     chain-aware balanceOf reader (10 chain RPC table)
+  hooks/useCards.ts            Card type extended with the 10 LP fields
+  pages/Feed.tsx               pool branch → LpBattleCard; LpConfigurator portal
+```
+
+**Growth metric.** LP positions opened / week. Leading indicators: % of LP-mode swipes that reach the Configurator, % of Configurator opens that ZAP. Track via the same `agent_predictions` table with a future `position_kind='lp'` column.
+
+**Out of scope for v1.** Position monitoring (handled by existing `position_monitor` job for trading cards; LP positions can reuse it once the v4 Position NFT is queried), IL alerts, multi-chain ZAP (only X Layer for now), in-app rebalancing, "BATTLE RANK" — pool cards order by `created_at DESC` like every other mode.
+
+---
+
+## 13. Trading Signal Cards — SoDex perps mode (added 2026-06-02)
+
+**Wedge:** the SoSoValue Buildathon competitor field (16 projects) all builds the same loop (SoSoValue → AI → SoDex). None has a track record. Trading-Signal cards expose Kinetic's 5,816-prediction track record as a closed loop: AI verdict → tap → real testnet perps order on SoDex.
+
+**Feed picker.** `FEED_MODES` adds a third visible mode `trading_signal` (`⚡ Trading Signals`). News mode remains hidden.
+
+**Card pipeline.** `trading_signal_engine.py` runs every 10 min and writes `card_type='trading_signal'` rows for 10 curated assets:
+
+| Asset | SoDex perps pair |
+|---|---|
+| BTC | vBTC_vUSDC |
+| ETH | vETH_vUSDC |
+| SOL | vSOL_vUSDC |
+| AVAX | vAVAX_vUSDC |
+| SUI | vSUI_vUSDC |
+| ARB | vARB_vUSDC |
+| OP | vOP_vUSDC |
+| LINK | vLINK_vUSDC |
+| INIT | vINIT_vUSDC |
+| ATOM | vATOM_vUSDC |
+
+Each card carries verdict + confidence + entry/target/stop where target = mark · (1 + 2σ_7d) and stop = mark · (1 − σ_7d), flipped for shorts. σ clamped 0.5–20% daily; fallback 3% when CoinGecko has no data.
+
+**Endpoints.**
+
+| Route | Auth | Notes |
+|---|---|---|
+| `GET /api/cards?card_type=trading_signal` | none | Standard list query (already supported). |
+| `POST /api/cards/{id}/execute` | none | Body `{address}`. Thin HTTP adapter over `trading_signal_engine.safe_execute`. |
+
+**5-layer guards in `safe_execute`** (defense in depth):
+1. `SODEX_TRADING_ENABLED=true` (global kill-switch).
+2. `card_type == 'trading_signal'`.
+3. Symbol ∈ `TARGET_ASSETS` (SoDex pair whitelist).
+4. Idempotency — one `(card_id, user_address)` execute ever (existing `trades.sodex_order_id`).
+5. Daily cap — `SODEX_DAILY_EXECUTES_PER_USER` (default 5) within 24h.
+
+**Risk caps** (Wave-2 demo posture): notional ≤ `SODEX_MAX_ORDER_USD` ($25), leverage ≤ `SODEX_MAX_LEVERAGE` (2x), order is always IOC market `type=2 timeInForce=3`.
+
+**SoDex spec compliance.** `sodex_client.py` follows the latest published spec exactly:
+- `X-API-Key` carries the API-key **NAME** string (not address).
+- `payloadHash = keccak256(json.Marshal({"type": <action>, "params": {...}}))` — full envelope, compact JSON, struct-field order preserved.
+- Casing: `accountID`, `symbolID`. DecimalString fields are JSON strings; enum fields are ints.
+- Domain: `name="futures"` for perps; testnet `chainId=138565`, mainnet `286623`.
+- `0x01` typed-signature prefix.
+
+**Module map.**
+
+```
+backend/app/
+  sodex_client.py            REWRITTEN  EIP-712 signing per latest spec; pure mechanism
+  trading_signal_engine.py   NEW        build_signal_card + safe_execute (5 guards)
+  scheduler.py               +5 LOC     trading_signal_gen 10-min job
+  main.py                    +25 LOC    POST /api/cards/{id}/execute
+  config.py                  +9 LOC     sodex_api_key_name/_privkey/_max_leverage/_daily/_trading_enabled/_target_assets
+  db.py                      0          reuses existing trades.sodex_order_id + .execution_type cols
+
+frontend/src/
+  config/cardModes.ts        +6 LOC     trading_signal mode entry
+  components/TradingSignalCard.tsx  NEW  118 LOC  feed-style card; LONG/SHORT badge + entry/target/stop grid + ⚡EXECUTE CTA
+  hooks/useExecuteSignal.ts  NEW        52 LOC   react-query mutation
+  pages/Feed.tsx             +12 LOC    one branch in card-type switch + handleExecute
+```
+
+**Resolution.** Reuses the existing `position_monitor` 10-min scheduler job and `update_trade_pnl` — SoDex trades hit the same `trades` table so the standard 24h close path covers them. Portfolio + History pages show them automatically.
+
+**Telemetry.** `/api/health.circuits` auto-includes `"sodex"` when its breaker opens (all SoDex HTTP routes through `http_client` with `service="sodex"`).
+
+**Out of scope for v1.** Per-card leverage (fixed 2x), short execution (long-only via APE; FADE just records the prediction without an order), TP/SL orders (we resolve client-side via 24h horizon), Privy MPC client-side signing (Day-9 of the 14-day sprint), multi-rail execution beyond SoDex (deferred to LiFi integration).
+
+**Wave-2 deploy checklist.**
+```bash
+# 1. Backend env (essential):
+SODEX_ENABLED=true
+SODEX_TRADING_ENABLED=false     # flip to true only during live demo
+SODEX_API_KEY_NAME=kinetic-bot-01
+SODEX_API_KEY_PRIVKEY=0x...     # API-key signer; NOT master wallet
+SODEX_ACCOUNT_ID=12345
+SODEX_CHAIN_ID=138565           # testnet
+SODEX_MAX_ORDER_USD=25
+SODEX_MAX_LEVERAGE=2
+SODEX_DAILY_EXECUTES_PER_USER=5
+
+# 2. Smoke (optional — gated):
+RUN_SODEX_LIVE=1 pytest backend/tests/
+
+# 3. Restart backend:
+bash ~/signal-backend/restart_signal.sh
+```

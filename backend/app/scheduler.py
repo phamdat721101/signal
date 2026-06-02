@@ -290,6 +290,13 @@ def start_scheduler():
     scheduler.add_job(refresh_oracle, "interval", minutes=30, id="oracle_refresh", max_instances=1, next_run_time=t + timedelta(seconds=40))
     scheduler.add_job(resolve_predictions, "interval", minutes=30, id="resolve_predictions", max_instances=1, next_run_time=t + timedelta(seconds=180))
     scheduler.add_job(generate_lp_advisories, "interval", minutes=15, id="lp_advisory", max_instances=1, next_run_time=t + timedelta(seconds=100))
+    # Trading-signal cards (Wave-2 SoSoValue Buildathon wedge): 10 curated
+    # assets → SoDex perps cards every 10 min. Pure additive; if the
+    # module fails the rest of the scheduler keeps running.
+    from app.trading_signal_engine import generate_trading_signals
+    scheduler.add_job(generate_trading_signals, "interval", minutes=10,
+                      id="trading_signal_gen", max_instances=1,
+                      next_run_time=t + timedelta(seconds=110))
     from app.agent_runner import run_user_agents, update_agent_preferences
     scheduler.add_job(run_user_agents, "interval", minutes=10, id="user_agents", max_instances=1, next_run_time=t + timedelta(seconds=70))
     scheduler.add_job(update_agent_preferences, "interval", minutes=60, id="agent_learn", max_instances=1, next_run_time=t + timedelta(seconds=200))
@@ -316,15 +323,20 @@ def start_scheduler():
     _start_ibc_listener_thread()
 
     # ── Gem Scanner — every 15 minutes (PRD: Hidden Gem at First Open v2) ──
+    # next_run_time bootstraps the job ~30s after startup so a fresh VPS
+    # restart doesn't leave the feed gem-less for up to 15 minutes. Same
+    # convention as every other scheduler job above.
     from apscheduler.triggers.cron import CronTrigger
     scheduler.add_job(_gem_scan_job,
                       CronTrigger(minute="*/15", timezone="UTC"),
-                      id="gem_scan", max_instances=1)
+                      id="gem_scan", max_instances=1,
+                      next_run_time=t + timedelta(seconds=30))
 
     # ── Flap Scanner — every 5 minutes (PRD: Flap Hidden Gems on X-Layer v1) ──
     scheduler.add_job(_flap_scan_job,
                       CronTrigger(minute="*/5", timezone="UTC"),
-                      id="flap_scan", max_instances=1)
+                      id="flap_scan", max_instances=1,
+                      next_run_time=t + timedelta(seconds=45))
 
     scheduler.start()
     logger.info("Scheduler started — all jobs delayed for graceful startup")

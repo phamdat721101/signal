@@ -146,6 +146,27 @@ def init_db():
             ("signal_id", "INTEGER DEFAULT NULL"),
             ("research_summary", "JSONB DEFAULT '{}'"),
             ("token_address", "TEXT DEFAULT ''"),
+            # ── Liquidity-Pool enrichment (R9) ───────────────────────────
+            # Populated by lp_advisory.py for card_type='pool'. NULL for
+            # other card types — keep nullable. No defaults so a row that
+            # wasn't enriched is unambiguously distinguishable from one
+            # that has e.g. zero TVL or a missing dex_link.
+            ("token0_address", "TEXT"),
+            ("token1_address", "TEXT"),
+            ("token0_symbol", "TEXT"),
+            ("token1_symbol", "TEXT"),
+            ("token0_decimals", "SMALLINT"),
+            ("token1_decimals", "SMALLINT"),
+            ("pool_address", "TEXT"),
+            ("chain_id", "INTEGER"),
+            ("dex_link", "TEXT"),
+            ("volatility_7d_sigma", "DOUBLE PRECISION"),
+            # Trading-signal enrichment (Wave-2 SoSoValue Buildathon).
+            # confidence is a generic 0-100 score, trade_plan is the
+            # `{entry,target,stop,position_size}` JSON shape consumed by
+            # the FE TradingSignalCard. Both nullable for non-signal cards.
+            ("confidence", "INTEGER"),
+            ("trade_plan", "JSONB"),
         ]:
             try:
                 cur.execute(f"ALTER TABLE cards ADD COLUMN IF NOT EXISTS {col} {defn}")
@@ -405,8 +426,14 @@ def insert_card(card: dict) -> int:
                (token_symbol, token_name, chain, hook, roast, metrics, image_url,
                 ai_image_prompt, price, price_change_24h, volume_24h, market_cap, coingecko_id,
                 verdict, verdict_reason, risk_level, risk_score, notification_hook, signals,
-                sparkline, patterns, ohlc, source, provider, signal_id, institutional_context, card_type, research_summary, token_address)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                sparkline, patterns, ohlc, source, provider, signal_id, institutional_context, card_type, research_summary, token_address,
+                token0_address, token1_address, token0_symbol, token1_symbol,
+                token0_decimals, token1_decimals, pool_address, chain_id,
+                dex_link, volatility_7d_sigma,
+                confidence, trade_plan)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                       %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                       %s,%s)
                RETURNING id""",
             (card.get("token_symbol", ""), card.get("token_name", ""),
              card.get("chain", "initia"), card.get("hook", ""), card.get("roast", ""),
@@ -424,7 +451,15 @@ def insert_card(card: dict) -> int:
              json.dumps(card.get("institutional_context", [])),
              card.get("card_type", "trading"),
              json.dumps(card.get("research_summary", {})),
-             card.get("token_address", ""))
+             card.get("token_address", ""),
+             # LP enrichment — all nullable, all None-safe.
+             card.get("token0_address"), card.get("token1_address"),
+             card.get("token0_symbol"), card.get("token1_symbol"),
+             card.get("token0_decimals"), card.get("token1_decimals"),
+             card.get("pool_address"), card.get("chain_id"),
+             card.get("dex_link"), card.get("volatility_7d_sigma"),
+             card.get("confidence"),
+             json.dumps(card["trade_plan"]) if card.get("trade_plan") else None)
         )
         return cur.fetchone()[0]
 
@@ -740,6 +775,8 @@ def _row_to_card(row: dict) -> dict:
         "signal_id": row.get("signal_id"),
         "card_type": row.get("card_type", "trading"),
         "token_address": row.get("token_address", ""),
+        "confidence": row.get("confidence"),
+        "trade_plan": row["trade_plan"] if isinstance(row.get("trade_plan"), dict) else (json.loads(row["trade_plan"]) if row.get("trade_plan") else None),
     }
 
 

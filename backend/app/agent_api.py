@@ -147,6 +147,30 @@ async def get_pools(limit: int = Query(default=10, le=50)):
     return result
 
 
+@router.get("/lp-recipes")
+async def get_lp_recipe(
+    pool_card_id: int = Query(..., description="card_type='pool' card id"),
+    amount_a: float = Query(default=0.0, ge=0.0),
+    preset: str = Query(default="balanced", pattern="^(conservative|balanced|aggressive)$"),
+):
+    """Concentrated-LP recipe with range/ticks/fees for a pool card.
+
+    Same payload as the consumer endpoint /api/cards/{id}/lp-recipe, tagged
+    with `type=liquidity_recipe` so agents can route polymorphically over
+    the agent surface.
+    """
+    card = db.get_card_by_id(pool_card_id)
+    if not card:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Card not found")
+    if (card.get("card_type") or "") != "pool":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="Card is not a liquidity pool card")
+    from app.lp_recipe import build_recipe
+    recipe = build_recipe(card, amount_a=amount_a, preset=preset)
+    return {"type": "liquidity_recipe", "pool_card_id": pool_card_id, **recipe}
+
+
 @router.get("/track-record")
 async def get_track_record():
     """Historical accuracy stats. Cached 60s."""

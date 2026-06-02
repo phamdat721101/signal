@@ -13,7 +13,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { FEED_MODES, type FeedMode } from '../config/cardModes';
+import { VISIBLE_FEED_MODES, type FeedMode } from '../config/cardModes';
 
 interface Props {
   open: boolean;
@@ -93,7 +93,7 @@ export default function ModePicker({ open, onOpenChange, activeId, onSelect, anc
           Feed Mode
         </div>
         <div className="space-y-1">
-          {FEED_MODES.map((m: FeedMode) => {
+          {VISIBLE_FEED_MODES.map((m: FeedMode) => {
             const isActive = m.id === activeId;
             return (
               <button

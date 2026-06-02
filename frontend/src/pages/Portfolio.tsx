@@ -13,6 +13,23 @@ function fmtPct(v: number | null | undefined): string {
   return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
 }
 
+// Live SoDex perps state — populated from GET /api/positions/:address.
+// Shape mirrors backend `main.get_positions`. Empty when SoDex disabled.
+interface SodexPosition {
+  symbol: string;
+  size: string;
+  entry_price: string;
+  unrealized_pnl_ratio?: string;
+  margin_mode?: string;
+}
+interface SodexLiveState {
+  enabled: boolean;
+  account_id?: number;
+  balance?: string | null;
+  free_margin?: string | null;
+  positions: SodexPosition[];
+}
+
 // ── Position aggregation (pure derive — single responsibility, inlined) ──
 interface Trade {
   id: number;
@@ -142,6 +159,19 @@ export default function Portfolio() {
     staleTime: 30_000,
   });
 
+  // Live SoDex perps positions — refreshes every 15s. Single Responsibility:
+  // surface what the user has open right now on SoDex, keyed by address.
+  const { data: sodex } = useQuery({
+    queryKey: ['sodex-positions', address],
+    queryFn: async () => {
+      const resp = await fetch(`${config.backendUrl}/api/positions/${address}`);
+      if (!resp.ok) return { enabled: false, positions: [] as SodexPosition[] };
+      return resp.json() as Promise<SodexLiveState>;
+    },
+    enabled: !!address,
+    refetchInterval: 15_000,
+  });
+
   const trades = data?.trades ?? [];
   const summary = data?.summary;
   const summons = lpData?.transactions ?? [];
@@ -161,6 +191,46 @@ export default function Portfolio() {
 
   return (
     <div className="p-5 space-y-5 pb-24">
+      {/* Live SoDex perps positions — only shown when there's something open. */}
+      {sodex && sodex.enabled && sodex.positions.length > 0 && (
+        <div className="bg-[#0e1a0e] border-2 border-[#8eff71]/40 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">⚡</span>
+              <span className="font-headline font-bold text-sm text-[#8eff71] uppercase tracking-widest">
+                Live SoDex Positions
+              </span>
+            </div>
+            {sodex.free_margin != null && (
+              <span className="text-[10px] text-[#adaaaa] font-mono">
+                margin {Number(sodex.free_margin).toFixed(2)} vUSDC
+              </span>
+            )}
+          </div>
+          <div className="space-y-2">
+            {sodex.positions.map((p) => {
+              const sz = parseFloat(p.size || '0');
+              const isLong = sz >= 0;
+              const pnl = parseFloat(p.unrealized_pnl_ratio || '0');
+              const pnlPositive = pnl >= 0;
+              return (
+                <div key={p.symbol + p.entry_price} className="flex items-center justify-between bg-[#131313] rounded-lg p-3">
+                  <div>
+                    <div className="font-headline font-bold text-white text-sm">{p.symbol}</div>
+                    <div className="text-[10px] text-[#adaaaa] font-mono">
+                      {isLong ? 'LONG' : 'SHORT'} {Math.abs(sz)} @ ${Number(p.entry_price).toFixed(2)}
+                    </div>
+                  </div>
+                  <div className={`font-headline font-bold text-sm ${pnlPositive ? 'text-[#8eff71]' : 'text-[#ff7166]'}`}>
+                    {pnlPositive ? '+' : ''}{pnl.toFixed(2)}%
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Summary header */}
       {summary && (
         <div className="text-center py-4">

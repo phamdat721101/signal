@@ -89,6 +89,12 @@ body {
   scroll-snap-stop: always;
 }
 
+/* Hide native scrollbar chrome while preserving scroll capability.
+   Used by the Feed tap-to-expand surface so the analysis panel can grow
+   without painting an always-on macOS/Chrome gutter. */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
 .kinetic-glow { box-shadow: 0 0 20px -5px rgba(191, 129, 255, 0.3); }
 .kinetic-glow-amber { box-shadow: 0 0 20px -5px rgba(245, 158, 11, 0.3); }
 .vs-gradient { background: linear-gradient(135deg, #8eff71 0%, #bf81ff 100%); }
