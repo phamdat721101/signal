@@ -66,6 +66,26 @@ export default function Profile() {
     enabled: !!address,
   });
 
+  // SoDex testnet pool balance — shared trading liquidity behind the
+  // ⚡ Execute action on trading_signal cards. Hidden entirely when the
+  // backend reports SoDex disabled (per Design Principle §10.1).
+  const { data: sodexPool } = useQuery({
+    queryKey: ['sodex-pool'],
+    queryFn: async () => {
+      const resp = await fetch(`${config.backendUrl}/api/sodex/pool`);
+      if (!resp.ok) return { enabled: false };
+      return resp.json() as Promise<{
+        enabled: boolean;
+        balance?: string | null;
+        free_margin?: string | null;
+        chain?: string;
+        updated_at?: number;
+      }>;
+    },
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+
   if (!address) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 px-6">
@@ -206,6 +226,47 @@ export default function Profile() {
                 </button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* SoDex Trading Pool — shared testnet liquidity backing ⚡ Execute.
+          Hidden when SoDex is disabled (no naked empty state). */}
+      {sodexPool?.enabled && (
+        <div>
+          <div className="flex justify-between items-center mb-2">
+            <h2 className="font-headline font-bold text-sm text-white">SoDex Trading Pool</h2>
+            <span className="font-label text-[9px] text-[#494847] uppercase tracking-widest">
+              {sodexPool.chain || 'sodex-testnet'}
+            </span>
+          </div>
+          <div className="bg-[#0e1a0e] border border-[#8eff71]/30 rounded-xl p-4">
+            <div className="flex items-end justify-between">
+              <div>
+                <div className="font-label text-[10px] text-[#adaaaa] uppercase tracking-widest mb-1">
+                  Pool USDC
+                </div>
+                <div className="font-headline text-3xl font-black text-[#8eff71]">
+                  {sodexPool.balance != null
+                    ? Number(sodexPool.balance).toLocaleString(undefined, { maximumFractionDigits: 2 })
+                    : '—'}
+                  <span className="text-sm text-[#adaaaa] ml-1">vUSDC</span>
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="font-label text-[10px] text-[#adaaaa] uppercase tracking-widest mb-1">
+                  Free margin
+                </div>
+                <div className="font-headline font-bold text-sm text-white">
+                  {sodexPool.free_margin != null
+                    ? Number(sodexPool.free_margin).toLocaleString(undefined, { maximumFractionDigits: 2 })
+                    : '—'} vUSDC
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 font-label text-[10px] text-[#494847] italic">
+              Shared liquidity for ⚡ Execute on Trading Signal cards.
+            </div>
           </div>
         </div>
       )}

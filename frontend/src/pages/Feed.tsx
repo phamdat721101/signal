@@ -401,6 +401,13 @@ export default function Feed() {
     try {
       const r = await executeSignal.mutateAsync({ cardId: current.id, address: evmAddress });
       console.info('SoDex order placed:', r.order_id, r.symbol, r.side);
+      // Refresh every surface that should reflect the new position so
+      // the user sees their trade on Portfolio / Profile / History
+      // without a manual reload.
+      queryClient.invalidateQueries({ queryKey: ['trades', evmAddress] });
+      queryClient.invalidateQueries({ queryKey: ['sodex-positions', evmAddress] });
+      queryClient.invalidateQueries({ queryKey: ['sodex-pool'] });
+      queryClient.invalidateQueries({ queryKey: ['history', evmAddress] });
       setExecToast({
         kind: 'success',
         title: '🎯 Order Filled',

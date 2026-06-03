@@ -453,17 +453,26 @@ def safe_execute(card: dict, user_address: str) -> dict[str, Any]:
         "tx_hash": "",
         "status": "open",
     })
-    # Stamp sodex_order_id + execution_type (additive — only new code path).
+    # Stamp sodex_order_id + execution_type + side (additive — only new
+    # code path). `side` lets the Portfolio "Live SoDex Positions" panel
+    # render LONG/SHORT without re-joining cards. Then mirror the action
+    # into `swipes` so the History page surfaces it alongside ape/fade.
+    side_label = "long" if is_long else "short"
     try:
         conn = db._get_conn()
         if conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE trades SET sodex_order_id=%s, execution_type='sodex_perps' WHERE id=%s",
-                    (order_id, trade_id),
+                    "UPDATE trades SET sodex_order_id=%s, execution_type='sodex_perps', side=%s WHERE id=%s",
+                    (order_id, side_label, trade_id),
                 )
     except Exception as e:
         logger.error("trades.sodex_order_id update failed for trade=%s: %s", trade_id, e)
+    try:
+        db.record_swipe(int(card["id"]), user_address, "execute")
+    except Exception as e:
+        # Never fail a successful order over a swipes-write hiccup.
+        logger.warning("record_swipe(execute) failed for trade=%s: %s", trade_id, e)
 
     return {
         "order_id": order_id,

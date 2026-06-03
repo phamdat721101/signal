@@ -107,6 +107,10 @@ class Settings(BaseSettings):
     sodex_daily_executes_per_user: int = 5
     sodex_trading_enabled: bool = False   # global kill-switch for /execute endpoint
     sodex_target_assets: str = "BTC,ETH,SOL,AVAX,SUI,ARB,OP,LINK,INIT,ATOM"
+    # Master account address for the public read of pool balance (no signing
+    # required by SoDex). Defaults to the known testnet master so the Profile
+    # "SoDex Trading Pool" panel works even when the trading client is off.
+    sodex_master_address: str = "0x100690a32B562fd45e685BC2E63bbfF566d452db"
 
     # SosoValue
     sosovalue_api_key: str = ""

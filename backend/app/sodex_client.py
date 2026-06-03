@@ -221,6 +221,16 @@ class SoDexClient:
     def get_account_state(self, address: str) -> Optional[dict]:
         return self._get(self._perps_base, f"/accounts/{address}/state")
 
+    def get_master_account_state(self) -> Optional[dict]:
+        """Account state for the API-key signing address (the master/bot
+        account that actually holds the testnet vUSDC). This is the ONLY
+        correct caller for SoDex's `/accounts/{address}/state` in this
+        codebase — never pass a user wallet address here.
+        """
+        if not self._acct:
+            return None
+        return self.get_account_state(self._acct.address)
+
     # ── Write helpers (signed) ──────────────────────────────────────────
     def _signed_post(self, base: str, path: str, action: str,
                      params: dict[str, Any], *, perps: bool) -> Optional[dict]:

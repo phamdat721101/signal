@@ -40,8 +40,60 @@ def _get_read_conn():
     return _get_conn()
 
 
+def _ensure_runtime_columns():
+    """Idempotent column adds + one-shot data fix-ups that must run on
+    EVERY startup, including on already-initialized DBs where `init_db`
+    short-circuits.
+
+    Single Responsibility: keep additive schema/data drift in one place.
+    Cheap on Postgres (`ADD COLUMN IF NOT EXISTS` is metadata-only when
+    the column exists; the address re-checksum touches only the rows
+    that are still in the wrong case).
+    """
+    conn = _get_conn()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            for table, col, defn in [
+                ("trades", "sodex_order_id", "TEXT"),
+                ("trades", "execution_type", "TEXT DEFAULT 'simulated'"),
+                ("trades", "side",           "TEXT"),  # 'long' | 'short' | NULL
+            ]:
+                cur.execute(
+                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {defn}"
+                )
+        # Backfill: an earlier version of POST /api/cards/{id}/execute
+        # forgot to call `normalize_address`, so SoDex trades landed in
+        # `trades` with raw-lowercase user_address while every read path
+        # queries the EIP-55 checksummed form. Re-checksum the affected
+        # rows here, idempotently. Uses the same Postgres regexp Web3
+        # uses to detect "already-checksummed" (any uppercase A-F).
+        try:
+            from web3 import Web3
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT DISTINCT user_address FROM trades
+                       WHERE sodex_order_id IS NOT NULL
+                         AND user_address ~ '^0x[0-9a-f]{40}$'"""  # all-lowercase only
+                )
+                rows = [r[0] for r in cur.fetchall()]
+                for raw in rows:
+                    fixed = Web3.to_checksum_address(raw)
+                    if fixed != raw:
+                        cur.execute(
+                            "UPDATE trades SET user_address=%s WHERE user_address=%s",
+                            (fixed, raw),
+                        )
+        except Exception as e:
+            logger.warning("trades.user_address backfill skipped: %s", e)
+    except Exception as e:
+        logger.warning("ensure_runtime_columns: %s", e)
+
+
 def init_db():
     """Create tables if not exists. Skips if already initialized."""
+    _ensure_runtime_columns()
     conn = _get_conn()
     if not conn:
         logger.warning("DATABASE_URL not set — Supabase disabled")
@@ -204,11 +256,13 @@ def init_db():
             )
         """)
     logger.info("Trades table ready")
-    # SoDex trade columns
+    # SoDex trade columns. `side` is set on real SoDex executes only —
+    # NULL for legacy / simulated rows so backfills aren't required.
     with conn.cursor() as cur:
         for col, defn in [
             ("sodex_order_id", "TEXT"),
             ("execution_type", "TEXT DEFAULT 'simulated'"),
+            ("side",           "TEXT"),  # 'long' | 'short' | NULL
         ]:
             try:
                 cur.execute(f"ALTER TABLE trades ADD COLUMN IF NOT EXISTS {col} {defn}")
@@ -689,6 +743,33 @@ def get_user_trades(user_address: str, offset: int = 0, limit: int = 50) -> tupl
             "SELECT * FROM trades WHERE user_address = %s ORDER BY created_at DESC LIMIT %s OFFSET %s",
             (user_address, limit, offset))
         return [dict(r) for r in cur.fetchall()], total
+
+
+def get_user_open_sodex_positions(user_address: str) -> list[dict]:
+    """Open SoDex perps trades for a single user — the canonical source
+    of "live positions" on the Portfolio page.
+
+    SoDex aggregates positions per *symbol per master account*, so its
+    `/accounts/{addr}/state` cannot answer "which positions belong to
+    THIS user". We answer that from the only place that knows: our own
+    `trades` table, filtered to rows that have a SoDex order id and are
+    not yet resolved.
+    """
+    conn = _get_read_conn()
+    if not conn:
+        return []
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """SELECT id, card_id, token_symbol, token_amount, amount_usd,
+                      entry_price, sodex_order_id, side, created_at
+               FROM trades
+               WHERE user_address = %s
+                 AND sodex_order_id IS NOT NULL
+                 AND resolved = FALSE
+               ORDER BY created_at DESC""",
+            (user_address,),
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 
 def get_unresolved_trades() -> list[dict]:

@@ -45,17 +45,24 @@ export default function History() {
       ) : (
         <div className="space-y-2">
           {swipes.map((s: any) => {
+            const isExecute = s.action === 'execute';
             const isApe = s.action === 'ape';
             const ts = s.created_at ? new Date(s.created_at).toLocaleDateString() : '';
+            // 3-way visual branch: APE (green bolt) / EXECUTE (purple bolt) /
+            // FADE (red close). Subtitle for execute is brand copy, never a
+            // dev-facing status (Design Principle §10.5).
+            const tone = isExecute
+              ? { bg: 'bg-[#bf81ff]/10', fg: 'text-[#bf81ff]', icon: 'bolt', filled: true,  badge: 'EXECUTE',  subtitle: 'Order placed on SoDex testnet' }
+              : isApe
+              ? { bg: 'bg-[#8eff71]/10', fg: 'text-[#8eff71]', icon: 'bolt', filled: true,  badge: 'APE',      subtitle: s.hook || s.token_name || '' }
+              : { bg: 'bg-[#ff7166]/10', fg: 'text-[#ff7166]', icon: 'close', filled: false, badge: 'FADE',     subtitle: s.hook || s.token_name || '' };
             return (
               <div key={s.id} className="bg-[#131313] p-4 rounded-xl flex items-center gap-3">
                 {/* Action icon */}
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                  isApe ? 'bg-[#8eff71]/10' : 'bg-[#ff7166]/10'
-                }`}>
-                  <span className={`material-symbols-outlined text-lg ${isApe ? 'text-[#8eff71]' : 'text-[#ff7166]'}`}
-                    style={isApe ? { fontVariationSettings: "'FILL' 1" } : undefined}>
-                    {isApe ? 'bolt' : 'close'}
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${tone.bg}`}>
+                  <span className={`material-symbols-outlined text-lg ${tone.fg}`}
+                    style={tone.filled ? { fontVariationSettings: "'FILL' 1" } : undefined}>
+                    {tone.icon}
                   </span>
                 </div>
 
@@ -63,13 +70,11 @@ export default function History() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-headline font-bold text-white text-sm">${s.token_symbol}</span>
-                    <span className={`text-[9px] font-label font-bold px-2 py-0.5 rounded ${
-                      isApe ? 'bg-[#8eff71]/10 text-[#8eff71]' : 'bg-[#ff7166]/10 text-[#ff7166]'
-                    }`}>
-                      {isApe ? 'APE' : 'FADE'}
+                    <span className={`text-[9px] font-label font-bold px-2 py-0.5 rounded ${tone.bg} ${tone.fg}`}>
+                      {tone.badge}
                     </span>
                   </div>
-                  <div className="font-label text-[10px] text-[#adaaaa] mt-0.5">{s.hook || s.token_name}</div>
+                  <div className="font-label text-[10px] text-[#adaaaa] mt-0.5">{tone.subtitle}</div>
                 </div>
 
                 {/* Price + date */}

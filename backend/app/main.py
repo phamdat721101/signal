@@ -112,6 +112,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Initia Signal API", lifespan=lifespan)
 
+# Idempotent runtime column adds + legacy address-case backfill. Cheap on
+# Postgres (metadata-only when columns already exist; touches only rows
+# still in the wrong case). Lives at import time, NOT inside `init_db`,
+# because `init_db` is reserved for first-time table creation and is
+# typically not called on already-initialized prod DBs.
+try:
+    from app.db import _ensure_runtime_columns
+    _ensure_runtime_columns()
+except Exception as _e:
+    logger.warning("ensure_runtime_columns at startup failed: %s", _e)
+
 
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
@@ -416,7 +427,7 @@ async def execute_trading_signal(card_id: int, payload: dict):
     are enforced inside `trading_signal_engine.safe_execute`; this route is
     the thin HTTP adapter. Body: `{ "address": "0x..." }`.
     """
-    user_address = (payload or {}).get("address", "").strip()
+    user_address = normalize_address((payload or {}).get("address", "").strip())
     if not user_address:
         raise HTTPException(status_code=422, detail="address required")
     from app.db import get_card_by_id
@@ -437,44 +448,97 @@ async def execute_trading_signal(card_id: int, payload: dict):
 
 @app.get("/api/positions/{address}")
 async def get_positions(address: str):
-    """Live SoDex perps account state for `address`.
+    """Live per-user SoDex perps positions for `address`.
 
-    Thin proxy over `sodex_client.get_account_state` — surfaces open
-    positions, balance, free margin so the FE can render a live
-    "you have X open" panel after a successful execute. Returns a
-    shape designed to be small and FE-friendly (not the raw SoDex
-    envelope). Empty result when SoDex is disabled or the address has
-    no SoDex account.
+    Sourced from our `trades` table — the only place that knows which
+    positions belong to which user (SoDex aggregates per-symbol per
+    master account). Each row is enriched with the live mark price via
+    `trading_signal_engine._get_mark` (90-s cached, free-tier-friendly)
+    so the FE can show real-time unrealized PnL.
+
+    NOTE: master-account balance / free-margin live in the separate
+    `/api/sodex/pool` endpoint by design — never query
+    SoDex's `/accounts/{addr}/state` with a user wallet address again.
     """
-    from app.sodex_client import get_sodex_client
     if not address:
         raise HTTPException(status_code=422, detail="address required")
-    client = get_sodex_client()
-    if client is None:
-        return {"enabled": False, "balance": None, "positions": []}
+    address = normalize_address(address)
+    from app.db import get_user_open_sodex_positions
+    from app.trading_signal_engine import _get_mark
+    rows = get_user_open_sodex_positions(address)
+    positions = []
+    for r in rows:
+        symbol = (r.get("token_symbol") or "").upper()
+        side = (r.get("side") or "long").lower()
+        qty = float(r.get("token_amount") or 0)
+        entry = float(r.get("entry_price") or 0)
+        signed_size = qty if side == "long" else -qty
+        mark_info = _get_mark(symbol)
+        mark = float((mark_info or {}).get("price") or 0)
+        if mark > 0 and entry > 0:
+            ratio = ((mark - entry) / entry) * 100.0
+            if side == "short":
+                ratio = -ratio
+            unrealized = f"{ratio:.4f}"
+        else:
+            unrealized = "0"
+        positions.append({
+            "symbol": f"{symbol}-USD" if symbol else "",
+            "size": str(signed_size),
+            "entry_price": str(entry),
+            "unrealized_pnl_ratio": unrealized,
+            "margin_mode": "cross",
+        })
+    return {"enabled": True, "positions": positions}
+
+
+# ── SoDex master-pool balance (Profile page) ────────────────────────────
+# Single shared cache slot — pool balance is the same for every viewer.
+_sodex_pool_cache: dict = {"at": 0.0, "data": None}
+_SODEX_POOL_TTL = 30  # seconds
+
+
+@app.get("/api/sodex/pool")
+async def get_sodex_pool():
+    """SoDex master-account vUSDC balance + free margin.
+
+    Single Responsibility: surface the shared trading pool's liquidity
+    for the Profile "SoDex Trading Pool" panel. Uses SoDex's PUBLIC
+    `/accounts/{addr}/state` endpoint (no auth, no signing) directly via
+    `http_client`, so this works regardless of whether SoDex *trading*
+    is enabled in this deployment. 30-second in-memory cache keeps
+    SoDex traffic ≤2 requests/min regardless of viewer count.
+    """
+    settings = get_settings()
+    master_addr = (settings.sodex_master_address or "").strip()
+    if not master_addr:
+        return {"enabled": False}
+    now = time.time()
+    if _sodex_pool_cache["data"] is not None and now - _sodex_pool_cache["at"] < _SODEX_POOL_TTL:
+        return _sodex_pool_cache["data"]
+    is_mainnet = settings.sodex_chain_id == 286623
+    host = "mainnet-gw.sodex.dev" if is_mainnet else "testnet-gw.sodex.dev"
+    url = f"https://{host}/api/v1/perps/accounts/{master_addr}/state"
+    from app import http_client
     try:
-        resp = client.get_account_state(address)
-    except Exception:
+        r = http_client.get(url, service="sodex",
+                            headers={"Accept": "application/json"})
+        resp = r.json() if r else None
+    except Exception as e:
+        logger.warning("sodex_pool: master state fetch failed: %s", e)
         resp = None
     data = (resp or {}).get("data") or {}
     balances = data.get("B") or []
-    positions = data.get("P") or []
-    return {
+    payload = {
         "enabled": True,
-        "account_id": data.get("aid"),
         "balance": (balances[0].get("wb") if balances else None),
         "free_margin": data.get("amw"),
-        "positions": [
-            {
-                "symbol": p.get("s"),
-                "size": p.get("sz"),
-                "entry_price": p.get("ep"),
-                "unrealized_pnl_ratio": p.get("ur"),
-                "margin_mode": p.get("m"),
-            }
-            for p in positions
-        ],
+        "chain": "sodex-mainnet" if is_mainnet else "sodex-testnet",
+        "updated_at": int(now),
     }
+    _sodex_pool_cache["at"] = now
+    _sodex_pool_cache["data"] = payload
+    return payload
 
 
 @app.get("/api/cards/{card_id}/image")
