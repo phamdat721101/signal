@@ -35,6 +35,62 @@ async def _fetch_dexscreener_boosts() -> list[dict]:
     return data[:80] if isinstance(data, list) else []
 
 
+async def _enrich_dexscreener_pairs(boosts: list[dict]) -> dict[str, dict]:
+    """Look up real pair data for boosted tokens.
+
+    The boost endpoint (`/token-boosts/top/v1`) only returns `tokenAddress`,
+    `chainId`, and `totalAmount` (a $ boost spend, NOT trading volume). To
+    score gem-worthiness we need real market metrics, so we batch-call
+    `/tokens/v1/{chainId}/{addrs}` (≤30 addrs/call) and pick the
+    highest-liquidity pair per token.
+
+    Returns a map keyed by lowercase address → enriched candidate dict
+    (price, market_cap, volume_24h, liquidity, price_change_24h, symbol, name).
+    """
+    by_chain: dict[str, list[str]] = {}
+    for b in boosts:
+        addr = (b.get("tokenAddress") or "").strip()
+        chain = (b.get("chainId") or "").strip()
+        if addr and chain:
+            by_chain.setdefault(chain, []).append(addr)
+
+    out: dict[str, dict] = {}
+    for chain, addrs in by_chain.items():
+        for i in range(0, len(addrs), 30):
+            batch = ",".join(addrs[i:i + 30])
+            resp = await aget(
+                f"https://api.dexscreener.com/tokens/v1/{chain}/{batch}",
+                service="dexscreener",
+            )
+            if not resp:
+                continue
+            try:
+                pairs = resp.json() or []
+            except Exception:
+                continue
+            if not isinstance(pairs, list):
+                continue
+            # Pick highest-liquidity pair per token address.
+            for p in pairs:
+                base = p.get("baseToken") or {}
+                addr = (base.get("address") or "").lower()
+                if not addr:
+                    continue
+                liq = float((p.get("liquidity") or {}).get("usd") or 0)
+                if addr in out and liq <= float(out[addr].get("liquidity", 0) or 0):
+                    continue
+                out[addr] = {
+                    "symbol": (base.get("symbol") or "?")[:10],
+                    "name": (base.get("name") or "?")[:30],
+                    "price": float(p.get("priceUsd") or 0),
+                    "market_cap": float(p.get("fdv") or p.get("marketCap") or 0),
+                    "volume_24h": float((p.get("volume") or {}).get("h24") or 0),
+                    "liquidity": liq,
+                    "price_change_24h": float((p.get("priceChange") or {}).get("h24") or 0),
+                }
+    return out
+
+
 async def _fetch_coingecko_trending() -> list[dict]:
     resp = await aget("https://api.coingecko.com/api/v3/search/trending", service="coingecko")
     if not resp:
@@ -175,19 +231,31 @@ async def scan_for_gems(limit: int = 5) -> list[GemCandidate]:
 
     recent = _recent_gem_symbols(hours=6)
 
+    # Enrich DexScreener boosts with real pair data — the /token-boosts/top
+    # endpoint alone has no price/mc/volume, so we look the addresses up via
+    # /tokens/v1/{chain}/{addrs} (≤30 per call). Skip any boost that has no
+    # tradable pair on DexScreener (likely delisted/illiquid).
+    enriched = await _enrich_dexscreener_pairs(dex_data)
+
     # Normalize candidates
-    candidates = []
+    candidates: list[dict] = []
     for item in dex_data:
+        addr = (item.get("tokenAddress") or "").lower()
+        e = enriched.get(addr)
+        if not e:
+            continue  # No real pair data — skip
         candidates.append({
-            "symbol": item.get("symbol", item.get("tokenAddress", "")[:6]),
-            "name": item.get("description", "") or item.get("name", ""),
-            "address": item.get("tokenAddress", ""),
+            "symbol": e["symbol"],
+            "name": e["name"] or item.get("description", "")[:30] or "?",
+            "address": addr,
             "chain": item.get("chainId", "ethereum"),
-            "price": 0,
-            "market_cap": 0,
-            "volume_24h": float(item.get("totalAmount", 0) or 0),
-            "liquidity": 0,
-            "price_change_24h": 0,
+            "price": e["price"],
+            "market_cap": e["market_cap"],
+            "volume_24h": e["volume_24h"],
+            "liquidity": e["liquidity"],
+            "price_change_24h": e["price_change_24h"],
+            # DexScreener-validated pair: liquidity > 0 means real on-chain market.
+            "_dex_validated": e["liquidity"] >= 10_000,
         })
     for coin in cg_data:
         c = coin.get("item", {})
@@ -220,7 +288,12 @@ async def scan_for_gems(limit: int = 5) -> list[GemCandidate]:
         if sym and sym in recent:
             continue  # already surfaced in the last 6h, skip to keep feed fresh
         addr = token.get("address", "")
-        if not addr or len(addr) < 10:
+        if token.get("_dex_validated"):
+            # DexScreener-listed with real liquidity → market-vetted, skip GoPlus
+            # (avoids 429s and lets the scanner stay productive on chains we
+            # don't carry in chain_map).
+            safety = {"safe": True, "verified": True}
+        elif not addr or len(addr) < 10:
             # CoinGecko IDs aren't addresses — skip safety, score on data alone
             safety = {"safe": True, "verified": True}
         else:

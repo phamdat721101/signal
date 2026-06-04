@@ -524,6 +524,7 @@ def get_cards(offset: int = 0, limit: int = 20, status: str = "active", card_typ
         return [], 0
     where = "WHERE status = %s AND (expires_at > NOW() OR expires_at IS NULL)"
     params: list = [status]
+    types: list[str] = []
     if card_type:
         # Accept either a single value ("trading") or a comma-separated list
         # ("trading,gem,pool"). Comma-separated drives the feed mode picker.
@@ -542,7 +543,21 @@ def get_cards(offset: int = 0, limit: int = 20, status: str = "active", card_typ
             (*params, limit, offset)
         )
         rows = cur.fetchall()
-    return [_row_to_card(r) for r in rows], total
+
+    cards = [_row_to_card(r) for r in rows]
+
+    # Tokens-mode pin: guarantee the top gem is at index 0 of the first page.
+    # Frontend already attempts the same pin via /api/featured-gem, but a
+    # stale/older FE bundle or a transient fetch failure can leave the user
+    # with a trading card first. Pinning server-side makes the gem placement
+    # robust regardless of FE state — same effect, one source of truth.
+    if offset == 0 and "gem" in types and "trading" in types:
+        top = get_top_gem()
+        if top and (not cards or cards[0].get("id") != top.get("id")):
+            cards = [top] + [c for c in cards if c.get("id") != top.get("id")]
+            cards = cards[:limit]
+
+    return cards, total
 
 
 def get_card_by_id(card_id: int) -> dict | None:
