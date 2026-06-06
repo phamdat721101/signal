@@ -346,44 +346,6 @@ async def get_ticker(addresses: str = Query(..., min_length=1)):
     return JSONResponse(content=data, headers=headers)
 
 
-@app.get("/api/ticker-flap")
-async def get_ticker_flap(addresses: str = Query(..., min_length=1)):
-    """Live ticker for Flap tokens. Reads getTokenV7 from Portal contract,
-    multiplies price (in OKB) by cached OKB/USD. Same 5s coalescing as /api/ticker.
-
-    Returns {address_lower: {price_usd, progress, status, ts}}.
-    Used pre-graduation; post-graduation (status='DEX'), /api/ticker via DEXScreener
-    is fine because the token has a live pool.
-    """
-    addrs = [a.strip().lower() for a in addresses.split(",") if a.strip()][:30]
-    if not addrs:
-        raise HTTPException(status_code=400, detail="No addresses supplied")
-    cache_key = f"ticker-flap:{','.join(sorted(addrs))}"
-    headers = {"Cache-Control": "public, max-age=5"}
-    hit = cached(cache_key, ttl=5)
-    if hit is not None:
-        return JSONResponse(content=hit, headers=headers)
-
-    from app.flap_scanner import read_portal_state, ONE_E18
-    from app.price_feed import get_okb_usd
-    okb_usd = get_okb_usd()
-    out: dict[str, dict] = {}
-    status_names = {0: "Invalid", 1: "Tradable", 2: "InDuel", 3: "Killed", 4: "DEX", 5: "Staged"}
-    for addr in addrs:
-        st = read_portal_state(addr)
-        if not st:
-            continue
-        out[addr] = {
-            "price_usd": (float(st.get("price", 0)) / ONE_E18) * okb_usd,
-            "progress": float(st.get("progress", 0)) / ONE_E18,
-            "status": status_names.get(int(st.get("status", 0)), "Unknown"),
-            "tax_rate_bps": int(st.get("taxRate", 0)),
-            "ts": int(time.time()),
-        }
-    set_cache(cache_key, out)
-    return JSONResponse(content=out, headers=headers)
-
-
 @app.get("/api/cards/{card_id}")
 async def get_card(card_id: int):
     settings = get_settings()

@@ -11,14 +11,14 @@ import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 
-import {MockOKB} from "../src/MockOKB.sol";
+import {MockWETH} from "../src/MockWETH.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
 import {SignalCardNFT} from "../src/SignalCardNFT.sol";
 import {SignalCardHookV2} from "../src/SignalCardHookV2.sol";
 
 contract HookTest is Test {
     PoolManager poolManager;
-    MockOKB okb;
+    MockWETH weth;
     MockUSDC usdc;
     SignalCardNFT nft;
     SignalCardHookV2 hook;
@@ -37,7 +37,7 @@ contract HookTest is Test {
         poolManager = new PoolManager(deployer);
 
         // Deploy tokens
-        okb = new MockOKB();
+        weth = new MockWETH();
         usdc = new MockUSDC();
 
         // Deploy NFT
@@ -61,12 +61,12 @@ contract HookTest is Test {
         // Sort currencies
         Currency c0;
         Currency c1;
-        if (address(okb) < address(usdc)) {
-            c0 = Currency.wrap(address(okb));
+        if (address(weth) < address(usdc)) {
+            c0 = Currency.wrap(address(weth));
             c1 = Currency.wrap(address(usdc));
         } else {
             c0 = Currency.wrap(address(usdc));
-            c1 = Currency.wrap(address(okb));
+            c1 = Currency.wrap(address(weth));
         }
 
         poolKey = PoolKey(c0, c1, LPFeeLibrary.DYNAMIC_FEE_FLAG, TICK_SPACING, IHooks(address(hook)));
@@ -76,7 +76,7 @@ contract HookTest is Test {
         poolManager.initialize(poolKey, sqrtPrice);
 
         // Fund alice
-        okb.mint(alice, 1_000_000 ether);
+        weth.mint(alice, 1_000_000 ether);
         usdc.mint(alice, 1_000_000e6);
     }
 

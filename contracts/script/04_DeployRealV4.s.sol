@@ -10,29 +10,28 @@ import {Currency} from "v4-core/src/types/Currency.sol";
 import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 
-import {MockOKB} from "../src/MockOKB.sol";
+import {MockWETH} from "../src/MockWETH.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
 import {SignalCardNFT} from "../src/SignalCardNFT.sol";
 import {SignalCardHookV2} from "../src/SignalCardHookV2.sol";
 import {SignalCardRouterV2} from "../src/SignalCardRouterV2.sol";
 import {HookMiner} from "../src/base/HookMiner.sol";
 
-/// @title 04_DeployRealV4 — deploy the full hook stack against real Uniswap v4
-/// @notice Single responsibility: stand up a real-v4 OKB/USDC pool + hook on any EVM chain.
-///         Same script works for testnet 1952 and mainnet 196 (env-driven).
+/// @title 04_DeployRealV4 — deploy the SignalCardHook v4 stack on any EVM chain
+/// @notice Single responsibility: stand up a real-v4 WETH/USDC pool + hook.
+///         Chain-neutral — set TARGET_CHAIN env var to pick the destination
+///         (Base, Unichain, Arbitrum, Sepolia, etc.) and the canonical Uniswap v4
+///         PoolManager via POOL_MANAGER. Mock tokens are deployed only when
+///         MOCK_WETH / MOCK_USDC are unset (fresh testnet bring-up).
 ///
-///         Reuses existing token addresses if MOCK_OKB / MOCK_USDC env vars are set
-///         (testnet preserves user balances); otherwise deploys fresh tokens.
-///
-///         Reuses canonical Uniswap v4 PoolManager if POOL_MANAGER env var is set
-///         (mainnet 196 has one at 0x360e68fa...); otherwise deploys our own PoolManager
-///         (testnet 1952 has no canonical v4 yet).
+///         Reuses canonical Uniswap v4 PoolManager when POOL_MANAGER env var is set;
+///         otherwise deploys our own (only for chains with no canonical v4 yet).
 ///
 ///         Writes deployments/<chainId>.json as the single source of truth.
 ///         FE/BE env files derive from this JSON via scripts/sync-deployments.mjs.
 ///
 /// Usage:
-///   forge script script/04_DeployRealV4.s.sol --rpc-url xlayer_testnet --broadcast --via-ir
+///   forge script script/04_DeployRealV4.s.sol --rpc-url $RPC --broadcast --via-ir
 contract DeployRealV4 is Script {
     int24 constant TICK_SPACING = 60;
     uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336; // sqrt(1) * 2^96
@@ -51,16 +50,16 @@ contract DeployRealV4 is Script {
 
         vm.startBroadcast(pk);
 
-        address poolManager = _resolveOrDeployPoolManager(deployer);
-        address okb         = _resolveOrDeployToken("MOCK_OKB",  /*isUSDC*/ false);
-        address usdc        = _resolveOrDeployToken("MOCK_USDC", /*isUSDC*/ true);
+        address poolManager  = _resolveOrDeployPoolManager(deployer);
+        address volatile_    = _resolveOrDeployToken("MOCK_WETH", /*isUSDC*/ false);
+        address stable       = _resolveOrDeployToken("MOCK_USDC", /*isUSDC*/ true);
 
         SignalCardNFT nft = new SignalCardNFT(deployer, deployer);
 
         address hookAddr = _deployHookCreate2(poolManager, address(nft));
         nft.setHook(hookAddr);
 
-        (Currency c0, Currency c1) = _sortCurrencies(okb, usdc);
+        (Currency c0, Currency c1) = _sortCurrencies(volatile_, stable);
         PoolKey memory key = PoolKey(c0, c1, LPFeeLibrary.DYNAMIC_FEE_FLAG, TICK_SPACING, IHooks(hookAddr));
         IPoolManager(poolManager).initialize(key, SQRT_PRICE_1_1);
 
@@ -72,14 +71,13 @@ contract DeployRealV4 is Script {
 
         vm.stopBroadcast();
 
-        _writeDeploymentsJson(poolManager, okb, usdc, address(nft), hookAddr, address(router), key);
-        _logSummary(poolManager, okb, usdc, address(nft), hookAddr, address(router));
+        _writeDeploymentsJson(poolManager, volatile_, stable, address(nft), hookAddr, address(router), key);
+        _logSummary(poolManager, volatile_, stable, address(nft), hookAddr, address(router));
     }
 
     // ── Resolution helpers ─────────────────────────────────────────────────
 
-    /// @dev Reuse canonical PoolManager (mainnet 196) if POOL_MANAGER env is set,
-    ///      else deploy our own (testnet 1952 has no canonical v4).
+    /// @dev Reuse canonical PoolManager if POOL_MANAGER env is set, else deploy our own.
     function _resolveOrDeployPoolManager(address owner) internal returns (address pm) {
         pm = vm.envOr("POOL_MANAGER", address(0));
         if (pm == address(0)) {
@@ -95,7 +93,7 @@ contract DeployRealV4 is Script {
     function _resolveOrDeployToken(string memory envKey, bool isUSDC) internal returns (address token) {
         token = vm.envOr(envKey, address(0));
         if (token == address(0)) {
-            token = isUSDC ? address(new MockUSDC()) : address(new MockOKB());
+            token = isUSDC ? address(new MockUSDC()) : address(new MockWETH());
             console2.log(string.concat("Deployed ", envKey, ":"), token);
         } else {
             console2.log(string.concat("Reusing ",  envKey, ":"), token);
@@ -148,13 +146,13 @@ contract DeployRealV4 is Script {
     // ── Single-source-of-truth deployments JSON ────────────────────────────
 
     function _writeDeploymentsJson(
-        address pm, address okb, address usdc, address nft, address hook, address router, PoolKey memory key
+        address pm, address volatile_, address stable, address nft, address hook, address router, PoolKey memory key
     ) internal {
         string memory root = "deploy";
         vm.serializeUint   (root, "chainId",       block.chainid);
         vm.serializeAddress(root, "PoolManager",   pm);
-        vm.serializeAddress(root, "MockOKB",       okb);
-        vm.serializeAddress(root, "MockUSDC",      usdc);
+        vm.serializeAddress(root, "MockWETH",      volatile_);
+        vm.serializeAddress(root, "MockUSDC",      stable);
         vm.serializeAddress(root, "SignalCardNFT", nft);
         vm.serializeAddress(root, "SignalCardHook",   hook);
         vm.serializeAddress(root, "SignalCardRouter", router);
@@ -170,11 +168,11 @@ contract DeployRealV4 is Script {
         console2.log("Wrote deployments JSON:", path);
     }
 
-    function _logSummary(address pm, address okb, address usdc, address nft, address hook, address router) internal pure {
+    function _logSummary(address pm, address volatile_, address stable, address nft, address hook, address router) internal pure {
         console2.log("\n=== DEPLOYMENT SUMMARY ===");
         console2.log("PoolManager:        ", pm);
-        console2.log("MockOKB:            ", okb);
-        console2.log("MockUSDC:           ", usdc);
+        console2.log("MockWETH:           ", volatile_);
+        console2.log("MockUSDC:           ", stable);
         console2.log("SignalCardNFT:      ", nft);
         console2.log("SignalCardHookV2:   ", hook);
         console2.log("SignalCardRouterV2: ", router);

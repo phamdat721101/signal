@@ -332,12 +332,6 @@ def start_scheduler():
                       id="gem_scan", max_instances=1,
                       next_run_time=t + timedelta(seconds=30))
 
-    # ── Flap Scanner — every 5 minutes (PRD: Flap Hidden Gems on X-Layer v1) ──
-    scheduler.add_job(_flap_scan_job,
-                      CronTrigger(minute="*/5", timezone="UTC"),
-                      id="flap_scan", max_instances=1,
-                      next_run_time=t + timedelta(seconds=45))
-
     scheduler.start()
     logger.info("Scheduler started — all jobs delayed for graceful startup")
 
@@ -435,62 +429,6 @@ def _gem_scan_job():
         asyncio.run(_run())
     except Exception as e:
         logger.error(f"Gem scan failed: {e}")
-
-
-def _flap_scan_job():
-    """Generate Flap-source gem cards from X-Layer Portal contract.
-
-    Same event-loop-safety pattern as _gem_scan_job: reset the http_client
-    AsyncClient singleton before each asyncio.run so the pool is rebound to
-    this run's loop. Cards land in the same `cards` table with source='flap'.
-    """
-    import asyncio
-    from app import http_client
-    from app.flap_scanner import scan_for_flap_gems
-    from app.db import insert_card
-
-    http_client._async = None  # rebind AsyncClient to a fresh loop
-
-    async def _run():
-        gems = await scan_for_flap_gems(limit=5)
-        for gem in gems:
-            insert_card({
-                "token_symbol": gem.symbol,
-                "token_name": gem.name,
-                "chain": gem.chain,
-                "token_address": gem.address,
-                "price": gem.price_usd,
-                "price_change_24h": 0.0,  # not tracked pre-graduation
-                "volume_24h": 0.0,
-                "market_cap": gem.market_cap_usd,
-                "card_type": "gem",
-                "source": "flap",
-                "verdict": "APE",
-                "risk_score": gem.risk,
-                "rarity": "legendary" if gem.score > 85 else "epic" if gem.score > 70 else "rare",
-                "hook": f"🦋 {int(gem.progress*100)}% TO DEX",
-                "roast": " | ".join(gem.signals),
-                "metrics": [
-                    {"emoji": s.split(" ")[0],
-                     "label": s.split(" ", 1)[1] if " " in s else s,
-                     "value": "", "sentiment": "bullish"}
-                    for s in gem.signals
-                ],
-                "status": "active",
-            })
-        if gems:
-            top = gems[0]
-            logger.info(
-                "flap_scan: %d gems, top=%s prog=%.2f tax=%dbps score=%d",
-                len(gems), top.symbol, top.progress, top.tax_rate_bps, top.score,
-            )
-        else:
-            logger.info("flap_scan: 0 gems (taxed.fun empty, all dedupe, or filters strict)")
-
-    try:
-        asyncio.run(_run())
-    except Exception as e:
-        logger.error(f"Flap scan failed: {e}")
 
 
 def _chain_ops_reconcile_job():

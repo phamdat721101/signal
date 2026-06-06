@@ -19,6 +19,5 @@ fs_permissions = [{ access = "read-write", path = "./deployments" }]
 line_length = 120
 
 [rpc_endpoints]
-xlayer_testnet = "https://testrpc.xlayer.tech/terigon"
 somnia_testnet = "https://api.infra.testnet.somnia.network"
 somnia_mainnet = "https://api.infra.mainnet.somnia.network"
