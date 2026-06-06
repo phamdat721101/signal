@@ -29,7 +29,7 @@ export interface Bundle {
   prompt: string;
 }
 
-const BASE = config.morphHoodi.agentApiUrl.replace(/\/$/, '');
+const BASE = config.arbitrumSepolia.agentApiUrl.replace(/\/$/, '');
 
 export const BUNDLES: Bundle[] = [
   {
@@ -40,7 +40,7 @@ export const BUNDLES: Bundle[] = [
     priceUsdc: 1000n,
     endpoint: 'decisions',
     vars: [{ key: 'LIMIT', label: 'Limit', default: '5', placeholder: '1-50' }],
-    prompt: `Use n-payment on chain morph-hoodi-testnet to call ${BASE}/api/v2/agent/decisions?limit={{LIMIT}}, pay 0.001 USDC, and summarize the top APE/FADE verdicts.`,
+    prompt: `Use n-payment on chain arbitrum-sepolia to call ${BASE}/api/v2/agent/decisions?limit={{LIMIT}}, pay 0.001 USDC, and summarize the top APE/FADE verdicts.`,
   },
   {
     id: 'prices',
@@ -50,7 +50,7 @@ export const BUNDLES: Bundle[] = [
     priceUsdc: 1000n,
     endpoint: 'prices',
     vars: [{ key: 'SYMBOLS', label: 'Symbols', default: 'BTC,ETH,SOL', placeholder: 'CSV' }],
-    prompt: `Use n-payment on chain morph-hoodi-testnet to call ${BASE}/api/v2/agent/prices?symbols={{SYMBOLS}}, pay 0.001 USDC, and report the prices with sources.`,
+    prompt: `Use n-payment on chain arbitrum-sepolia to call ${BASE}/api/v2/agent/prices?symbols={{SYMBOLS}}, pay 0.001 USDC, and report the prices with sources.`,
   },
   {
     id: 'pools',
@@ -60,7 +60,7 @@ export const BUNDLES: Bundle[] = [
     priceUsdc: 5000n,
     endpoint: 'pools',
     vars: [{ key: 'LIMIT', label: 'Limit', default: '10' }],
-    prompt: `Use n-payment on chain morph-hoodi-testnet to call ${BASE}/api/v2/agent/pools?limit={{LIMIT}}, pay 0.005 USDC, and recommend the best risk-adjusted pool.`,
+    prompt: `Use n-payment on chain arbitrum-sepolia to call ${BASE}/api/v2/agent/pools?limit={{LIMIT}}, pay 0.005 USDC, and recommend the best risk-adjusted pool.`,
   },
   {
     id: 'track-record',
@@ -70,7 +70,7 @@ export const BUNDLES: Bundle[] = [
     priceUsdc: 10000n,
     endpoint: 'track-record',
     vars: [],
-    prompt: `Use n-payment on chain morph-hoodi-testnet to call ${BASE}/api/v2/agent/track-record, pay 0.01 USDC, and report overall accuracy + the three most accurate tokens.`,
+    prompt: `Use n-payment on chain arbitrum-sepolia to call ${BASE}/api/v2/agent/track-record, pay 0.01 USDC, and report overall accuracy + the three most accurate tokens.`,
   },
   {
     id: 'context',
@@ -80,7 +80,7 @@ export const BUNDLES: Bundle[] = [
     priceUsdc: 10000n,
     endpoint: 'context',
     vars: [],
-    prompt: `Use n-payment on chain morph-hoodi-testnet to call ${BASE}/api/v2/agent/context, pay 0.01 USDC, and tell me the current macro mood + biggest ETF flow.`,
+    prompt: `Use n-payment on chain arbitrum-sepolia to call ${BASE}/api/v2/agent/context, pay 0.01 USDC, and tell me the current macro mood + biggest ETF flow.`,
   },
 ];
 

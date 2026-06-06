@@ -362,7 +362,7 @@ async def get_card(card_id: int):
 async def get_card_lp_recipe(
     card_id: int,
     amount_a: float = Query(default=0.0, ge=0.0),
-    preset: str = Query(default="balanced", pattern="^(conservative|balanced|aggressive)$"),
+    preset: str = Query(default="balanced", pattern="^(conservative|balanced|aggressive|auto)$"),
 ):
     """Range + tick + token-B + fee projection for a pool card.
 
@@ -571,6 +571,75 @@ async def get_sodex_pool():
         # Keep the future "done" but allow the next cold caller to start a new one.
         _sodex_pool_inflight = None
     return JSONResponse(payload, headers={"Cache-Control": "public, max-age=15"})
+
+
+# ── Klines for trading-signal candle chart (Profile / Feed) ─────────────
+# Cache the full payload (candles + trade_plan + symbol + verdict) by
+# card_id so warm hits skip both the Supabase card lookup AND the
+# CoinGecko fetch. Single-flight coalesces concurrent cold callers.
+_klines_cache: dict = {}      # card_id → (ts, payload)
+_klines_inflight: dict = {}   # card_id → asyncio.Future[payload]
+_KLINES_TTL = 300
+
+
+@app.get("/api/cards/{card_id}/klines")
+async def get_card_klines(card_id: int):
+    """Return OHLC candles + entry/target/stop overlay for a card.
+
+    Reuses `content_engine.fetch_ohlc_data` (CoinGecko 4h candles).
+    Single-flight + 5-min cache so concurrent viewers of the same
+    card coalesce into a single upstream call AND a single DB read.
+    """
+    import asyncio
+    now = time.time()
+
+    cached_entry = _klines_cache.get(card_id)
+    if cached_entry and now - cached_entry[0] < _KLINES_TTL:
+        return JSONResponse(cached_entry[1],
+                            headers={"Cache-Control": "public, max-age=300"})
+
+    inflight = _klines_inflight.get(card_id)
+    if inflight is not None and not inflight.done():
+        payload = await inflight
+        return JSONResponse(payload,
+                            headers={"Cache-Control": "public, max-age=300"})
+
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+    _klines_inflight[card_id] = fut
+    try:
+        from app.db import get_card_by_id
+        card = await asyncio.to_thread(get_card_by_id, card_id)
+        if not card:
+            raise HTTPException(status_code=404, detail="Card not found")
+        cg_id = (card.get("coingecko_id") or "").strip()
+        candles = []
+        if cg_id:
+            from app.content_engine import fetch_ohlc_data
+            try:
+                candles = await asyncio.to_thread(fetch_ohlc_data, cg_id)
+            except Exception as e:
+                logger.warning("klines: %s fetch failed: %s", cg_id, e)
+        payload = {
+            "candles": candles,
+            "trade_plan": card.get("trade_plan") or {},
+            "symbol": card.get("token_symbol"),
+            "verdict": card.get("verdict"),
+        }
+        _klines_cache[card_id] = (time.time(), payload)
+        fut.set_result(payload)
+    except HTTPException:
+        if not fut.done():
+            fut.set_result({"candles": [], "trade_plan": {}})
+        raise
+    except Exception as e:
+        logger.warning("klines: card %d failed: %s", card_id, e)
+        payload = {"candles": [], "trade_plan": {}}
+        if not fut.done():
+            fut.set_result(payload)
+    finally:
+        _klines_inflight.pop(card_id, None)
+    return JSONResponse(payload, headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.get("/api/cards/{card_id}/image")

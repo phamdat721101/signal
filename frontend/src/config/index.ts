@@ -40,20 +40,19 @@ export const somniaTestnet = defineChain({
   testnet: true,
 });
 
-// ── Morph Hoodi (Agentic Payment Rail — n-payment v0.18) ────────────────
-// Single chain that serves the paid /agent endpoints. USDC pinned to the
-// operator-supplied test deploy. The faucet URL is overridable via env.
-export const MORPH_HOODI_USDC_ADDRESS = '0x7433b41C6c5e1d58D4Da99483609520255ab661B' as const;
+// ── Arbitrum Sepolia (agent-API rail — standard x402, buyer-pays-gas) ──
+// USDC is Circle's canonical Arb Sepolia testnet deployment.
+export const ARBITRUM_SEPOLIA_USDC_ADDRESS = '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d' as const;
 
-export const morphHoodi = defineChain({
-  id: 2910,
-  name: 'Morph Hoodi Testnet',
+export const arbitrumSepolia = defineChain({
+  id: 421614,
+  name: 'Arbitrum Sepolia',
   nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
   rpcUrls: {
-    default: { http: [import.meta.env.VITE_MORPH_HOODI_RPC || 'https://rpc-hoodi.morph.network'] },
+    default: { http: [import.meta.env.VITE_ARBITRUM_SEPOLIA_RPC || 'https://sepolia-rollup.arbitrum.io/rpc'] },
   },
   blockExplorers: {
-    default: { name: 'Morph Hoodi Explorer', url: 'https://explorer-hoodi.morph.network' },
+    default: { name: 'Arbiscan Sepolia', url: 'https://sepolia.arbiscan.io' },
   },
   testnet: true,
 });
@@ -78,13 +77,13 @@ export const config = {
     agentMarketAddress: import.meta.env.VITE_SOMNIA_AGENT_MARKET_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
   },
 
-  // Morph Hoodi (paid agent-data services rail — n-payment v0.18)
-  morphHoodi: {
-    chainId: 2910,
-    usdcAddress: MORPH_HOODI_USDC_ADDRESS,
+  // Arbitrum Sepolia (paid agent-data services rail — standard x402, buyer pays gas)
+  arbitrumSepolia: {
+    chainId: 421614,
+    usdcAddress: ARBITRUM_SEPOLIA_USDC_ADDRESS,
     agentApiUrl: import.meta.env.VITE_AGENT_API_URL || 'http://127.0.0.1:8002',
-    faucetUrl: import.meta.env.VITE_MORPH_HOODI_FAUCET_URL || 'https://hoodi.ethpandaops.io/',
-    usdcFaucetUrl: import.meta.env.VITE_MORPH_HOODI_USDC_FAUCET_URL || '',
+    faucetUrl: import.meta.env.VITE_ARBITRUM_SEPOLIA_FAUCET_URL || 'https://www.alchemy.com/faucets/arbitrum-sepolia',
+    usdcFaucetUrl: import.meta.env.VITE_ARBITRUM_SEPOLIA_USDC_FAUCET_URL || 'https://faucet.circle.com/',
   },
 };
 
@@ -206,7 +205,7 @@ const SCAN_BASE = `https://scan.testnet.initia.xyz/${import.meta.env.VITE_CHAIN_
 const INDEXER_BASE = import.meta.env.VITE_INDEXER_URL || 'http://localhost:8080';
 
 export function explorerTxUrl(txHash: string, chainId?: number): string {
-  if (chainId === 2910) return `https://explorer-hoodi.morph.network/tx/${txHash}`;
+  if (chainId === 421614) return `https://sepolia.arbiscan.io/tx/${txHash}`;
   if (chainId === 50312) return `https://testnet.somnia.network/tx/${txHash}`;
   const hash = txHash.replace(/^0x/i, '').toUpperCase();
   return `${SCAN_BASE}/txs/0x${hash}`;

@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import { env, SUPPORTED_CHAINS } from './env.js';
 import { log } from './logger.js';
 import { TOOLS, makeToolHandler } from './tools.js';
-import { paywall, SUPPORTED_NETWORK, SUPPORTED_ASSET } from './paywall.js';
+import { paywall, SUPPORTED_RAILS, SUPPORTED_NETWORK, SUPPORTED_ASSET } from './paywall.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -55,8 +55,8 @@ function buildSkillMd(): string {
     `# Signal Trading Intelligence API (x402)`,
     ``,
     `AI trading signals with on-chain verifiable accuracy.`,
-    `Pay per call in **USDC on Morph Hoodi Testnet** (chain ${2910}).`,
-    `Buyer pays 0 ETH — sponsor relays via EIP-3009.`,
+    `Pay per call in **USDC on Arbitrum Sepolia Testnet** (chain 421614).`,
+    `Standard x402 \`exact\` scheme — buyer pays gas (~$0.0001) on Arb Sepolia.`,
     ``,
     `## Endpoints`,
     ...TOOLS.map(t => `- GET /api/v2/agent/${t.name} — $${(Number(t.priceMicroUsdc) / 1_000_000).toFixed(4)} — ${t.description}`),
@@ -76,11 +76,14 @@ app.get('/.well-known/agent.json', (_req, res) =>
   res.json({
     version: '1.0',
     name: 'Signal Trading Intelligence',
-    description: 'AI crypto trading signals with on-chain verifiable accuracy. Paid in USDC on Morph Hoodi Testnet (EIP-3009 sponsored).',
+    description:
+      'AI crypto trading signals with on-chain verifiable accuracy. ' +
+      'Paid in USDC on Arbitrum Sepolia testnet via standard x402.',
     url: env.PUBLIC_BASE_URL,
     chains: SUPPORTED_CHAINS,
     network: SUPPORTED_NETWORK,
     asset: SUPPORTED_ASSET,
+    rails: SUPPORTED_RAILS,
     protocols: ['x402', 'a2a'],
     skills: TOOLS.map(t => ({
       name: t.name,
@@ -122,6 +125,8 @@ const server = app.listen(env.PORT, () => {
   log.info('agent-provider listening', {
     port: env.PORT,
     chain: SUPPORTED_CHAINS[0],
+    network: SUPPORTED_NETWORK,
+    asset: SUPPORTED_ASSET,
     facilitator: env.FACILITATOR_URL,
     public: env.PUBLIC_BASE_URL,
   });

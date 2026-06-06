@@ -34,8 +34,15 @@ export const FEED_MODES: readonly FeedMode[] = [
     id: 'liquidity_pools',
     label: 'Liquidity Pools',
     emoji: '🌊',
-    description: 'Open concentrated-LP positions or allocate to SoDex vaults',
-    cardTypes: ['pool', 'vault'],
+    description: 'Read-only LP positions with AI-suggested ranges — opens on the host DEX',
+    cardTypes: ['pool'],
+  },
+  {
+    id: 'vaults',
+    label: 'Vaults',
+    emoji: '⚓',
+    description: 'SoDex passive-yield vaults — live MAG7 NAV, click through to deposit',
+    cardTypes: ['vault'],
   },
   {
     id: 'trading_signal',

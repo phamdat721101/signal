@@ -15,7 +15,6 @@ import TradingSignalCard from '../components/TradingSignalCard';
 import VaultStrategyCard from '../components/VaultStrategyCard';
 import VaultConfigurator from '../components/VaultConfigurator';
 import { useExecuteSignal } from '../hooks/useExecuteSignal';
-import LpConfigurator from '../components/LpConfigurator';
 import Onboarding from '../components/Onboarding';
 import Paywall from '../components/Paywall';
 import { useApeTransaction } from '../hooks/useApeTransaction';
@@ -243,7 +242,6 @@ export default function Feed() {
   const [summonCard, setSummonCard] = useState<any>(null);
   const [pendingCard, setPendingCard] = useState<any>(null);
   const [showRareReveal, setShowRareReveal] = useState<string | null>(null);
-  const [lpConfigCard, setLpConfigCard] = useState<any>(null);
   const [vaultConfigCard, setVaultConfigCard] = useState<any>(null);
 
   // Execute toast state — minimal, single source. Auto-dismisses (see effect below).
@@ -603,7 +601,6 @@ export default function Feed() {
       )}
       {showPaywall && <Paywall onDismiss={() => setShowPaywall(false)} isConnected={!!evmAddress} onConnect={login} />}
       {resolvedTrade && <ResolutionModal trade={resolvedTrade} onDismiss={() => setResolvedTrade(null)} />}
-      {lpConfigCard && <LpConfigurator card={lpConfigCard} onClose={() => setLpConfigCard(null)} />}
       {vaultConfigCard && <VaultConfigurator card={vaultConfigCard} onClose={() => setVaultConfigCard(null)} />}
 
       {/* Execute toast — fixed bottom; success or error. SOLID: a single
@@ -674,8 +671,10 @@ export default function Feed() {
             ) : current.card_type === 'pool' ? (
               <LpBattleCard
                 card={current}
-                onConfigure={() => setLpConfigCard(current)}
-                onViewStrategy={() => setLpConfigCard(current)}
+                onOpenDex={() => {
+                  const url = (current as { dex_link?: string }).dex_link;
+                  if (url) window.open(url, '_blank', 'noopener,noreferrer');
+                }}
               />
             ) : current.card_type === 'vault' ? (
               <VaultStrategyCard

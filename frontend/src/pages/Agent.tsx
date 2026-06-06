@@ -1,5 +1,5 @@
 /**
- * /agent — cyber-terminal command center for paid Morph Hoodi services.
+ * /agent — cyber-terminal command center for paid Arbitrum Sepolia services.
  *
  * Layout:
  *   [hero]                                — system status strip, public
@@ -7,13 +7,13 @@
  *   [bundle grid]                         — copy-only prompt cards (any chain)
  *      └─ <TryItRunner>  inside <ChainGate>  — non-custodial paid call
  *
- * Read-only stays public; mutating actions are gated to chain 2910 only.
+ * Read-only stays public; mutating actions are gated to chain 421614 only.
  */
 import { useMemo, useState } from 'react';
 import { useAccount, useReadContract } from 'wagmi';
 import { erc20Abi, formatUnits } from 'viem';
 import ChainGate from '../components/ChainGate';
-import { config, MORPH_HOODI_USDC_ADDRESS } from '../config';
+import { config, ARBITRUM_SEPOLIA_USDC_ADDRESS } from '../config';
 import { BUNDLES, type Bundle, fillVars, formatPrice } from './agent/bundles';
 import TryItRunner from './agent/TryItRunner';
 
@@ -26,15 +26,15 @@ const PERSONA_COLOR: Record<Bundle['persona'], string> = {
 function PreflightStrip() {
   const { address } = useAccount();
   const { data: bal, isLoading } = useReadContract({
-    chainId: config.morphHoodi.chainId,
-    address: MORPH_HOODI_USDC_ADDRESS,
+    chainId: config.arbitrumSepolia.chainId,
+    address: ARBITRUM_SEPOLIA_USDC_ADDRESS,
     abi: erc20Abi,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
     query: { enabled: !!address, refetchInterval: 15_000 },
   });
   const usdc = bal ? Number(formatUnits(bal as bigint, 6)) : 0;
-  const usdcFaucet = config.morphHoodi.usdcFaucetUrl;
+  const usdcFaucet = config.arbitrumSepolia.usdcFaucetUrl;
 
   return (
     <div className="border border-cyber-outline bg-cyber-carbon p-4 font-cyber text-xs flex flex-wrap items-center justify-between gap-3">
@@ -73,7 +73,7 @@ function BundleCard({ bundle }: { bundle: Bundle }) {
   };
 
   // Token-aware highlighting of `{{VAR}}` slots in the prompt block.
-  const segments = filledPrompt.split(/(\b\d+(?:\.\d+)?\s*USDC\b|https?:\/\/[^\s]+|morph-hoodi-testnet)/g);
+  const segments = filledPrompt.split(/(\b\d+(?:\.\d+)?\s*USDC\b|https?:\/\/[^\s]+|arbitrum-sepolia)/g);
 
   return (
     <div className="border border-cyber-outline bg-cyber-surface flex flex-col">
@@ -105,7 +105,7 @@ function BundleCard({ bundle }: { bundle: Bundle }) {
       )}
 
       <pre className="bg-cyber-carbon p-4 font-cyber text-[11px] leading-relaxed text-white/80 whitespace-pre-wrap overflow-x-auto">
-        {segments.map((seg, i) => /^https?|USDC|morph-hoodi-testnet/.test(seg)
+        {segments.map((seg, i) => /^https?|USDC|arbitrum-sepolia/.test(seg)
           ? <span key={i} className="text-cyber-green">{seg}</span>
           : <span key={i}>{seg}</span>)}
       </pre>
@@ -115,7 +115,7 @@ function BundleCard({ bundle }: { bundle: Bundle }) {
           className="border border-cyber-green text-cyber-green font-cyber-display text-[11px] uppercase tracking-widest px-3 py-1.5 hover:bg-cyber-green/10 active:scale-95 transition">
           {copied ? '✓ Copied' : '⧉ Copy Bundle'}
         </button>
-        <ChainGate chainId={config.morphHoodi.chainId}>
+        <ChainGate chainId={config.arbitrumSepolia.chainId}>
           <TryItRunner bundle={bundle} values={vars} />
         </ChainGate>
       </footer>
@@ -132,14 +132,14 @@ export default function Agent() {
           <p className="text-cyber-green font-cyber text-[11px] uppercase tracking-widest">Agent Command Center</p>
           <h1 className="font-cyber-display font-bold text-3xl uppercase mt-1">Pay-per-call agent data</h1>
           <p className="text-white/60 text-sm mt-2 font-cyber max-w-2xl">
-            Five paid endpoints on <span className="text-cyber-green">Morph Hoodi Testnet</span>.
+            Five paid endpoints on <span className="text-cyber-green">Arbitrum Sepolia Testnet</span>.
             Copy a one-line prompt for any external LLM, or run it in-app — wallet pays USDC,
-            sponsor pays gas (EIP-3009), 0 ETH required from you.
+            facilitator relays the EIP-3009 settle (you only need a tiny amount of test ETH for the signature).
           </p>
         </header>
 
         {/* Gated zone — preflight + runners */}
-        <ChainGate chainId={config.morphHoodi.chainId}>
+        <ChainGate chainId={config.arbitrumSepolia.chainId}>
           <PreflightStrip />
         </ChainGate>
 

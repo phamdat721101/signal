@@ -9,7 +9,7 @@ import { config } from '../config';
  *
  * @param expectedChainId Optional override for the page-level expected chain.
  *   Defaults to `config.chain.id` (Initia testnet for the rest of the app).
- *   Pages that need a different chain (e.g. /agent → Morph Hoodi 2910) pass it
+ *   Pages that need a different chain (e.g. /agent → Arbitrum Sepolia 421614) pass it
  *   explicitly. `isCorrectChain` and `switchToCorrect()` honor the override.
  */
 export function useWallet(opts?: { expectedChainId?: number }) {

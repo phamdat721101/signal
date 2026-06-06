@@ -2,7 +2,7 @@ import { StrictMode, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { createConfig, http, WagmiProvider } from 'wagmi';
+import { createConfig, http, WagmiProvider, injected } from 'wagmi';
 import {
   initiaPrivyWalletConnector,
   injectStyles,
@@ -10,24 +10,29 @@ import {
   TESTNET,
 } from '@initia/interwovenkit-react';
 import interwovenKitStyles from '@initia/interwovenkit-react/styles.js';
-import { config, localChain, testnetChain, somniaTestnet, morphHoodi } from './config';
+import { config, localChain, testnetChain, somniaTestnet, arbitrumSepolia } from './config';
 import App from './App';
 import './index.css';
 
-// Multi-chain wagmi config — single connector (InterwovenKit's Privy wallet),
-// multiple chains. Privy embedded wallet is chain-agnostic, so a wagmi
-// switchChainAsync({ chainId: ... }) routes through it transparently.
+// Multi-chain wagmi config — TWO connectors:
+//   1. initiaPrivyWalletConnector — InterwovenKit's Privy embedded wallet,
+//      used for the Initia signal flow (auto-signs MsgCall on chain 'evm-1').
+//   2. injected() — MetaMask / Rabby / any browser-extension wallet.
+//      Required for the /agent paid flow on Arbitrum Sepolia: the Privy
+//      embedded wallet does not surface a transaction-approval modal for
+//      arbitrary EVM contract calls, so writeContract hangs. External
+//      wallets handle this natively.
 //
 // Adding a chain here is a one-row edit in this array + one row in
 // NetworkBadge META + one row in Layout FAUCETS (if testnet).
 const wagmiConfig = createConfig({
-  connectors: [initiaPrivyWalletConnector],
-  chains: [localChain, testnetChain, somniaTestnet, morphHoodi],
+  connectors: [initiaPrivyWalletConnector, injected({ shimDisconnect: true })],
+  chains: [localChain, testnetChain, somniaTestnet, arbitrumSepolia],
   transports: {
     [localChain.id]: http(),
     [testnetChain.id]: http(),
     [somniaTestnet.id]: http(),
-    [morphHoodi.id]: http(),
+    [arbitrumSepolia.id]: http(),
   },
 });
 

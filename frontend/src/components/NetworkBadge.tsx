@@ -22,7 +22,7 @@ const META: Record<number, { name: string; color: string; tier: string }> = {
   2124225178762456: { name: 'Initia evm-1', color: '#8eff71', tier: 'Testnet' },
   8453:             { name: 'Base',        color: '#0052ff', tier: 'Mainnet' },
   50312:            { name: 'Somnia',      color: '#00d4aa', tier: 'Testnet' },
-  2910:             { name: 'Morph Hoodi', color: '#39ff14', tier: 'Testnet' },
+  421614:           { name: 'Arb Sepolia', color: '#28a0f0', tier: 'Testnet' },
 };
 
 export default function NetworkBadge({ chainId, size = 'sm' }: Props) {

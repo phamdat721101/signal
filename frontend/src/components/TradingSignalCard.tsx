@@ -2,10 +2,18 @@
  * TradingSignalCard — feed card for `card_type === 'trading_signal'`.
  *
  * Single Responsibility: render the signal + raise APE/FADE/EXECUTE
- * via callbacks. No fetch logic, no transaction logic, no global
- * state. Mirrors LpBattleCard styling (Kinetic Terminal palette).
+ * via callbacks. No transaction logic, no global state. Mirrors
+ * LpBattleCard styling (Kinetic Terminal palette).
+ *
+ * The candle chart with entry/target/stop overlays is fetched lazily
+ * from `/api/cards/{id}/klines` (5-min server cache, single-flight)
+ * and rendered through a pure-SVG `EntryPatternChart` so the user can
+ * SEE the price action that led to the AI verdict.
  */
+import { useQuery } from '@tanstack/react-query';
 import type { Card } from '../hooks/useCards';
+import { config } from '../config';
+import EntryPatternChart, { type Candle } from './EntryPatternChart';
 
 // SoDex testnet perps — symbols actually listed (from /markets/symbols).
 // Mirrors backend `sodex_client.SODEX_SYMBOL_IDS`. When a card's symbol
@@ -34,6 +42,19 @@ export default function TradingSignalCard({ card, onApe, onFade, onExecute, isEx
   const tp = card.trade_plan || {};
   const symbol = (card.token_symbol || '').toUpperCase();
   const isExecutable = SODEX_SUPPORTED.has(symbol);
+
+  // Lazy candles fetch — 5-min cached server-side. Each unique symbol
+  // hits CoinGecko at most once per 5 min regardless of viewer count.
+  const { data: klines } = useQuery({
+    queryKey: ['klines', card.id],
+    queryFn: async () => {
+      const r = await fetch(`${config.backendUrl}/api/cards/${card.id}/klines`);
+      if (!r.ok) return { candles: [] as Candle[] };
+      return r.json() as Promise<{ candles: Candle[]; trade_plan?: typeof tp }>;
+    },
+    staleTime: 5 * 60_000,
+    retry: 0,
+  });
 
   return (
     <div className="absolute inset-0 rounded-xl border-2 border-[#8eff71]/40 bg-[#0e0e0e] shadow-[0_0_24px_-8px_rgba(142,255,113,0.4)]">
@@ -77,6 +98,15 @@ export default function TradingSignalCard({ card, onApe, onFade, onExecute, isEx
             <div className="font-headline font-bold text-[#ff7166] text-sm">{tp.stop || '—'}</div>
           </div>
         </div>
+
+        {/* Entry-pattern chart — shows the price action behind the verdict.
+            Lazy-loaded; tasteful empty state when the upstream is unavailable. */}
+        <EntryPatternChart
+          candles={klines?.candles ?? []}
+          tradePlan={tp}
+          verdict={card.verdict}
+          height={120}
+        />
 
         {/* Risk / venue chip row */}
         <div className="flex items-center gap-2 text-[10px]">

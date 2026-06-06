@@ -1,24 +1,23 @@
 /**
- * LpBattleCard — feed-style card for a `card_type === 'pool'` row.
+ * LpBattleCard — read-only feed card for `card_type === 'pool'`.
  *
- * Visual spec: lp-ui/lp_battle_card_feed/code.html (Kinetic Terminal —
- * neon green primary, glass panels, no 1px borders). Range overlay uses
- * the Balanced preset (k=1.0) as the visual default; the Configurator
- * lets the user change it.
+ * Shows the AI-recommended range (auto-picked from the 3 σ-derived
+ * presets — the one with the highest projected 24-h fee yield) and
+ * a single "OPEN ON DEX" CTA that deep-links to `card.dex_link`.
  *
- * Single Responsibility: render the pool card + raise (open / deeplink)
- * via callbacks. No fetch logic, no transaction logic, no global state.
+ * Single Responsibility: render the read-only summary + raise an
+ * "open" intent via callback. No transaction logic, no in-app
+ * liquidity flow — depositing happens on the host DEX (Uniswap,
+ * Aerodrome, Curve, etc.) per `card.dex_link`.
  */
-import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import type { Card } from '../hooks/useCards';
-import { useLpRange } from '../hooks/useLpRange';
+import { config } from '../config';
 
 interface Props {
   card: Card;
-  /** Tap "ADD LIQUIDITY" — opens LpConfigurator (parent wires it up). */
-  onConfigure: () => void;
-  /** Tap "VIEW STRATEGY" — same target as onConfigure but opens read-only. */
-  onViewStrategy: () => void;
+  /** Tap "OPEN ON DEX" — opens `card.dex_link` in a new tab. */
+  onOpenDex: () => void;
 }
 
 function fmtPct(n: number | undefined | null, digits = 1): string {
@@ -34,22 +33,31 @@ function fmtTvl(usd: number | undefined | null): string {
   return `$${usd.toFixed(0)}`;
 }
 
-export default function LpBattleCard({ card, onConfigure, onViewStrategy }: Props) {
+export default function LpBattleCard({ card, onOpenDex }: Props) {
   const apy = card.price ?? 0;            // pool cards reuse `price` for APY
   const tvl = card.market_cap ?? 0;       // and `market_cap` for TVL
   const sym0 = card.token0_symbol || (card.token_symbol || '').split(/[-/]/)[0] || 'A';
   const sym1 = card.token1_symbol || (card.token_symbol || '').split(/[-/]/)[1] || 'B';
 
-  // Range preview from σ_7d. Use a synthetic mid so the chart range box has
-  // *something* to render even when no spot price is in the row. The
-  // Configurator does the precise math via /lp-recipe.
-  const sigma = card.volatility_7d_sigma ?? null;
-  const { min, max } = useLpRange(1.0, sigma, 'balanced');
-  const widthPct = useMemo(() => {
-    if (!sigma) return 33;                // default 1/3 of chart
-    const span = (max - min);             // around mid=1
-    return Math.max(15, Math.min(80, span * 100));
-  }, [sigma, min, max]);
+  // Lazy-fetch the AI-recommended range. Backend picks the preset with
+  // the highest projected 24-h fee yield; we just render the winner.
+  const { data: recipe } = useQuery({
+    queryKey: ['lp-recipe', card.id, 'auto'],
+    queryFn: async () => {
+      const r = await fetch(`${config.backendUrl}/api/cards/${card.id}/lp-recipe?preset=auto&amount_a=100`);
+      if (!r.ok) return null;
+      return r.json() as Promise<{
+        recommended?: string;
+        preset?: string;
+        min_price?: number | null;
+        max_price?: number | null;
+        est_fee_24h_usd?: number;
+        dex_link?: string;
+      }>;
+    },
+    staleTime: 5 * 60_000,
+    retry: 0,
+  });
 
   return (
     <div className="w-full max-w-sm mx-auto rounded-2xl overflow-hidden select-none">
@@ -93,50 +101,42 @@ export default function LpBattleCard({ card, onConfigure, onViewStrategy }: Prop
             </div>
           </div>
 
-          {/* Chart with highlighted range box */}
-          <div className="h-40 w-full bg-[#131313] rounded-lg relative overflow-hidden border border-[#494847]/15">
-            <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
-              <path
-                d="M0,70 L10,50 L20,60 L30,40 L40,80 L50,30 L60,45 L70,20 L80,50 L90,10 L100,30"
-                fill="none"
-                stroke="#8eff71"
-                strokeWidth="1.5"
-                style={{ filter: 'drop-shadow(0 0 4px rgba(142,255,113,0.6))' }}
-              />
-            </svg>
-            <div
-              className="absolute top-1/2 -translate-y-1/2 h-3/4 border-2 border-[#8eff71] bg-[#8eff71]/10 rounded-lg flex items-center justify-center"
-              style={{ left: `${(100 - widthPct) / 2}%`, width: `${widthPct}%` }}
-            >
-              <div className="text-center px-2">
-                <span className="block font-headline font-bold text-[#8eff71] text-xs uppercase tracking-widest">
-                  LIQUIDITY
+          {/* AI-recommended range — most profitable preset (highest projected 24h fees). */}
+          <div className="bg-[#131313] rounded-lg p-3 border border-[#8eff71]/20">
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-label text-[9px] text-[#adaaaa] uppercase tracking-widest">
+                AI-Recommended Range
+              </span>
+              {recipe?.recommended ? (
+                <span className="text-[9px] font-label font-bold px-1.5 py-0.5 rounded bg-[#8eff71]/15 text-[#8eff71] uppercase tracking-widest">
+                  {recipe.recommended}
                 </span>
-                <span className="block font-headline font-bold text-[#8eff71] text-xs uppercase tracking-widest">
-                  RANGE
-                </span>
-              </div>
+              ) : null}
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="font-headline text-sm font-bold text-white font-mono">
+                {recipe?.min_price != null && recipe?.max_price != null
+                  ? `${recipe.min_price.toFixed(4)} → ${recipe.max_price.toFixed(4)}`
+                  : '—'}
+              </span>
+              <span className="font-headline text-sm font-bold text-[#8eff71]">
+                {recipe?.est_fee_24h_usd != null
+                  ? `$${recipe.est_fee_24h_usd.toFixed(2)}/day`
+                  : '—'}
+              </span>
             </div>
           </div>
 
           {/* Hook copy — keeps the persona tone */}
           <p className="text-[#adaaaa] text-xs leading-snug">{card.hook}</p>
 
-          {/* CTAs */}
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={onViewStrategy}
-              className="py-3 rounded border border-[#8eff71]/40 bg-[#262626] text-[#8eff71] font-headline font-bold text-sm uppercase tracking-wider active:scale-95 transition-transform"
-            >
-              View Strategy
-            </button>
-            <button
-              onClick={onConfigure}
-              className="py-3 rounded bg-gradient-to-br from-[#8eff71] to-[#2ff801] text-[#0b5800] font-headline font-bold text-sm uppercase tracking-wider shadow-[0_0_12px_rgba(142,255,113,0.2)] active:scale-95 transition-transform"
-            >
-              Add Liquidity
-            </button>
-          </div>
+          {/* Single CTA: open the host DEX where the user actually deposits. */}
+          <button
+            onClick={onOpenDex}
+            className="py-3 rounded bg-gradient-to-br from-[#8eff71] to-[#2ff801] text-[#0b5800] font-headline font-bold text-sm uppercase tracking-wider shadow-[0_0_12px_rgba(142,255,113,0.2)] active:scale-95 transition-transform"
+          >
+            🌊 Open on DEX
+          </button>
         </div>
       </div>
     </div>

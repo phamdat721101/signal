@@ -35,10 +35,31 @@ def _spot_usd(symbol: str | None) -> float:
 
 
 def build_recipe(card: dict[str, Any], *, amount_a: float, preset: str) -> dict[str, Any]:
-    """Assemble the full LP recipe payload. Pure-ish (only fan-out is price_feed)."""
+    """Assemble the full LP recipe payload. Pure-ish (only fan-out is price_feed).
+
+    `preset` accepts `conservative`/`balanced`/`aggressive` directly, OR
+    the special value `auto` which evaluates all three and returns the
+    one with the highest projected 24-h fee yield. The returned payload
+    always carries a `recommended` field naming the preset that was
+    used so the FE can label the card with confidence.
+    """
     if (card.get("card_type") or "") != "pool":
         raise ValueError(f"card {card.get('id')} is not a pool card")
 
+    if (preset or "").lower() == "auto":
+        candidates = [_build_single(card, amount_a, p) for p in ("conservative", "balanced", "aggressive")]
+        ranked = [r for r in candidates if (r.get("est_fee_24h_usd") or 0) > 0]
+        winner = (max(ranked, key=lambda r: r["est_fee_24h_usd"]) if ranked else candidates[1])  # default balanced
+        winner["recommended"] = winner["preset"]
+        winner["alternatives"] = {
+            r["preset"]: round(r.get("est_fee_24h_usd") or 0.0, 4) for r in candidates
+        }
+        return winner
+    return _build_single(card, amount_a, preset)
+
+
+def _build_single(card: dict[str, Any], amount_a: float, preset: str) -> dict[str, Any]:
+    """Compute the recipe for one specific preset. Pure of the dispatch above."""
     sym0 = (card.get("token0_symbol") or "").upper()
     sym1 = (card.get("token1_symbol") or "").upper()
     addr0 = card.get("token0_address")

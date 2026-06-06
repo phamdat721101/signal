@@ -156,7 +156,7 @@ async def get_pools(limit: int = Query(default=10, le=50)):
 async def get_lp_recipe(
     pool_card_id: int = Query(..., description="card_type='pool' card id"),
     amount_a: float = Query(default=0.0, ge=0.0),
-    preset: str = Query(default="balanced", pattern="^(conservative|balanced|aggressive)$"),
+    preset: str = Query(default="balanced", pattern="^(conservative|balanced|aggressive|auto)$"),
 ):
     """Concentrated-LP recipe with range/ticks/fees for a pool card.
 

@@ -214,6 +214,7 @@ def build_signal_card(symbol: str) -> Optional[dict[str, Any]]:
         "token_name": symbol,
         "chain": "valuechain",
         "card_type": "trading_signal",
+        "coingecko_id": _COINGECKO_IDS.get(symbol, ""),
         "hook": f"{direction} {symbol} @ ${mark:,.2f}",
         "verdict": "APE" if is_long else "FADE",
         "verdict_reason": reason or f"σ7d={sigma*100:.2f}% · model={verdict}",

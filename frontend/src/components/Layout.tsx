@@ -20,7 +20,7 @@ const navItems = [
 /** Persistent testnet notice. Copy is chain-neutral; actions are chain-keyed. */
 const FAUCETS: Record<number, { label: string; url: string }> = {
   2124225178762456: { label: 'Get INIT', url: 'https://app.testnet.initia.xyz/faucet' },
-  2910: { label: 'Get Hoodi ETH', url: import.meta.env.VITE_MORPH_HOODI_FAUCET_URL || 'https://hoodi.ethpandaops.io/' },
+  421614: { label: 'Get Arb Sepolia ETH', url: import.meta.env.VITE_ARBITRUM_SEPOLIA_FAUCET_URL || 'https://www.alchemy.com/faucets/arbitrum-sepolia' },
 };
 
 function TestnetBanner() {

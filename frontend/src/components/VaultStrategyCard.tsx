@@ -25,6 +25,25 @@ interface VaultMeta {
   yield_sources?: string[];
   min_deposit_usd?: number;
   short_name?: string;
+  index_ticker?: string;
+  live?: {
+    nav_usd?: number;
+    change_24h_pct?: number;
+    roi_7d_pct?: number;
+    roi_1m_pct?: number;
+    roi_3m_pct?: number;
+    roi_1y_pct?: number;
+    ytd_pct?: number;
+  };
+}
+
+function fmtPct(n?: number | null) {
+  if (n == null || !isFinite(n)) return '—';
+  return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
+}
+function fmtUsd(n?: number | null) {
+  if (n == null || !isFinite(n)) return '—';
+  return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 }
 
 export default function VaultStrategyCard({ card, onAllocate }: Props) {
@@ -33,6 +52,10 @@ export default function VaultStrategyCard({ card, onAllocate }: Props) {
   const yields = meta.yield_sources ?? [];
   const lockup = meta.lockup_label ?? card.roast ?? '';
   const minDep = meta.min_deposit_usd ?? 50;
+  const live = meta.live || {};
+  const hasLive = (live.nav_usd ?? 0) > 0;
+  const change = live.change_24h_pct ?? 0;
+  const changeColor = change >= 0 ? '#8eff71' : '#ff7166';
 
   return (
     <div className="w-full max-w-sm mx-auto rounded-2xl overflow-hidden select-none">
@@ -57,6 +80,25 @@ export default function VaultStrategyCard({ card, onAllocate }: Props) {
               ⚓ VAULT
             </span>
           </div>
+
+          {/* Live MAG7.SSI metrics — single SoSoValue snapshot covers both vaults. */}
+          {hasLive ? (
+            <div className="bg-[#131313] rounded-lg p-3 grid grid-cols-2 gap-2 relative z-10">
+              <div className="flex flex-col">
+                <span className="font-label text-[9px] text-[#adaaaa] uppercase tracking-widest">MAG7 NAV</span>
+                <span className="font-headline text-lg font-bold text-white">{fmtUsd(live.nav_usd)}</span>
+                <span className="text-[10px] font-mono" style={{ color: changeColor }}>{fmtPct(change)} · 24h</span>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
+                <span className="text-[#adaaaa]">7d</span>
+                <span className="text-right" style={{ color: (live.roi_7d_pct ?? 0) >= 0 ? '#8eff71' : '#ff7166' }}>{fmtPct(live.roi_7d_pct)}</span>
+                <span className="text-[#adaaaa]">1m</span>
+                <span className="text-right" style={{ color: (live.roi_1m_pct ?? 0) >= 0 ? '#8eff71' : '#ff7166' }}>{fmtPct(live.roi_1m_pct)}</span>
+                <span className="text-[#adaaaa]">YTD</span>
+                <span className="text-right" style={{ color: (live.ytd_pct ?? 0) >= 0 ? '#8eff71' : '#ff7166' }}>{fmtPct(live.ytd_pct)}</span>
+              </div>
+            </div>
+          ) : null}
 
           {/* Narrative */}
           {card.hook ? (
