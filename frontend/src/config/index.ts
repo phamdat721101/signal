@@ -26,34 +26,6 @@ export const testnetChain = defineChain({
   testnet: true,
 });
 
-// ── X Layer (Hook the Future hackathon target) ──────────────────────────
-// Chain ids: testrpc.xlayer.tech serves the "Terigon" testnet at chain 1952
-// (NOT the chainlist.org/195 docs — that's a different RPC). Mainnet is 196.
-export const xlayerTestnet = defineChain({
-  id: 1952,
-  name: 'X Layer Testnet',
-  nativeCurrency: { name: 'OKB', symbol: 'OKB', decimals: 18 },
-  rpcUrls: {
-    default: { http: [import.meta.env.VITE_XLAYER_TESTNET_RPC_URL || 'https://testrpc.xlayer.tech'] },
-  },
-  blockExplorers: {
-    default: { name: 'OKLink', url: 'https://www.oklink.com/xlayer-test' },
-  },
-  testnet: true,
-});
-
-export const xlayerMainnet = defineChain({
-  id: 196,
-  name: 'X Layer',
-  nativeCurrency: { name: 'OKB', symbol: 'OKB', decimals: 18 },
-  rpcUrls: {
-    default: { http: [import.meta.env.VITE_XLAYER_MAINNET_RPC_URL || 'https://rpc.xlayer.tech'] },
-  },
-  blockExplorers: {
-    default: { name: 'OKLink', url: 'https://www.oklink.com/xlayer' },
-  },
-});
-
 // ── Somnia (Agentic L1 — on-chain AI agents) ────────────────────────────
 export const somniaTestnet = defineChain({
   id: 50312,
@@ -98,18 +70,6 @@ export const config = {
   paymentGatewayAddress: import.meta.env.VITE_PAYMENT_GATEWAY_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
   paymentEnabled: import.meta.env.VITE_PAYMENT_ENABLED === 'true',
 
-  // X Layer Hook the Future contracts (filled in post forge deploy)
-  xlayer: {
-    testnetId: 1952,
-    mainnetId: 196,
-    cardNftAddress: import.meta.env.VITE_XLAYER_CARD_NFT_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
-    hookAddress: import.meta.env.VITE_XLAYER_HOOK_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
-    routerAddress: import.meta.env.VITE_XLAYER_ROUTER_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
-    okbAddress: import.meta.env.VITE_XLAYER_OKB_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
-    usdcAddress: import.meta.env.VITE_XLAYER_USDC_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
-    faucetUrl: 'https://www.okx.com/xlayer/faucet',
-  },
-
   // Somnia Agentathon contracts (chain 50312). Source of truth: contracts/deployments/50312.json
   somnia: {
     testnetId: 50312,
@@ -128,17 +88,12 @@ export const config = {
   },
 };
 
-/** True when chainId matches X Layer testnet (1952) or mainnet (196). */
-export function isXLayer(chainId: number | undefined): boolean {
-  return chainId === 1952 || chainId === 196;
-}
-
 /** Card types that don't carry an LP recipe — informational only, not Summon-able. */
 const NON_TRADEABLE_CARD_TYPES = new Set([
-  'macro_desk', 'whale_alert', 'index_battle', 'insight', 'pool',
+  'macro_desk', 'whale_alert', 'index_battle', 'insight', 'pool', 'vault',
 ]);
 
-/** Single source of truth for card eligibility on the X Layer Summon path. */
+/** Single source of truth for card eligibility on the on-chain summon path. */
 export function isCardTradeable(card: { price?: number; card_type?: string } | null | undefined): boolean {
   if (!card) return false;
   if (NON_TRADEABLE_CARD_TYPES.has(card.card_type || '')) return false;
@@ -251,8 +206,6 @@ const SCAN_BASE = `https://scan.testnet.initia.xyz/${import.meta.env.VITE_CHAIN_
 const INDEXER_BASE = import.meta.env.VITE_INDEXER_URL || 'http://localhost:8080';
 
 export function explorerTxUrl(txHash: string, chainId?: number): string {
-  if (chainId === 1952) return `https://www.oklink.com/xlayer-test/tx/${txHash}`;
-  if (chainId === 196) return `https://www.oklink.com/xlayer/tx/${txHash}`;
   if (chainId === 2910) return `https://explorer-hoodi.morph.network/tx/${txHash}`;
   if (chainId === 50312) return `https://testnet.somnia.network/tx/${txHash}`;
   const hash = txHash.replace(/^0x/i, '').toUpperCase();

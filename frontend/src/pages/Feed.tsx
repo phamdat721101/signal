@@ -6,12 +6,14 @@ import { createPublicClient, http } from 'viem';
 import { useCards } from '../hooks/useCards';
 import { useFeaturedGem } from '../hooks/useFeaturedGem';
 import { useFeedMode } from '../hooks/useFeedMode';
-import { config, shareToX, normalizeAddress, isCardTradeable } from '../config';
+import { config, shareToX, normalizeAddress, isCardTradeable, explorerTxUrl } from '../config';
 import TokenCard, { TokenCardDetail, hasTokenCardDetail } from '../components/TokenCard';
 import { MacroDeskCard, WhaleAlertCard } from '../components/TokenCard';
 import { InsightCard } from '../components/InsightCard';
 import LpBattleCard from '../components/LpBattleCard';
 import TradingSignalCard from '../components/TradingSignalCard';
+import VaultStrategyCard from '../components/VaultStrategyCard';
+import VaultConfigurator from '../components/VaultConfigurator';
 import { useExecuteSignal } from '../hooks/useExecuteSignal';
 import LpConfigurator from '../components/LpConfigurator';
 import Onboarding from '../components/Onboarding';
@@ -160,7 +162,7 @@ function ConvictionOverlay({ card, onConfirm, onCancel }: { card: any; onConfirm
           </div>
           <button onClick={onConfirm}
             className="w-full ape-gradient text-[#0b5800] font-headline font-bold py-3 rounded-lg active:scale-95 transition-transform text-lg">
-            {typeof window !== 'undefined' && (window as any).__xlayer ? '🔮 SUMMON LP' : '🔥 COMMIT ON-CHAIN'}
+            🔥 COMMIT ON-CHAIN
           </button>
           <button onClick={onCancel}
             className="w-full bg-[#262626] text-[#adaaaa] font-headline font-bold py-2 rounded-lg text-sm">
@@ -242,6 +244,7 @@ export default function Feed() {
   const [pendingCard, setPendingCard] = useState<any>(null);
   const [showRareReveal, setShowRareReveal] = useState<string | null>(null);
   const [lpConfigCard, setLpConfigCard] = useState<any>(null);
+  const [vaultConfigCard, setVaultConfigCard] = useState<any>(null);
 
   // Execute toast state — minimal, single source. Auto-dismisses (see effect below).
   const [execToast, setExecToast] = useState<{
@@ -556,10 +559,8 @@ export default function Feed() {
               try { await post(); } catch { /* swallow — backend reconciles on next user action */ }
             }
           }
-          // Open explorer
-          const url = txChainId === 1952
-            ? `https://www.oklink.com/xlayer-test/tx/${txHash}`
-            : `https://www.oklink.com/xlayer/tx/${txHash}`;
+          // Open explorer (chain-keyed; falls back to Initia scan).
+          const url = explorerTxUrl(txHash, txChainId);
           window.open(url, '_blank');
           queryClient.invalidateQueries({ queryKey: ['cards'] });
           queryClient.invalidateQueries({ queryKey: ['played-cards'] });
@@ -590,7 +591,7 @@ export default function Feed() {
                   <span className="text-2xl">🔮</span>
                   <div>
                     <div className="font-headline font-bold text-white text-sm">Summon LP</div>
-                    <div className="text-[10px] text-[#adaaaa]">Earn swap fees · Requires OKB + USDC · X Layer</div>
+                    <div className="text-[10px] text-[#adaaaa]">Earn swap fees · Concentrated v4 LP</div>
                   </div>
                 </div>
               </button>
@@ -603,6 +604,7 @@ export default function Feed() {
       {showPaywall && <Paywall onDismiss={() => setShowPaywall(false)} isConnected={!!evmAddress} onConnect={login} />}
       {resolvedTrade && <ResolutionModal trade={resolvedTrade} onDismiss={() => setResolvedTrade(null)} />}
       {lpConfigCard && <LpConfigurator card={lpConfigCard} onClose={() => setLpConfigCard(null)} />}
+      {vaultConfigCard && <VaultConfigurator card={vaultConfigCard} onClose={() => setVaultConfigCard(null)} />}
 
       {/* Execute toast — fixed bottom; success or error. SOLID: a single
           state drives one rendering surface; click to dismiss; auto-clear
@@ -674,6 +676,11 @@ export default function Feed() {
                 card={current}
                 onConfigure={() => setLpConfigCard(current)}
                 onViewStrategy={() => setLpConfigCard(current)}
+              />
+            ) : current.card_type === 'vault' ? (
+              <VaultStrategyCard
+                card={current}
+                onAllocate={() => setVaultConfigCard(current)}
               />
             ) : current.card_type === 'trading_signal' ? (
               <TradingSignalCard

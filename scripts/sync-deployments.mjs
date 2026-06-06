@@ -17,7 +17,7 @@
  *
  * Usage:
  *   node scripts/sync-deployments.mjs                # auto-pick if single chain
- *   node scripts/sync-deployments.mjs --chain 1952   # explicit
+ *   node scripts/sync-deployments.mjs --chain 50312  # explicit
  *   node scripts/sync-deployments.mjs --check        # CI lint mode: exits 1 on drift
  */
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
@@ -28,18 +28,6 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Each target = one .env file with a list of (envKey ← jsonKey) mappings, per chain. */
 const TARGETS_BY_CHAIN = {
-  1952: [
-    { path: "frontend/.env", keys: {
-      VITE_XLAYER_CARD_NFT_ADDRESS: "SignalCardNFT", VITE_XLAYER_HOOK_ADDRESS: "SignalCardHook",
-      VITE_XLAYER_ROUTER_ADDRESS: "SignalCardRouter", VITE_XLAYER_POOL_MANAGER_ADDRESS: "PoolManager",
-      VITE_XLAYER_OKB_ADDRESS: "MockOKB", VITE_XLAYER_USDC_ADDRESS: "MockUSDC",
-    }},
-    { path: "backend/.env", keys: {
-      SIGNAL_CARD_NFT_ADDRESS: "SignalCardNFT", SIGNAL_CARD_HOOK_ADDRESS: "SignalCardHook",
-      SIGNAL_CARD_ROUTER_ADDRESS: "SignalCardRouter", XLAYER_POOL_MANAGER_ADDRESS: "PoolManager",
-      OKB_ADDRESS_XLAYER: "MockOKB", USDC_ADDRESS_XLAYER: "MockUSDC",
-    }},
-  ],
   50312: [
     { path: "frontend/.env", keys: {
       VITE_SOMNIA_SIGNAL_REGISTRY_ADDRESS: "SignalRegistry", VITE_SOMNIA_CONVICTION_ENGINE_ADDRESS: "ConvictionEngine",

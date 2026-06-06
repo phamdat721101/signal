@@ -1,34 +1,21 @@
 import { useCallback, useState } from 'react';
 import { encodeFunctionData, keccak256, toHex } from 'viem';
-import { useSwitchChain, usePublicClient } from 'wagmi';
-import { config, isXLayer } from '../config';
+import { useSwitchChain } from 'wagmi';
+import { config } from '../config';
 import { useWallet } from './useWallet';
 import type { Card } from './useCards';
 
 /**
  * useSummonTransaction — chain-aware APE handler.
  *
- * Dispatches by the card's chain (not the wallet's currently-connected chain):
- *
- *   card.chain_id == 1952 / 196  → X Layer "summon" path:
- *     1. ensureChain(1952) — switchChainAsync if needed
- *     2. POST /api/cards/{id}/play  → returns {calls: [approveOKB, approveUSDC, playCard]}
- *     3. execute calls sequentially via useWallet.sendTx
- *
- *   default                       → Initia createSignal path (existing).
- *
- * Default chain resolution (no DB migration required):
- *   1. Use card.chain_id if explicitly set.
- *   2. Else, if VITE_XLAYER_ROUTER_ADDRESS is configured, default to X Layer testnet (1952).
- *   3. Else, fall back to Initia.
+ * Today this is the Initia `createSignal` path: convert a card swipe
+ * into one signed transaction on Initia EVM. When a v4-hook chain is
+ * wired up, add a single branch keyed off `card.chain_id` — same
+ * shape, no other surface needs to change.
  *
  * SOLID:
  *   - Single responsibility: convert a card swipe into one settled tx.
  *   - Open/closed: adding a new chain = adding one branch + one backend route, no UI change.
- *   - No premature abstraction (no useSigner extraction yet — see UPGRADE doc §4.1).
- *
- * Note: testrpc.xlayer.tech serves chain 1952 (Terigon), not the chain-195
- * RPC documented on chainlist.org. Replaces useApeTransaction.ts.
  */
 
 const CREATE_SIGNAL_ABI = [
@@ -62,8 +49,6 @@ function symbolToAddress(symbol: string): `0x${string}` {
 export interface SummonResult {
   txHash: string;
   chainId: number;
-  /** Last call index that succeeded (0..calls.length-1). For X Layer multi-call. */
-  completedSteps?: number;
 }
 
 export interface UseSummonTransaction {
@@ -77,7 +62,6 @@ export interface UseSummonTransaction {
 export function useSummonTransaction(): UseSummonTransaction {
   const { sendTx, isConnected, chainId, address } = useWallet();
   const { switchChainAsync } = useSwitchChain();
-  const publicClient = usePublicClient();
   const [isLoading, setIsLoading] = useState(false);
   const [step, setStep] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -89,56 +73,15 @@ export function useSummonTransaction(): UseSummonTransaction {
   const summon = useCallback(async (card: Card): Promise<SummonResult | null> => {
     if (!isConnected || !address) { setError('Connect wallet first'); return null; }
 
-    const cardChainId = (card as any).chain_id;
-    // Routing rule: wallet's currently-selected chain decides the flow.
-    //  — On X Layer (1952/196): SignalCardRouter v4-hook LP open path.
-    //  — Anywhere else (Initia default): legacy createSignal path.
-    // Cards CAN override via card.chain_id but the standard pattern is
-    // "user picks the network in the header pill, that's the active flow."
-    const targetChain = cardChainId ?? chainId ?? config.chain.id;
+    const targetChain = (card as { chain_id?: number }).chain_id ?? chainId ?? config.chain.id;
     setError(null); setIsLoading(true);
 
     try {
-      // ── Chain switch if needed ───────────────────────────────────────
       if (chainId !== targetChain) {
-        setStep('Switching to ' + (isXLayer(targetChain) ? 'X Layer' : 'Initia'));
+        setStep('Switching network');
         await switchChainAsync({ chainId: targetChain });
       }
 
-      // ── X Layer path: backend bundle (approvals + playCard) ──────────
-      if (isXLayer(targetChain)) {
-        setStep('Preparing summon');
-        const resp = await fetch(`${config.backendUrl}/api/cards/${card.id}/play`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ address }),
-        });
-        if (!resp.ok) {
-          let msg = `Backend: ${resp.status}`;
-          try { const j = await resp.json(); if (j?.detail) msg = String(j.detail); } catch {}
-          throw new Error(msg);
-        }
-        const bundle = await resp.json() as {
-          calls: Array<{ to: string; data: string }>;
-        };
-
-        // Wait for each tx to be mined before sending the next.
-        // Approvals must confirm before playCard can pull tokens.
-        let lastTx = '';
-        for (let i = 0; i < bundle.calls.length; i++) {
-          const isFinal = i === bundle.calls.length - 1;
-          setStep(isFinal ? 'Summoning' : `Approving (${i + 1}/${bundle.calls.length - 1})`);
-          lastTx = await sendTx(bundle.calls[i].to, bundle.calls[i].data, targetChain);
-          if (!isFinal && publicClient) {
-            await publicClient.waitForTransactionReceipt({ hash: lastTx as `0x${string}` });
-          }
-        }
-
-        setIsLoading(false); setStep(null);
-        return { txHash: lastTx, chainId: targetChain, completedSteps: bundle.calls.length };
-      }
-
-      // ── Default Initia createSignal path ─────────────────────────────
       if (config.contractAddress === '0x0000000000000000000000000000000000000000') {
         throw new Error('SignalRegistry not deployed on this chain');
       }
@@ -161,8 +104,8 @@ export function useSummonTransaction(): UseSummonTransaction {
 
       setIsLoading(false); setStep(null);
       return { txHash, chainId: targetChain };
-    } catch (e: any) {
-      setError(e?.message || 'Summon failed');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Summon failed');
       setIsLoading(false); setStep(null);
       return null;
     }

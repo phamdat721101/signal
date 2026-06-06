@@ -290,6 +290,12 @@ def start_scheduler():
     scheduler.add_job(refresh_oracle, "interval", minutes=30, id="oracle_refresh", max_instances=1, next_run_time=t + timedelta(seconds=40))
     scheduler.add_job(resolve_predictions, "interval", minutes=30, id="resolve_predictions", max_instances=1, next_run_time=t + timedelta(seconds=180))
     scheduler.add_job(generate_lp_advisories, "interval", minutes=15, id="lp_advisory", max_instances=1, next_run_time=t + timedelta(seconds=100))
+    # Vault Strategy Cards (PRD-B SoDex Vaults): static 2-card upsert every
+    # 30 min keeps the cards fresh + handles cold DBs after a deploy.
+    from app.vault_advisor import generate_vault_cards
+    scheduler.add_job(generate_vault_cards, "interval", minutes=30,
+                      id="vault_advisor", max_instances=1,
+                      next_run_time=t + timedelta(seconds=20))
     # Trading-signal cards (Wave-2 SoSoValue Buildathon wedge): 10 curated
     # assets → SoDex perps cards every 10 min. Pure additive; if the
     # module fails the rest of the scheduler keeps running.

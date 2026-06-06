@@ -63,6 +63,29 @@ def _ensure_runtime_columns():
                 cur.execute(
                     f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {defn}"
                 )
+            # PRD-B: vault_allocations table — auto-create on every startup
+            # so the deploy script never needs a separate migration step.
+            cur.execute(
+                """CREATE TABLE IF NOT EXISTS vault_allocations (
+                       id SERIAL PRIMARY KEY,
+                       user_address TEXT NOT NULL,
+                       card_id INTEGER NOT NULL,
+                       vault_kind TEXT NOT NULL,
+                       intent_amount_usd NUMERIC(18,2) NOT NULL,
+                       target_url TEXT NOT NULL,
+                       status TEXT NOT NULL DEFAULT 'pending',
+                       created_at TIMESTAMPTZ DEFAULT NOW(),
+                       confirmed_at TIMESTAMPTZ
+                   )"""
+            )
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS vault_alloc_user_card_day_idx "
+                "ON vault_allocations (user_address, card_id, ((created_at AT TIME ZONE 'UTC')::date))"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS vault_alloc_user_idx "
+                "ON vault_allocations (user_address, created_at DESC)"
+            )
         # Backfill: an earlier version of POST /api/cards/{id}/execute
         # forgot to call `normalize_address`, so SoDex trades landed in
         # `trades` with raw-lowercase user_address while every read path
@@ -361,8 +384,92 @@ def init_db():
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS lp_tx_user_idx ON lp_transactions (user_address, created_at DESC)")
-    logger.info("lp_transactions table ready")
+        # PRD-B vault allocations — one row per (user, vault card) per UTC day.
+        # `status`: pending → confirmed (user marks "deposited" on return).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS vault_allocations (
+                id SERIAL PRIMARY KEY,
+                user_address TEXT NOT NULL,
+                card_id INTEGER NOT NULL,
+                vault_kind TEXT NOT NULL,
+                intent_amount_usd NUMERIC(18,2) NOT NULL,
+                target_url TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                confirmed_at TIMESTAMPTZ
+            )
+        """)
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS vault_alloc_user_card_day_idx "
+            "ON vault_allocations (user_address, card_id, ((created_at AT TIME ZONE 'UTC')::date))"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS vault_alloc_user_idx "
+            "ON vault_allocations (user_address, created_at DESC)"
+        )
+    logger.info("lp_transactions + vault_allocations tables ready")
     init_user_agents_table()
+
+
+def insert_vault_allocation(*, user_address: str, card_id: int, vault_kind: str,
+                            intent_amount_usd: float, target_url: str) -> int:
+    """Idempotent insert — one allocation per (user, card, UTC day).
+    Returns the row id, or -1 on duplicate (caller maps to 409).
+    """
+    conn = _get_conn()
+    if not conn:
+        return -1
+    with conn.cursor() as cur:
+        try:
+            cur.execute(
+                """INSERT INTO vault_allocations
+                   (user_address, card_id, vault_kind, intent_amount_usd, target_url)
+                   VALUES (%s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (user_address, card_id, vault_kind, intent_amount_usd, target_url),
+            )
+            return cur.fetchone()[0]
+        except Exception as e:
+            # Unique-violation → caller treats as 409.
+            if "vault_alloc_user_card_day_idx" in str(e):
+                conn.rollback()
+                return -1
+            raise
+
+
+def confirm_vault_allocation(allocation_id: int, user_address: str) -> dict | None:
+    """Flip `pending → confirmed` if the row belongs to `user_address`."""
+    conn = _get_conn()
+    if not conn:
+        return None
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """UPDATE vault_allocations
+                  SET status = 'confirmed', confirmed_at = NOW()
+                WHERE id = %s AND user_address = %s AND status = 'pending'
+            RETURNING *""",
+            (allocation_id, user_address),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def list_vault_allocations(user_address: str, limit: int = 50) -> list[dict]:
+    """User's vault allocations, newest first."""
+    conn = _get_read_conn()
+    if not conn:
+        return []
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """SELECT va.*, c.token_symbol, c.token_name
+                 FROM vault_allocations va
+                 LEFT JOIN cards c ON c.id = va.card_id
+                WHERE va.user_address = %s
+             ORDER BY va.created_at DESC
+                LIMIT %s""",
+            (user_address, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 
 def insert_signal(signal: dict) -> int:
@@ -691,8 +798,14 @@ def get_user_swipes(user_address: str, offset: int = 0, limit: int = 50) -> tupl
         cur.execute("SELECT COUNT(*) as cnt FROM swipes WHERE user_address = %s", (user_address,))
         total = cur.fetchone()["cnt"]
         cur.execute(
-            """SELECT s.*, c.token_symbol, c.token_name, c.price, c.price_change_24h, c.hook
-               FROM swipes s JOIN cards c ON s.card_id = c.id
+            """SELECT s.*, c.token_symbol, c.token_name, c.price, c.price_change_24h, c.hook,
+                      t.id AS trade_id, t.sodex_order_id, t.execution_type
+               FROM swipes s
+               JOIN cards c ON s.card_id = c.id
+               LEFT JOIN trades t
+                      ON t.user_address = s.user_address
+                     AND t.card_id = s.card_id
+                     AND t.execution_type = 'sodex_perps'
                WHERE s.user_address = %s ORDER BY s.created_at DESC LIMIT %s OFFSET %s""",
             (user_address, limit, offset)
         )
@@ -873,6 +986,11 @@ def _row_to_card(row: dict) -> dict:
         "token_address": row.get("token_address", ""),
         "confidence": row.get("confidence"),
         "trade_plan": row["trade_plan"] if isinstance(row.get("trade_plan"), dict) else (json.loads(row["trade_plan"]) if row.get("trade_plan") else None),
+        # LP / vault enrichment surfaced for FE + allocate-vault route.
+        "dex_link": row.get("dex_link"),
+        "research_summary": row["research_summary"] if isinstance(row.get("research_summary"), dict) else (json.loads(row["research_summary"]) if row.get("research_summary") else None),
+        "token0_symbol": row.get("token0_symbol"),
+        "token1_symbol": row.get("token1_symbol"),
     }
 
 

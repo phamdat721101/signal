@@ -303,7 +303,7 @@ export function useSwipeSession() {
     setIsSettling(true); setError(null);
     try {
       // ── Single chain-id switch point. CI grep must report exactly one
-      // match for the literal Somnia branch below. Initia/X Layer paths run
+      // match for the literal Somnia branch below. The Initia path runs
       // unchanged through buildSettleMessages() further down.
       // Somnia mode: one sendTx into SomniaCardExecutor.batchExecuteFromQueue.
       // The executor fans out per-card validator-consensus agent calls; the

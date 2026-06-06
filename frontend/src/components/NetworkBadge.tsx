@@ -20,8 +20,6 @@ interface Props {
 
 const META: Record<number, { name: string; color: string; tier: string }> = {
   2124225178762456: { name: 'Initia evm-1', color: '#8eff71', tier: 'Testnet' },
-  1952:             { name: 'X Layer',     color: '#bf81ff', tier: 'Testnet' },
-  196:              { name: 'X Layer',     color: '#bf81ff', tier: 'Mainnet' },
   8453:             { name: 'Base',        color: '#0052ff', tier: 'Mainnet' },
   50312:            { name: 'Somnia',      color: '#00d4aa', tier: 'Testnet' },
   2910:             { name: 'Morph Hoodi', color: '#39ff14', tier: 'Testnet' },

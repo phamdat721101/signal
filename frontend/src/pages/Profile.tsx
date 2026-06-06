@@ -1,6 +1,6 @@
 // import { usePrivy } from '@privy-io/react-auth';
 import { useQuery } from '@tanstack/react-query';
-import { config, shareToX, explorerTxUrl, normalizeAddress, isXLayer } from '../config';
+import { config, shareToX, explorerTxUrl, normalizeAddress } from '../config';
 import { useSession } from '../hooks/useSession';
 import { useIUSDBalance } from '../hooks/useIUSDBalance';
 import { useConviction } from '../hooks/useConviction';
@@ -44,7 +44,7 @@ function deriveMood(opts: { total: number; wins: number; curStreak: number }): s
 }
 
 export default function Profile() {
-  const { address: walletAddr, isCorrectChain, isConnected, chainId } = useWallet();
+  const { address: walletAddr, isCorrectChain, isConnected } = useWallet();
   const address = normalizeAddress(walletAddr);
   const {
     claimFaucet, approveAndDeposit, closeSession, clearSteps,
@@ -68,7 +68,9 @@ export default function Profile() {
 
   // SoDex testnet pool balance — shared trading liquidity behind the
   // ⚡ Execute action on trading_signal cards. Hidden entirely when the
-  // backend reports SoDex disabled (per Design Principle §10.1).
+  // backend reports SoDex disabled (per Design Principle §10.1). Master
+  // pool changes rarely and is shared across viewers, so we widen the
+  // refresh window beyond the global 15-s default.
   const { data: sodexPool } = useQuery({
     queryKey: ['sodex-pool'],
     queryFn: async () => {
@@ -151,9 +153,9 @@ export default function Profile() {
         </div>
       </div>
 
-      {/* Card Hand — X Layer SignalCardNFT collection (Hook the Future). */}
-      {/* Renders nothing on Initia; CardHand handles the chain check internally. */}
-      <CardHand address={address} chainId={chainId ?? 0} />
+      {/* Card Hand — read-only collection of the user's APE'd cards. */}
+      {/* My played cards (read-only when no v4 hook chain is wired up). */}
+      <CardHand address={address} />
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-2">
@@ -271,9 +273,7 @@ export default function Profile() {
         </div>
       )}
 
-      {/* Wallet — Initia-only (faucet + SessionVault). Hidden on X Layer
-          where Summon LP pays per-card from the connected wallet directly. */}
-      {!isXLayer(chainId) && (
+      {/* Wallet — Initia-native iUSD faucet + SessionVault balance. */}
       <div>
         <div className="flex justify-between items-center mb-2">
           <h2 className="font-headline font-bold text-sm text-white">Wallet</h2>
@@ -351,7 +351,6 @@ export default function Profile() {
           </div>
         )}
       </div>
-      )}
     </div>
   );
 }

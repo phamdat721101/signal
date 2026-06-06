@@ -10,7 +10,7 @@ import {
   TESTNET,
 } from '@initia/interwovenkit-react';
 import interwovenKitStyles from '@initia/interwovenkit-react/styles.js';
-import { config, localChain, testnetChain, xlayerTestnet, xlayerMainnet, somniaTestnet, morphHoodi } from './config';
+import { config, localChain, testnetChain, somniaTestnet, morphHoodi } from './config';
 import App from './App';
 import './index.css';
 
@@ -22,12 +22,10 @@ import './index.css';
 // NetworkBadge META + one row in Layout FAUCETS (if testnet).
 const wagmiConfig = createConfig({
   connectors: [initiaPrivyWalletConnector],
-  chains: [localChain, testnetChain, xlayerTestnet, xlayerMainnet, somniaTestnet, morphHoodi],
+  chains: [localChain, testnetChain, somniaTestnet, morphHoodi],
   transports: {
     [localChain.id]: http(),
     [testnetChain.id]: http(),
-    [xlayerTestnet.id]: http(),
-    [xlayerMainnet.id]: http(),
     [somniaTestnet.id]: http(),
     [morphHoodi.id]: http(),
   },

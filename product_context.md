@@ -435,3 +435,95 @@ RUN_SODEX_LIVE=1 pytest backend/tests/
 # 3. Restart backend:
 bash ~/signal-backend/restart_signal.sh
 ```
+
+
+---
+
+## 14. Verifiable Trade History + Vault Strategy Cards (added 2026-06-06)
+
+**Wedge.** Two complementary upgrades shipping together:
+1. Every executed SoDex trade now exposes click-through proof links — pair page, user portfolio, on-chain explorer, plus the live fills list pulled from SoDex's own API.
+2. A new `card_type='vault'` rides inside the existing 🌊 Liquidity Pools mode (no fourth feed mode) so users can swipe to allocate funding to SoDex's two yield vaults (SLP + sMAG7.ssi).
+
+### 14.1 Verifiable links
+
+`backend/app/sodex_links.py` — pure URL builder + composite payload (uses an injected fills fetcher; no I/O for URL pieces). `sodex_client.fetch_fills_for_order` calls SoDex's unsigned `/accounts/{master}/trades?orderID=` and prunes to public-safe fields (`price`, `qty`, `fee`, `ts`, `side`), 60-s in-process cached. `GET /api/trades/{id}/sodex-links` (404 for non-SoDex trades) and `GET /api/v2/agent/decisions[*].sodex_url` (paid agent surface) both consume it.
+
+URL truth table (`https://sodex.com/...`):
+- pair (perps): `/trade/futures/{BASE}_USDC`
+- pair (spot):  `/trade/spot/{BASE}_USDC`
+- portfolio:    `/portfolio` (login-gated, per-user)
+- explorer:     `/explorer?blocktype={futures|spot}` (ValueChain native)
+
+FE primitive `frontend/src/components/SodexLinks.tsx` — three icon-buttons + lazy fills toggle, builds a symbol-only payload offline so position rows render instantly without a backend round-trip. Wired into `History.tsx` (per ⚡ EXECUTE row, with `trade_id` for fills) and `Portfolio.tsx` (per Live SoDex Position row, symbol-only mode). `db.get_user_swipes` was extended with a LEFT JOIN to `trades` so each swipe row carries the matching `trade_id` + `execution_type` + `sodex_order_id` for FE wiring.
+
+### 14.2 Vault Strategy Cards
+
+`backend/app/vault_advisor.py` — static descriptors for SoDex's 2 vaults (SLP and sMAG7.ssi) plus an idempotent `generate_vault_cards()` upsert keyed on `(card_type='vault', source='sodex', token_symbol)`. Scheduler runs it every 30 min. Per the SoDex Trading API spec, vaults have **no programmatic deposit endpoint** — the only honest mechanism is a deep-link to `https://sodex.com/portfolio?vault={kind}` that the user finishes with a wallet-signed deposit on SoDex's UI.
+
+| Field | SLP | sMAG7.ssi |
+|---|---|---|
+| Accepted | MAG7.ssi · sMAG7.ssi | sMAG7.ssi |
+| Lockup | Instant for sMAG7.ssi · 14-day for MAG7.ssi | Instant |
+| Yield sources | Index staking + MM rebate + SOSO airdrop | MAG7 index exposure + MM rebate + SOSO airdrop |
+| Min deposit | $50 | $50 |
+| Risk score | 35 | 30 |
+
+Routes:
+- `POST /api/cards/{id}/allocate-vault` body `{address, intent_amount_usd}` → returns `{allocation_id, target_url, vault_kind, status:"pending"}`. Validates `card_type=='vault'` + min deposit. 409 on duplicate per UTC day.
+- `POST /api/vault-allocations/{id}/confirm` body `{address}` → flips `pending → confirmed` only when owned by the calling address.
+- `GET /api/cards/user/{address}` (existing) now merges `vault_allocations` rows with synthetic `action='allocate'` so they appear in the History timeline next to ape/fade/execute.
+
+Schema — single new table, auto-created at startup via `init_lp_transactions_table` (same pattern as `lp_transactions`):
+
+```sql
+CREATE TABLE vault_allocations (
+  id SERIAL PRIMARY KEY,
+  user_address       TEXT NOT NULL,
+  card_id            INTEGER NOT NULL,
+  vault_kind         TEXT NOT NULL,                 -- 'slp' | 'smag7'
+  intent_amount_usd  NUMERIC(18,2) NOT NULL,
+  target_url         TEXT NOT NULL,
+  status             TEXT NOT NULL DEFAULT 'pending',
+  created_at         TIMESTAMPTZ DEFAULT NOW(),
+  confirmed_at       TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX vault_alloc_user_card_day_idx
+  ON vault_allocations (user_address, card_id, ((created_at AT TIME ZONE 'UTC')::date));
+```
+
+FE pieces:
+- `frontend/src/components/VaultStrategyCard.tsx` — feed card (⚓ VAULT pill, dual-yield labels, lockup banner, "ALLOCATE TO VAULT" CTA). Same fixed height as `LpBattleCard` to preserve CLS budget.
+- `frontend/src/components/VaultConfigurator.tsx` — full-screen sheet, single USD input + summary + "OPEN ON SODEX" CTA.
+- `frontend/src/hooks/useAllocateVault.ts` — `useAllocateVault` (POST + auto-`window.open(target_url)` on success) and `useConfirmAllocation`.
+- `frontend/src/config/cardModes.ts` — `liquidity_pools.cardTypes = ['pool','vault']` (same mode picker, no fourth entry).
+- `frontend/src/pages/Feed.tsx` — `card_type === 'vault'` branch + `vaultConfigCard` state.
+- `frontend/src/pages/History.tsx` — ⚓ ALLOCATE row branch (PENDING/CONFIRMED pill + inline "Mark as deposited" button + "Open SoDex →" link).
+
+**Module map (additions only).**
+
+```
+backend/app/
+  sodex_links.py          NEW   pure URL builder + composite payload (DI fills fetcher)
+  sodex_client.py         +     fetch_fills_for_order (60s cache, graceful empty)
+  main.py                 +     /api/trades/{id}/sodex-links · /api/cards/{id}/allocate-vault · /api/vault-allocations/{id}/confirm · history merge
+  agent_api.py            +     decisions[*].sodex_url
+  db.py                   +     vault_allocations DDL · insert/confirm/list helpers · swipes JOIN trades
+  vault_advisor.py        NEW   2 vault descriptors + idempotent generate_vault_cards
+  scheduler.py            +     vault_advisor 30-min cron
+backend/tests/
+  test_sodex_links.py     NEW   16 cases (URL norm + composite payload graceful-degrade)
+  test_vault_advisor.py   NEW   5 cases (descriptors + card-row mapping)
+
+frontend/src/
+  components/SodexLinks.tsx        NEW   3 icon-buttons + lazy fills toggle
+  components/VaultStrategyCard.tsx NEW   feed card with ⚓ VAULT pill
+  components/VaultConfigurator.tsx NEW   amount input + OPEN ON SODEX CTA
+  hooks/useAllocateVault.ts        NEW   useAllocateVault + useConfirmAllocation
+  pages/Feed.tsx                   +     vault branch + VaultConfigurator portal
+  pages/History.tsx                +     ⚓ ALLOCATE row + confirm button
+  pages/Portfolio.tsx              +     SodexLinks per Live SoDex Position
+  config/cardModes.ts              +     liquidity_pools cardTypes includes 'vault'
+```
+
+**Out of scope for v1.** Programmatic vault deposit/withdraw (blocked on SoDex Trading API), automated MAG7.ssi acquisition, vault APR ingestion (no public API), in-app withdrawal flow, paid agent SKU for vault listings (rides on existing `/lp-recipes` mirror later), 14-day unstake countdown surface (Phase 2).

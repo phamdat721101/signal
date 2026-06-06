@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { config, shareToX, explorerTxUrl, normalizeAddress } from '../config';
 import { useWallet } from '../hooks/useWallet';
+import SodexLinks from '../components/SodexLinks';
 
 function fmtPnl(v: number | null | undefined): string {
   if (v == null) return '--';
@@ -214,16 +215,20 @@ export default function Portfolio() {
               const pnl = parseFloat(p.unrealized_pnl_ratio || '0');
               const pnlPositive = pnl >= 0;
               return (
-                <div key={p.symbol + p.entry_price} className="flex items-center justify-between bg-[#131313] rounded-lg p-3">
-                  <div>
-                    <div className="font-headline font-bold text-white text-sm">{p.symbol}</div>
-                    <div className="text-[10px] text-[#adaaaa] font-mono">
-                      {isLong ? 'LONG' : 'SHORT'} {Math.abs(sz)} @ ${Number(p.entry_price).toFixed(2)}
+                <div key={p.symbol + p.entry_price} className="flex flex-col gap-2 bg-[#131313] rounded-lg p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-headline font-bold text-white text-sm">{p.symbol}</div>
+                      <div className="text-[10px] text-[#adaaaa] font-mono">
+                        {isLong ? 'LONG' : 'SHORT'} {Math.abs(sz)} @ ${Number(p.entry_price).toFixed(2)}
+                      </div>
+                    </div>
+                    <div className={`font-headline font-bold text-sm ${pnlPositive ? 'text-[#8eff71]' : 'text-[#ff7166]'}`}>
+                      {pnlPositive ? '+' : ''}{pnl.toFixed(2)}%
                     </div>
                   </div>
-                  <div className={`font-headline font-bold text-sm ${pnlPositive ? 'text-[#8eff71]' : 'text-[#ff7166]'}`}>
-                    {pnlPositive ? '+' : ''}{pnl.toFixed(2)}%
-                  </div>
+                  {/* Verify-on-SoDex link group — symbol-only, no fills toggle. */}
+                  <SodexLinks symbol={p.symbol.split('-')[0]} />
                 </div>
               );
             })}

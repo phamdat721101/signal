@@ -8,7 +8,7 @@
  *
  * Why this exists: `useIUSDBalance` is hardcoded to MockIUSD on Initia EVM.
  * The LP Configurator needs to display a token's balance on whichever chain
- * the pool lives on (Base, Polygon, X Layer, …). This is the chain-aware
+ * the pool lives on (Base, Polygon, Arbitrum, …). This is the chain-aware
  * primitive the project lacked.
  */
 import { useMemo } from 'react';
@@ -32,8 +32,6 @@ const RPC_BY_CHAIN: Record<number, string> = {
   10: 'https://mainnet.optimism.io',
   56: 'https://bsc-dataseed.bnbchain.org',
   137: 'https://polygon-rpc.com',
-  196: 'https://rpc.xlayer.tech',
-  1952: 'https://testrpc.xlayer.tech',
   8453: 'https://mainnet.base.org',
   42161: 'https://arb1.arbitrum.io/rpc',
   43114: 'https://api.avax.network/ext/bc/C/rpc',

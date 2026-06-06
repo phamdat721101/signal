@@ -63,7 +63,7 @@ export default function LpConfigurator({ card, onClose }: Props) {
   // Wallet balance for token A (chain-aware).
   const balance = useERC20Balance(card.token0_address, card.chain_id, card.token0_decimals ?? 18);
 
-  // Summon path (X Layer V4). Disabled by recipe.supported.
+  // Summon path (Kinetic v4 hook). Disabled by recipe.supported.
   const { summon, isLoading: zapping, error: zapError } = useSummonTransaction();
   const [submitState, setSubmitState] = useState<'idle' | 'pending' | 'done'>('idle');
 
@@ -249,7 +249,7 @@ export default function LpConfigurator({ card, onClose }: Props) {
           </button>
           {!supported && dexLink && amountA > 0 && (
             <p className="mt-2 text-[10px] text-[#adaaaa] text-center">
-              Pair not on X Layer V4 — opens external DEX in a new tab.
+              Pair not on Kinetic v4 hook — opens external DEX in a new tab.
             </p>
           )}
         </div>

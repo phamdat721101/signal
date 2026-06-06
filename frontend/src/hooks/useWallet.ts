@@ -27,12 +27,12 @@ export function useWallet(opts?: { expectedChainId?: number }) {
     const hash = await sendTransactionAsync({
       to: to as `0x${string}`,
       data: data as `0x${string}`,
-      // Caller can target any registered chain (e.g. X Layer 1952 from useSummonTransaction).
+      // Caller can target any registered chain via useSummonTransaction.
       // Defaults to expectedChainId (Initia) for legacy callers like useSwipeSession.
       chainId: chainId ?? expectedChainId,
       // Native value transfer for chains that need a deposit (e.g. Somnia
       // SomniaCardExecutor.batchExecuteFromQueue requires N × per-call STT).
-      // Optional — existing callers (Initia / X Layer) leave undefined → 0.
+      // Optional — existing callers (Initia) leave undefined → 0.
       value: value ?? 0n,
     });
     return hash;

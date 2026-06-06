@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { config, isXLayer, isCardTradeable } from '../config';
-import { useCloseTransaction } from '../hooks/useCloseTransaction';
+import { config, isCardTradeable } from '../config';
 
 /**
  * CardHand — user's played cards (APE'd positions).
  *
  * Fetches from backend API (not on-chain enumeration) so it works
  * regardless of which chain the wallet is currently on.
- * Shows "Banish" button for LP-eligible played cards.
+ *
+ * v4 LP close lives on the destination chain's hook router; we don't
+ * embed a close button until a target chain is picked. Until then,
+ * positions render read-only.
  */
 
 const RARITY_NAME = ['Common', 'Rare', 'Epic', 'Legendary', 'Mythic'];
@@ -26,12 +28,10 @@ interface PlayedCard {
 
 interface Props {
   address: string;
-  chainId: number;
 }
 
-export default function CardHand({ address, chainId }: Props) {
+export default function CardHand({ address }: Props) {
   const [selected, setSelected] = useState<PlayedCard | null>(null);
-  const { close, isLoading: isClosing, error: closeError } = useCloseTransaction();
 
   const { data } = useQuery({
     queryKey: ['played-cards', address],
@@ -89,21 +89,7 @@ export default function CardHand({ address, chainId }: Props) {
               <div>Risk: <span className="text-white">{selected.risk_score}/100</span></div>
               <div>Played: <span className="text-white">{new Date(selected.swiped_at).toLocaleDateString()}</span></div>
             </div>
-            {isXLayer(chainId) ? (
-              <button
-                onClick={async () => {
-                  const tx = await close(selected.id, chainId);
-                  if (tx) setSelected(null);
-                }}
-                disabled={isClosing}
-                className="w-full bg-[#ff7166]/20 text-[#ff7166] font-headline font-bold py-2 rounded-lg disabled:opacity-50"
-              >
-                {isClosing ? 'Closing...' : '🔥 Banish (Remove LP)'}
-              </button>
-            ) : (
-              <p className="text-xs text-[#494847] text-center">Switch to X Layer to remove LP</p>
-            )}
-            {closeError && <p className="text-xs text-[#ff7166] text-center">{closeError}</p>}
+            <p className="text-xs text-[#494847] text-center">Position is on-chain. Close from the host DEX.</p>
             <button onClick={() => setSelected(null)}
               className="w-full bg-[#262626] text-[#adaaaa] font-headline font-bold py-2 rounded-lg">
               Close

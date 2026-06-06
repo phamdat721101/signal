@@ -454,31 +454,51 @@ async def get_positions(address: str):
     return {"enabled": True, "positions": positions}
 
 
+@app.get("/api/trades/{trade_id}/sodex-links")
+async def get_trade_sodex_links(trade_id: int):
+    """Verifiable SoDex links + live fills for an executed trade.
+
+    Returns `{symbol_url, portfolio_url, explorer_url, fills}` so the
+    FE History row and Portfolio panel can render proof-of-execution
+    links. Fills come from SoDex's unsigned `/accounts/{master}/trades`
+    endpoint, 60-s cached. 404 when trade missing or not a SoDex trade.
+    """
+    from app.db import _get_read_conn
+    from app.sodex_links import build_links_payload
+    from psycopg2.extras import RealDictCursor
+
+    conn = _get_read_conn()
+    if not conn:
+        raise HTTPException(status_code=503, detail="db unavailable")
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT id, token_symbol, sodex_order_id, execution_type "
+            "FROM trades WHERE id = %s LIMIT 1",
+            (trade_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="trade not found")
+    trade = dict(row)
+    if trade.get("execution_type") != "sodex_perps":
+        raise HTTPException(status_code=404, detail="not a SoDex trade")
+    return build_links_payload(trade)
+
+
 # ── SoDex master-pool balance (Profile page) ────────────────────────────
 # Single shared cache slot — pool balance is the same for every viewer.
+# Concurrent requests on cold cache coalesce into ONE outbound SoDex call
+# via `_sodex_pool_inflight` (asyncio.Future). The blocking http_client.get
+# is wrapped in asyncio.to_thread so the FastAPI event loop is never
+# blocked — required because /api/sodex/pool is on the Profile critical
+# path alongside positions, balance, etc. (CLAUDE.md §perf rule).
 _sodex_pool_cache: dict = {"at": 0.0, "data": None}
+_sodex_pool_inflight = None  # asyncio.Future | None
 _SODEX_POOL_TTL = 30  # seconds
 
 
-@app.get("/api/sodex/pool")
-async def get_sodex_pool():
-    """SoDex master-account vUSDC balance + free margin.
-
-    Single Responsibility: surface the shared trading pool's liquidity
-    for the Profile "SoDex Trading Pool" panel. Uses SoDex's PUBLIC
-    `/accounts/{addr}/state` endpoint (no auth, no signing) directly via
-    `http_client`, so this works regardless of whether SoDex *trading*
-    is enabled in this deployment. 30-second in-memory cache keeps
-    SoDex traffic ≤2 requests/min regardless of viewer count.
-    """
-    settings = get_settings()
-    master_addr = (settings.sodex_master_address or "").strip()
-    if not master_addr:
-        return {"enabled": False}
-    now = time.time()
-    if _sodex_pool_cache["data"] is not None and now - _sodex_pool_cache["at"] < _SODEX_POOL_TTL:
-        return _sodex_pool_cache["data"]
-    is_mainnet = settings.sodex_chain_id == 286623
+def _fetch_sodex_pool_payload_sync(master_addr: str, is_mainnet: bool) -> dict:
+    """Pure sync fetch — runs inside asyncio.to_thread."""
     host = "mainnet-gw.sodex.dev" if is_mainnet else "testnet-gw.sodex.dev"
     url = f"https://{host}/api/v1/perps/accounts/{master_addr}/state"
     from app import http_client
@@ -491,16 +511,66 @@ async def get_sodex_pool():
         resp = None
     data = (resp or {}).get("data") or {}
     balances = data.get("B") or []
-    payload = {
+    return {
         "enabled": True,
         "balance": (balances[0].get("wb") if balances else None),
         "free_margin": data.get("amw"),
         "chain": "sodex-mainnet" if is_mainnet else "sodex-testnet",
-        "updated_at": int(now),
+        "updated_at": int(time.time()),
     }
-    _sodex_pool_cache["at"] = now
-    _sodex_pool_cache["data"] = payload
-    return payload
+
+
+@app.get("/api/sodex/pool")
+async def get_sodex_pool():
+    """SoDex master-account vUSDC balance + free margin.
+
+    Single Responsibility: surface the shared trading pool's liquidity
+    for the Profile "SoDex Trading Pool" panel. Uses SoDex's PUBLIC
+    `/accounts/{addr}/state` endpoint (no auth, no signing). 30-s in-memory
+    cache + single-flight coalescing keeps SoDex traffic ≤2 req/min
+    regardless of viewer count. Cache-Control: 15-s public so browsers
+    and Caddy reuse the response between Profile mounts.
+    """
+    settings = get_settings()
+    master_addr = (settings.sodex_master_address or "").strip()
+    if not master_addr:
+        return JSONResponse({"enabled": False},
+                            headers={"Cache-Control": "public, max-age=60"})
+
+    now = time.time()
+    if _sodex_pool_cache["data"] is not None and now - _sodex_pool_cache["at"] < _SODEX_POOL_TTL:
+        return JSONResponse(_sodex_pool_cache["data"],
+                            headers={"Cache-Control": "public, max-age=15"})
+
+    # Single-flight: coalesce concurrent cold-cache callers.
+    import asyncio
+    global _sodex_pool_inflight
+    if _sodex_pool_inflight is not None and not _sodex_pool_inflight.done():
+        payload = await _sodex_pool_inflight
+        return JSONResponse(payload, headers={"Cache-Control": "public, max-age=15"})
+
+    is_mainnet = settings.sodex_chain_id == 286623
+    loop = asyncio.get_running_loop()
+    _sodex_pool_inflight = loop.create_future()
+    try:
+        payload = await asyncio.to_thread(_fetch_sodex_pool_payload_sync,
+                                          master_addr, is_mainnet)
+        _sodex_pool_cache["at"] = time.time()
+        _sodex_pool_cache["data"] = payload
+        _sodex_pool_inflight.set_result(payload)
+    except Exception as e:
+        # Surface a soft-degrade payload to callers that piled up on the future
+        # rather than letting them all raise.
+        payload = {"enabled": True, "balance": None, "free_margin": None,
+                   "chain": "sodex-mainnet" if is_mainnet else "sodex-testnet",
+                   "updated_at": int(time.time())}
+        if not _sodex_pool_inflight.done():
+            _sodex_pool_inflight.set_result(payload)
+        logger.warning("sodex_pool: %s", e)
+    finally:
+        # Keep the future "done" but allow the next cold caller to start a new one.
+        _sodex_pool_inflight = None
+    return JSONResponse(payload, headers={"Cache-Control": "public, max-age=15"})
 
 
 @app.get("/api/cards/{card_id}/image")
@@ -908,9 +978,93 @@ async def refill_energy(request: Request):
 @app.get("/api/cards/user/{address}")
 async def get_user_card_history(address: str, offset: int = 0, limit: int = Query(default=50, le=100)):
     address = normalize_address(address)
-    from app.db import get_user_swipes
+    from app.db import get_user_swipes, list_vault_allocations
     swipes, total = get_user_swipes(address, offset, limit)
-    return {"swipes": swipes, "total": total}
+    # Merge vault allocations as a synthetic action='allocate' row so the
+    # FE History page renders them in the same timeline as ape/fade/execute.
+    # SoDex deep-link flow has no on-chain receipt — we surface intent + status.
+    allocations = list_vault_allocations(address, limit=limit)
+    for a in allocations:
+        swipes.append({
+            "id": f"alloc_{a['id']}",
+            "action": "allocate",
+            "card_id": a["card_id"],
+            "token_symbol": a.get("token_symbol") or a["vault_kind"].upper(),
+            "token_name": a.get("token_name") or "",
+            "hook": f"${float(a['intent_amount_usd']):.0f} into {a.get('token_name') or a['vault_kind']}",
+            "created_at": a["created_at"].isoformat() if a.get("created_at") else None,
+            "vault_kind": a["vault_kind"],
+            "vault_status": a["status"],
+            "vault_target_url": a["target_url"],
+            "vault_allocation_id": a["id"],
+        })
+    swipes.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return {"swipes": swipes[:limit], "total": total + len(allocations)}
+
+
+# ─── Vault Strategy Cards (PRD-B) ───────────────────────────────────────
+
+@app.post("/api/cards/{card_id}/allocate-vault")
+async def allocate_vault(card_id: int, request: Request):
+    """Record a SoDex vault deposit intent → return target URL for the
+    FE to open in a new tab. Vaults have no programmatic deposit endpoint
+    (per SoDex Trading API spec); the user finishes on sodex.com and
+    returns to mark CONFIRMED. One allocation per (user, card, UTC day).
+    """
+    from app.db import get_card_by_id, insert_vault_allocation
+    body = await request.json()
+    address = normalize_address(body.get("address", ""))
+    if not address:
+        raise HTTPException(status_code=400, detail="address required")
+    try:
+        amount = float(body.get("intent_amount_usd") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="intent_amount_usd must be a number")
+
+    card = get_card_by_id(card_id)
+    if not card or card.get("card_type") != "vault":
+        raise HTTPException(status_code=404, detail="Vault card not found")
+
+    rs = card.get("research_summary") or {}
+    min_dep = float(rs.get("min_deposit_usd") or 0)
+    if amount < min_dep:
+        raise HTTPException(status_code=422,
+                            detail=f"Minimum deposit is ${min_dep:.0f}")
+    target_url = card.get("dex_link") or rs.get("target_url") or ""
+    vault_kind = rs.get("vault_kind") or "unknown"
+
+    alloc_id = insert_vault_allocation(
+        user_address=address, card_id=card_id, vault_kind=vault_kind,
+        intent_amount_usd=amount, target_url=target_url,
+    )
+    if alloc_id < 0:
+        raise HTTPException(status_code=409,
+                            detail="Already allocated to this vault today")
+    return {
+        "allocation_id": alloc_id,
+        "target_url": target_url,
+        "vault_kind": vault_kind,
+        "intent_amount_usd": amount,
+        "status": "pending",
+    }
+
+
+@app.post("/api/vault-allocations/{allocation_id}/confirm")
+async def confirm_vault_allocation_route(allocation_id: int, request: Request):
+    """User-initiated confirm — flips `pending → confirmed`. Body must
+    carry the user's address; we only confirm rows owned by them.
+    """
+    from app.db import confirm_vault_allocation
+    body = await request.json()
+    address = normalize_address(body.get("address", ""))
+    if not address:
+        raise HTTPException(status_code=400, detail="address required")
+    row = confirm_vault_allocation(allocation_id, address)
+    if not row:
+        raise HTTPException(status_code=404,
+                            detail="Allocation not found or already confirmed")
+    return {"status": "confirmed", "allocation_id": allocation_id,
+            "confirmed_at": row.get("confirmed_at").isoformat() if row.get("confirmed_at") else None}
 
 
 

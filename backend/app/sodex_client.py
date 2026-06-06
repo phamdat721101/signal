@@ -231,6 +231,53 @@ class SoDexClient:
             return None
         return self.get_account_state(self._acct.address)
 
+    # 60-second in-process cache for fills lookups. Keyed by order_id
+    # because SoDex's `/accounts/{addr}/trades?orderID=` is the
+    # authoritative fills source — a single order rarely picks up new
+    # fills after IOC market orders complete (~seconds), so 60s TTL is
+    # safe and keeps Portfolio/History page loads cheap.
+    _fills_cache: dict[int, tuple[float, list[dict[str, Any]]]] = {}
+    _FILLS_TTL = 60.0
+
+    def fetch_fills_for_order(self, order_id: int) -> list[dict[str, Any]]:
+        """Return the live fills for one SoDex perps order id. Empty
+        list on failure (graceful degrade — never raises).
+
+        Output rows are pruned to the public-safe fields callers need
+        (price, qty, fee, ts, side); raw SoDex schema fields are dropped
+        to keep the payload tight on the wire.
+        """
+        if not order_id or not self._acct:
+            return []
+        now = time.time()
+        cached = self._fills_cache.get(int(order_id))
+        if cached and (now - cached[0] < self._FILLS_TTL):
+            return cached[1]
+
+        try:
+            data = self._get(self._perps_base,
+                             f"/accounts/{self._acct.address}/trades",
+                             params={"orderID": int(order_id), "limit": 100})
+        except Exception as e:
+            logger.debug("sodex fetch_fills_for_order(%s) failed: %s", order_id, e)
+            data = None
+
+        rows: list[dict[str, Any]] = []
+        if isinstance(data, dict) and isinstance(data.get("data"), list):
+            for r in data["data"]:
+                if not isinstance(r, dict):
+                    continue
+                rows.append({
+                    "price": str(r.get("price") or r.get("execPrice") or ""),
+                    "qty":   str(r.get("quantity") or r.get("qty") or ""),
+                    "fee":   str(r.get("fee") or r.get("commission") or "0"),
+                    "ts":    int(r.get("timestamp") or r.get("ts") or 0),
+                    "side":  "buy" if int(r.get("side") or 0) == SIDE_BUY else "sell",
+                })
+
+        self._fills_cache[int(order_id)] = (now, rows)
+        return rows
+
     # ── Write helpers (signed) ──────────────────────────────────────────
     def _signed_post(self, base: str, path: str, action: str,
                      params: dict[str, Any], *, perps: bool) -> Optional[dict]:

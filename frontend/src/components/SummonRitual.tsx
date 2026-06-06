@@ -4,7 +4,7 @@ import { explorerTxUrl, isCardTradeable } from '../config';
 import type { Card } from '../hooks/useCards';
 
 /**
- * SummonRitual — owns the entire summon ceremony for an X Layer card.
+ * SummonRitual — owns the entire summon ceremony for a v4-hook card.
  *
  * Phases (SOLID single responsibility):
  *   1. confirm  — modal showing payoff narrative + Summon CTA
@@ -90,7 +90,7 @@ export default function SummonRitual({ card, open, onClose, onSuccess }: Props) 
               </span>
             </div>
             <p className="text-sm text-[#adaaaa]">
-              You'll lock <span className="text-white font-bold">~$50 OKB + ~$50 USDC</span> in a liquidity position.
+              You'll lock <span className="text-white font-bold">~$50 across the pair</span> in a liquidity position.
             </p>
             <div className="bg-[#262626] rounded-xl p-3 space-y-2 text-sm">
               <div className="flex items-center gap-2">

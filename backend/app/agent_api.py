@@ -86,6 +86,7 @@ async def get_decisions(limit: int = Query(default=10, le=50)):
 
     symbols = [r["token_symbol"] for r in rows if r.get("token_symbol")]
     track_records = await _batch_track_record(symbols)
+    from app.sodex_links import symbol_url as sodex_symbol_url
 
     decisions = []
     for c in rows:
@@ -105,6 +106,10 @@ async def get_decisions(limit: int = Query(default=10, le=50)):
             "reasoning": c.get("verdict_reason") or "",
             "rarity": c.get("rarity") or "common",
             "track_record": track_records.get(c["token_symbol"], {"win_rate": 0, "sample_size": 0}),
+            # Verifiable proof surface — agents can click through to the
+            # SoDex pair page and the ValueChain explorer to cross-check
+            # any decision against the live order book.
+            "sodex_url": sodex_symbol_url(c["token_symbol"], "perps"),
         })
     result = {"decisions": decisions, "total": len(decisions)}
     _cache_set(cache_key, result)
