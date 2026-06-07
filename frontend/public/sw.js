@@ -1,4 +1,5 @@
-const CACHE = 'ape-v7';
+// v8 — evict any 402/error responses that v7 cached for cross-origin paid APIs.
+const CACHE = 'ape-v8';
 const STATIC = ['/manifest.json', '/favicon.svg', '/icons.svg', '/app.png'];
 const FEATURED_GEM_URL = 'https://ai.overguild.com/api/featured-gem';
 
@@ -20,6 +21,14 @@ self.addEventListener('fetch', e => {
   // rejects them and the resulting promise rejection spams the console.
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
+  // SRP: this SW owns the same-origin app shell only. Anything cross-origin
+  // (agent-api, RPCs, third-party CDNs) MUST bypass the SW entirely — caching
+  // a 402 challenge here makes the x402 retry-with-payment flow impossible
+  // because the second fetch is served from cache before X-Payment-* headers
+  // can hit the network. Same reasoning for non-GET requests.
+  if (request.method !== 'GET') return;
+  if (url.origin !== self.location.origin && request.url !== FEATURED_GEM_URL) return;
+
   // Featured gem: stale-while-revalidate. Splash gets a cached gem instantly,
   // background refresh updates it for next visit. Keeps the moment under 200ms.
   if (request.url === FEATURED_GEM_URL) {
@@ -37,7 +46,7 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // All other API: network only.
+  // All other same-origin API: network only.
   if (url.pathname.startsWith('/api/')) {
     e.respondWith(fetch(request));
     return;
@@ -47,30 +56,37 @@ self.addEventListener('fetch', e => {
   if (request.mode === 'navigate') {
     e.respondWith(
       fetch('/index.html').then(res => {
-        const clone = res.clone();
-        caches.open(CACHE).then(c => c.put('/index.html', clone));
+        if (res && res.ok) {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put('/index.html', clone));
+        }
         return res;
       }).catch(() => caches.match('/index.html'))
     );
     return;
   }
 
-  // JS/CSS: network-first
+  // JS/CSS: network-first; only cache OK responses so a transient 5xx doesn't
+  // poison the cache and brick the next page load.
   if (url.pathname.endsWith('.js') || url.pathname.endsWith('.css')) {
     e.respondWith(
       fetch(request).then(res => {
-        const clone = res.clone();
-        caches.open(CACHE).then(c => c.put(request, clone));
+        if (res && res.ok) {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(request, clone));
+        }
         return res;
       }).catch(() => caches.match(request))
     );
     return;
   }
 
-  // Static assets (images, fonts): cache-first
+  // Static assets (images, fonts): cache-first; only cache OK responses.
   e.respondWith(caches.match(request).then(r => r || fetch(request).then(res => {
-    const clone = res.clone();
-    caches.open(CACHE).then(c => c.put(request, clone));
+    if (res && res.ok) {
+      const clone = res.clone();
+      caches.open(CACHE).then(c => c.put(request, clone));
+    }
     return res;
   })));
 });
