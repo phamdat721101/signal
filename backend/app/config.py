@@ -61,6 +61,21 @@ class Settings(BaseSettings):
     somnia_x402_facilitator_url: str = "https://api.cdp.coinbase.com/platform/v2/x402"
     somnia_x402_receiver_address: str = ""
     somnia_x402_public_base_url: str = ""
+    # ── GOAT testnet x402 rail (chain 48816, /goat-api prefix; verify-only) ──
+    # No facilitator: buyer signs & broadcasts the ERC-20 transfer themselves
+    # (mirrors backend/agent-provider/src/paywall.ts pattern for Arb Sepolia).
+    # USDC is not issued on goat-testnet3 → default token = WGBTC at 0xbC10…0000
+    # (the BTC gas-token wrapper, 18 decimals). Override via env if Circle ships USDC.
+    goat_x402_enabled: bool = False
+    goat_x402_chain_id: int = 48816
+    goat_x402_network: str = "eip155:48816"
+    goat_x402_rpc_url: str = "https://rpc.testnet3.goat.network"
+    goat_x402_receiver_address: str = ""
+    goat_x402_token_address: str = "0xbC10000000000000000000000000000000000000"
+    goat_x402_token_symbol: str = "WGBTC"
+    goat_x402_token_decimals: int = 18
+    goat_x402_token_usd_price: float = 65000.0  # static USD-per-token (Decision 4=a)
+    goat_x402_public_base_url: str = ""
     # ── Flap on X-Layer (PRD: Flap Hidden Gems on X-Layer v1) ──
     flap_portal_xlayer_address: str = "0xb30D8c4216E1f21F27444D2FfAee3ad577808678"
     flap_taxed_fun_board_url: str = "https://xlayer.taxed.fun/v2/board"

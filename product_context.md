@@ -123,6 +123,7 @@ VPS layout: `bitnami@47.130.193.211:~/signal-backend/` (Caddy → `:8001` and `/
 - `agent_api.py` — routes: `decisions`, `prices`, `pools`, `track-record`, `context`, `my-agent`, `marketplace`, `reports`.
 - `x402_payment.py` — route prices + Bazaar extensions. Route descriptions matter for semantic search ranking.
 - `x402_settler.py` — record-pending → settle-async → mark-settled/failed → reconciler. Idempotency via SHA256 of `x-payment` header. Asyncio-task settle is fire-and-forget post-response.
+- `goat_payment.py` — GOAT testnet x402 rail (chain 48816, prefix `/goat-api/*`). Buyer-direct **verify-only** paywall: buyer signs+broadcasts the ERC-20 transfer themselves, retries with `X-Payment-Tx: <hash>`, verifier reads receipt and matches the Transfer log. **No facilitator dependency.** Default token = WGBTC (`0xbC10…0000`) since USDC isn't issued on goat-testnet3; configurable via `GOAT_X402_TOKEN_*`. USD prices converted to token wei via static `GOAT_X402_TOKEN_USD_PRICE`. Mirrors the proven `agent-provider/src/paywall.ts` Arb Sepolia pattern in pure Python.
 - `mpp_middleware.py` — session-vault payment verification via `ServicePaid` event parsing.
 
 *Stellar / escrow*
@@ -191,6 +192,15 @@ Receiver `0x100690a32B562fd45e685BC2E63bbfF566d452db` on Base (`eip155:8453`). U
 | `POST /reports/purchase` + `/confirm` | $2/$5/$10 | Stellar-escrowed premium reports |
 
 Bazaar listing is automatic — first successful settle indexes the resource at the CDP Facilitator. Verify with `GET https://api.cdp.coinbase.com/platform/v2/x402/discovery/merchant?payTo=0x100690…`.
+
+### GOAT testnet rail (additive, verify-only)
+
+When `GOAT_X402_ENABLED=true`, the same routes are exposed under `/goat-api/api/v2/agent/*` on goat-testnet3 (chainId 48816). Same USD prices, settled in **WGBTC** (`0xbC10000000000000000000000000000000000000`) by default since USDC is not issued on goat-testnet3. Override the token via `GOAT_X402_TOKEN_ADDRESS` / `_SYMBOL` / `_DECIMALS` if Circle ships USDC there.
+
+The protocol is buyer-direct, no facilitator: buyers fetch a `payment-required` envelope, broadcast the ERC-20 transfer themselves, then retry the request with header `X-Payment-Tx: <hash>`. Reference buyer flow ships in [`payment/agent-payment/scripts/x402-pay.mjs`](../../payment/agent-payment/scripts/x402-pay.mjs).
+
+Smoke: `bash scripts/smoke-goat-x402.sh https://ai.overguild.com/agent-api`.
+Live e2e (requires funded WGBTC wallet): `node /path/to/agent-payment/scripts/x402-pay.mjs https://ai.overguild.com/agent-api/goat-api/api/v2/agent/decisions <wallet>`.
 
 ---
 

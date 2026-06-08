@@ -57,6 +57,22 @@ export const arbitrumSepolia = defineChain({
   testnet: true,
 });
 
+// ── GOAT Network testnet3 (BTC-native L2; agent-API rail in WGBTC) ─────
+// Native gas token is BTC (18-dec). USDC is not yet issued on testnet3 →
+// agent payments use WGBTC at 0xbC10…0000. Mirror of backend goat_payment.py.
+export const goatTestnet = defineChain({
+  id: 48816,
+  name: 'GOAT Testnet',
+  nativeCurrency: { name: 'BTC', symbol: 'BTC', decimals: 18 },
+  rpcUrls: {
+    default: { http: [import.meta.env.VITE_GOAT_TESTNET_RPC || 'https://rpc.testnet3.goat.network'] },
+  },
+  blockExplorers: {
+    default: { name: 'GOAT Explorer', url: 'https://explorer.testnet3.goat.network' },
+  },
+  testnet: true,
+});
+
 export const config = {
   network,
   chain: network === 'testnet' ? testnetChain : localChain,
@@ -84,6 +100,17 @@ export const config = {
     agentApiUrl: import.meta.env.VITE_AGENT_API_URL || 'http://127.0.0.1:8002',
     faucetUrl: import.meta.env.VITE_ARBITRUM_SEPOLIA_FAUCET_URL || 'https://www.alchemy.com/faucets/arbitrum-sepolia',
     usdcFaucetUrl: import.meta.env.VITE_ARBITRUM_SEPOLIA_USDC_FAUCET_URL || 'https://faucet.circle.com/',
+  },
+
+  // GOAT testnet3 (paid agent-data rail — buyer-direct verify-only paywall, /goat-api/*)
+  // Token is configurable; default WGBTC since USDC isn't issued on testnet3.
+  goatTestnet: {
+    chainId: 48816,
+    tokenAddress: (import.meta.env.VITE_GOAT_TESTNET_TOKEN_ADDRESS as `0x${string}`) || '0xbC10000000000000000000000000000000000000',
+    tokenSymbol: import.meta.env.VITE_GOAT_TESTNET_TOKEN_SYMBOL || 'WGBTC',
+    agentApiUrl: import.meta.env.VITE_GOAT_AGENT_API_URL || 'http://127.0.0.1:8002/goat-api',
+    faucetUrl: import.meta.env.VITE_GOAT_TESTNET_FAUCET_URL || 'https://faucet.testnet3.goat.network',
+    explorerUrl: 'https://explorer.testnet3.goat.network',
   },
 };
 
@@ -207,6 +234,7 @@ const INDEXER_BASE = import.meta.env.VITE_INDEXER_URL || 'http://localhost:8080'
 export function explorerTxUrl(txHash: string, chainId?: number): string {
   if (chainId === 421614) return `https://sepolia.arbiscan.io/tx/${txHash}`;
   if (chainId === 50312) return `https://testnet.somnia.network/tx/${txHash}`;
+  if (chainId === 48816) return `https://explorer.testnet3.goat.network/tx/${txHash}`;
   const hash = txHash.replace(/^0x/i, '').toUpperCase();
   return `${SCAN_BASE}/txs/0x${hash}`;
 }

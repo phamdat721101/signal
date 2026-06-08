@@ -1,20 +1,24 @@
 /**
- * /agent — cyber-terminal command center for paid Arbitrum Sepolia services.
+ * /agent — pay-per-call agent data terminal.
+ *
+ * Rail-aware: works on any chain registered in `bundles.ts::RAILS`. The hero,
+ * preflight balance, prompt, URL, and Try-It runner all derive from the
+ * rail of the currently connected chain. Adding a new rail is a one-row
+ * edit in `RAILS` — no UI changes here.
  *
  * Layout:
- *   [hero]                                — system status strip, public
- *   [pre-flight]   inside <ChainGate>     — wallet + USDC balance + faucets
- *   [bundle grid]                         — copy-only prompt cards (any chain)
- *      └─ <TryItRunner>  inside <ChainGate>  — non-custodial paid call
- *
- * Read-only stays public; mutating actions are gated to chain 421614 only.
+ *   [hero]                                    — public, lists supported rails
+ *   [pre-flight]      inside <ChainGate>      — wallet + token balance
+ *   [bundle grid]                             — copy + Try-It (rail-driven)
  */
 import { useMemo, useState } from 'react';
-import { useAccount, useReadContract } from 'wagmi';
+import { useAccount, useChainId, useReadContract } from 'wagmi';
 import { erc20Abi, formatUnits } from 'viem';
 import ChainGate from '../components/ChainGate';
-import { config, ARBITRUM_SEPOLIA_USDC_ADDRESS } from '../config';
-import { BUNDLES, type Bundle, fillVars, formatPrice } from './agent/bundles';
+import {
+  BUNDLES, type Bundle, fillVars, getRail, renderPrompt, RAILS, SUPPORTED_RAIL_IDS,
+  type RailConfig,
+} from './agent/bundles';
 import TryItRunner from './agent/TryItRunner';
 
 const PERSONA_COLOR: Record<Bundle['persona'], string> = {
@@ -23,18 +27,24 @@ const PERSONA_COLOR: Record<Bundle['persona'], string> = {
   forensic:'text-cyber-pink border-cyber-pink',
 };
 
-function PreflightStrip() {
+/** Rail picked from the connected chain; falls back to the first registered rail. */
+function useActiveRail(): RailConfig {
+  const chainId = useChainId();
+  return getRail(chainId) ?? RAILS[SUPPORTED_RAIL_IDS[0]];
+}
+
+function PreflightStrip({ rail }: { rail: RailConfig }) {
   const { address } = useAccount();
   const { data: bal, isLoading } = useReadContract({
-    chainId: config.arbitrumSepolia.chainId,
-    address: ARBITRUM_SEPOLIA_USDC_ADDRESS,
+    chainId: rail.chainId,
+    address: rail.token.address,
     abi: erc20Abi,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
     query: { enabled: !!address, refetchInterval: 15_000 },
   });
-  const usdc = bal ? Number(formatUnits(bal as bigint, 6)) : 0;
-  const usdcFaucet = config.arbitrumSepolia.usdcFaucetUrl;
+  const balance = bal ? Number(formatUnits(bal as bigint, rail.token.decimals)) : 0;
+  const balDigits = rail.token.decimals >= 18 ? 8 : 3;
 
   return (
     <div className="border border-cyber-outline bg-cyber-carbon p-4 font-cyber text-xs flex flex-wrap items-center justify-between gap-3">
@@ -44,26 +54,29 @@ function PreflightStrip() {
         <span className="text-cyber-green">{address ? `${address.slice(0, 6)}…${address.slice(-4)}` : '—'}</span>
       </div>
       <div className="flex items-center gap-2">
-        <span className="uppercase tracking-widest text-white/60">USDC</span>
-        <span className="text-cyber-green">{isLoading ? '…' : usdc.toFixed(3)}</span>
+        <span className="uppercase tracking-widest text-white/60">{rail.token.symbol}</span>
+        <span className="text-cyber-green">{isLoading ? '…' : balance.toFixed(balDigits)}</span>
       </div>
-      {usdcFaucet ? (
-        <a href={usdcFaucet} target="_blank" rel="noopener noreferrer"
+      {rail.tokenFaucetUrl ? (
+        <a href={rail.tokenFaucetUrl} target="_blank" rel="noopener noreferrer"
            className="text-cyber-cyan hover:underline uppercase tracking-widest">
-          Get test USDC →
+          Get test {rail.token.symbol} →
         </a>
       ) : (
-        <span className="text-white/40 uppercase tracking-widest">USDC faucet · operator-supplied</span>
+        <a href={rail.gasFaucetUrl} target="_blank" rel="noopener noreferrer"
+           className="text-cyber-cyan hover:underline uppercase tracking-widest">
+          Get test {rail.gasSymbol} →
+        </a>
       )}
     </div>
   );
 }
 
-function BundleCard({ bundle }: { bundle: Bundle }) {
+function BundleCard({ bundle, rail }: { bundle: Bundle; rail: RailConfig }) {
   const [vars, setVars] = useState<Record<string, string>>(
     () => Object.fromEntries(bundle.vars.map((v) => [v.key, v.default])),
   );
-  const filledPrompt = useMemo(() => fillVars(bundle.prompt, vars), [bundle.prompt, vars]);
+  const filledPrompt = useMemo(() => fillVars(renderPrompt(rail, bundle, vars), vars), [rail, bundle, vars]);
   const [copied, setCopied] = useState(false);
 
   const onCopy = async () => {
@@ -72,8 +85,13 @@ function BundleCard({ bundle }: { bundle: Bundle }) {
     setTimeout(() => setCopied(false), 1500);
   };
 
-  // Token-aware highlighting of `{{VAR}}` slots in the prompt block.
-  const segments = filledPrompt.split(/(\b\d+(?:\.\d+)?\s*USDC\b|https?:\/\/[^\s]+|arbitrum-sepolia)/g);
+  // Token-aware highlighting: USDC|<symbol>|<chain key>|http URL.
+  const tokenWord = rail.token.symbol;
+  const chainWord = rail.nPaymentKey;
+  // Build a regex with the rail-specific tokens. Escape regex-meaningful chars.
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const splitRe = new RegExp(`(\\b\\d+(?:\\.\\d+)?\\s*${esc(tokenWord)}\\b|https?:\\/\\/[^\\s]+|${esc(chainWord)})`, 'g');
+  const segments = filledPrompt.split(splitRe);
 
   return (
     <div className="border border-cyber-outline bg-cyber-surface flex flex-col">
@@ -85,7 +103,7 @@ function BundleCard({ bundle }: { bundle: Bundle }) {
           <h3 className="font-cyber-display font-bold uppercase text-white mt-2">{bundle.title}</h3>
           <p className="text-white/60 text-xs font-cyber mt-1">{bundle.tagline}</p>
         </div>
-        <span className="text-cyber-green font-cyber text-sm whitespace-nowrap">{formatPrice(bundle.priceUsdc)}</span>
+        <span className="text-cyber-green font-cyber text-sm whitespace-nowrap">{bundle.priceUsd}</span>
       </header>
 
       {bundle.vars.length > 0 && (
@@ -105,9 +123,10 @@ function BundleCard({ bundle }: { bundle: Bundle }) {
       )}
 
       <pre className="bg-cyber-carbon p-4 font-cyber text-[11px] leading-relaxed text-white/80 whitespace-pre-wrap overflow-x-auto">
-        {segments.map((seg, i) => /^https?|USDC|arbitrum-sepolia/.test(seg)
-          ? <span key={i} className="text-cyber-green">{seg}</span>
-          : <span key={i}>{seg}</span>)}
+        {segments.map((seg, i) =>
+          new RegExp(`^https?|${esc(tokenWord)}|${esc(chainWord)}`).test(seg)
+            ? <span key={i} className="text-cyber-green">{seg}</span>
+            : <span key={i}>{seg}</span>)}
       </pre>
 
       <footer className="px-4 py-3 border-t border-cyber-outline flex items-center justify-between gap-3">
@@ -115,8 +134,8 @@ function BundleCard({ bundle }: { bundle: Bundle }) {
           className="border border-cyber-green text-cyber-green font-cyber-display text-[11px] uppercase tracking-widest px-3 py-1.5 hover:bg-cyber-green/10 active:scale-95 transition">
           {copied ? '✓ Copied' : '⧉ Copy Bundle'}
         </button>
-        <ChainGate chainId={config.arbitrumSepolia.chainId}>
-          <TryItRunner bundle={bundle} values={vars} />
+        <ChainGate chainIds={SUPPORTED_RAIL_IDS}>
+          <TryItRunner bundle={bundle} values={vars} rail={rail} />
         </ChainGate>
       </footer>
     </div>
@@ -124,6 +143,10 @@ function BundleCard({ bundle }: { bundle: Bundle }) {
 }
 
 export default function Agent() {
+  const rail = useActiveRail();
+  // Hero supported-rails copy lists every registered rail name.
+  const railNames = SUPPORTED_RAIL_IDS.map((id) => RAILS[id].name);
+
   return (
     <div className="min-h-full bg-cyber-carbon text-white">
       <div className="max-w-6xl mx-auto p-6 space-y-6">
@@ -132,20 +155,23 @@ export default function Agent() {
           <p className="text-cyber-green font-cyber text-[11px] uppercase tracking-widest">Agent Command Center</p>
           <h1 className="font-cyber-display font-bold text-3xl uppercase mt-1">Pay-per-call agent data</h1>
           <p className="text-white/60 text-sm mt-2 font-cyber max-w-2xl">
-            Five paid endpoints on <span className="text-cyber-green">Arbitrum Sepolia Testnet</span>.
-            Copy a one-line prompt for any external LLM, or run it in-app — wallet pays USDC,
-            facilitator relays the EIP-3009 settle (you only need a tiny amount of test ETH for the signature).
+            Five paid endpoints on{' '}
+            <span className="text-cyber-green">{railNames.join(' or ')} testnet</span>.
+            Copy a one-line prompt for any external LLM, or run it in-app — the wallet pays{' '}
+            <span className="text-cyber-green">{rail.token.symbol}</span> on{' '}
+            <span className="text-cyber-green">{rail.name}</span>.
           </p>
         </header>
 
-        {/* Gated zone — preflight + runners */}
-        <ChainGate chainId={config.arbitrumSepolia.chainId}>
-          <PreflightStrip />
+        {/* Gated zone — preflight + runners. Allowed on any registered rail. */}
+        <ChainGate chainIds={SUPPORTED_RAIL_IDS}>
+          <PreflightStrip rail={rail} />
         </ChainGate>
 
-        {/* Bundle grid — copy works on any chain. Try-It (inside each card footer) is gated. */}
+        {/* Bundle grid — copy works on any chain (renders for the active rail).
+            Try-It (inside each card footer) is gated to a supported rail. */}
         <section className="grid gap-5 md:grid-cols-2">
-          {BUNDLES.map((b) => <BundleCard key={b.id} bundle={b} />)}
+          {BUNDLES.map((b) => <BundleCard key={b.id} bundle={b} rail={rail} />)}
         </section>
       </div>
     </div>

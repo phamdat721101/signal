@@ -32,6 +32,10 @@ from app.agent_api import router as agent_router
 from app.config import get_settings
 from app.x402_payment import get_x402_middleware_args
 from app.somnia_payment import get_somnia_x402_middleware_args
+from app.goat_payment import (
+    build_challenge_envelope,
+    get_goat_x402_middleware_args,
+)
 
 
 # ─── Logging (mirror main.py — same format, request-id contextvar) ──────
@@ -60,6 +64,11 @@ _x402_server = None
 _somnia_routes: dict[str, object] | None = None
 _somnia_server = None
 _SOMNIA_PREFIX = "/somnia-api"
+# GOAT rail — buyer-direct verify-only paywall on goat-testnet3 (chain 48816).
+# Independent of Base/Somnia: failure here leaves the other rails intact.
+_goat_routes = None  # dict[str, GoatRouteConfig] | None
+_goat_verifier = None  # GoatPaywallVerifier | None
+_GOAT_PREFIX = "/goat-api"
 
 
 def _build_resource_url(request: Request) -> str:
@@ -117,6 +126,11 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Somnia rail initialize failed: %s — Somnia endpoints UNPAID", e)
             _somnia_server = None
+    # GOAT rail (additive, verify-only — no facilitator; see goat_payment.py).
+    global _goat_routes, _goat_verifier
+    _goat_routes, _goat_verifier = get_goat_x402_middleware_args(prefix=_GOAT_PREFIX)
+    if _goat_verifier is not None:
+        logger.info("GOAT rail initialized; %d routes priced", len(_goat_routes or {}))
     reconciler = asyncio.create_task(_reconcile_loop())
     try:
         yield
@@ -172,6 +186,51 @@ def _serialize_settle_resp(resp) -> str:
 
 @app.middleware("http")
 async def x402_gate(request: Request, call_next):
+    # ── GOAT rail (buyer-direct verify-only; different protocol from SDK rails) ──
+    # Short-circuits before the SDK-driven Base/Somnia branches because:
+    #   - challenge is base64 'payment-required' header (no SDK envelope)
+    #   - retry uses 'x-payment-tx: <hash>' (a tx hash, not a signed payload)
+    #   - verification is on-chain receipt + Transfer log (no facilitator)
+    if request.url.path.startswith(_GOAT_PREFIX):
+        if _goat_verifier is None or not _goat_routes:
+            return await call_next(request)  # rail off → fail-open
+        route_cfg = _goat_routes.get(_route_key(request))
+        if route_cfg is None:
+            return await call_next(request)  # not a paid route
+        s = get_settings()
+
+        def _emit_402(reason: str | None = None):
+            envelope_b64 = build_challenge_envelope(
+                network=s.goat_x402_network,
+                asset=s.goat_x402_token_address,
+                pay_to=s.goat_x402_receiver_address,
+                max_amount_wei=route_cfg.price_wei,
+                token_symbol=s.goat_x402_token_symbol,
+            )
+            body = {"error": "Payment required", "protocols": ["x402"]}
+            if reason:
+                body["reason"] = reason
+            resp = JSONResponse(status_code=402, content=body)
+            resp.headers["payment-required"] = envelope_b64
+            resp.headers["x-payment-rail"] = "goat"
+            return resp
+
+        tx_hash = (request.headers.get("x-payment-tx") or "").strip()
+        if not tx_hash:
+            return _emit_402()
+        result = await _goat_verifier.verify(tx_hash, _route_key(request), route_cfg.price_wei)
+        if not result.ok:
+            logger.warning(
+                "goat paywall verify failed: path=%s tx=%s reason=%s",
+                request.url.path, tx_hash[:10], result.reason,
+            )
+            return _emit_402(result.reason)
+        response = await call_next(request)
+        response.headers["x-payment-rail"] = "goat"
+        if result.payer:
+            response.headers["x-payment-payer"] = result.payer
+        return response
+
     # Pick the right rail by path prefix. Somnia routes are keyed with their
     # prefix so a single dispatch table can serve both Base and Somnia.
     if request.url.path.startswith(_SOMNIA_PREFIX):
@@ -269,6 +328,8 @@ async def x402_gate(request: Request, call_next):
 app.include_router(agent_router)
 if get_settings().somnia_x402_enabled:
     app.include_router(agent_router, prefix=_SOMNIA_PREFIX)
+if get_settings().goat_x402_enabled:
+    app.include_router(agent_router, prefix=_GOAT_PREFIX)
 
 
 # ─── Public meta + health ───────────────────────────────────────────────
@@ -322,6 +383,8 @@ async def health():
         "x402_network": s.x402_network,
         "x402_configured": _x402_server is not None,
         "x402_routes": list((_x402_routes or {}).keys()),
+        "goat_x402_configured": _goat_verifier is not None,
+        "goat_routes": list((_goat_routes or {}).keys()),
         "db_async": await db_async.health(),
         "settlements": settle_summary,
         "chain_ops_pending_count": _safe_chain_ops_pending(),

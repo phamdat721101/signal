@@ -1,87 +1,143 @@
-// Self-contained x402 paywall for Arbitrum Sepolia.
+// Self-contained x402 paywall — multi-rail (Arb Sepolia + GOAT testnet).
 //
 // Why bypass n-payment v0.18 createPaywall:
 //   - Its verify path requires an external facilitator URL with a /verify
-//     endpoint. We audited the public x402.org/facilitator and it does NOT
-//     support Arbitrum Sepolia (only base-sepolia, solana-devnet, etc.).
+//     endpoint. Public x402.org/facilitator does not support Arb Sepolia
+//     or GOAT (only base-sepolia, solana-devnet, etc.).
 //   - CDP facilitator requires server-side auth that we won't expose to
 //     buyers. Self-hosting another sponsor-facilitator process re-introduces
 //     unwanted operational footprint ("do_not_repeat_sample_mistake").
 //
 // Design — buyer-direct settlement, server verify-only:
-//   1. GET /api/v2/agent/* without `x-payment-tx` → 402 with payment-required
-//      header (standard x402 envelope, scheme=exact, network=eip155:421614).
-//   2. Buyer signs EIP-3009 typed data and submits transferWithAuthorization
-//      to the USDC contract themselves (pays ~$0.0001 testnet ETH gas).
-//   3. GET retry with `x-payment-tx: <hash>` header.
-//   4. This middleware reads the tx receipt via viem, validates:
-//        - Tx was successful
-//        - Tx was sent to the configured USDC contract
-//        - It emitted a Transfer(from=*, to=PAY_TO, value>=PRICE) event
+//   1. GET /api/v2/agent/* without `x-payment-tx` →
+//      402 with `payment-required` envelope listing every configured rail
+//      under `accepts[]` (per x402 spec — buyer picks one).
+//   2. Buyer signs+broadcasts the on-chain payment on whichever rail they
+//      hold balance for. Pays gas themselves.
+//   3. Retry GET with:
+//        x-payment-tx:      <hash>
+//        x-payment-network: eip155:<chainId>   ← which rail was paid on
+//   4. This middleware:
+//        - looks up the rail by `x-payment-network` (falls back to RAILS[0]
+//          for legacy clients that don't send the header),
+//        - reads the receipt via that rail's viem PublicClient,
+//        - validates `Transfer(* → payTo, value ≥ price)` on the rail's token,
 //      → next() on success, 402 on failure.
 //
 // SOLID:
 //   - Single responsibility: paywall middleware. No on-chain settlement,
 //     no facilitator forwarding, no audit DB.
-//   - In-process LRU cache (60-s TTL keyed by tx hash) so a buyer who
-//     replays the same tx hash for follow-up cards doesn't re-verify on
-//     every call. Dedupe of recently-spent tx hashes prevents reuse for
-//     a different route.
+//   - Open/closed: adding a 3rd rail is one entry in `RAILS`. No middleware
+//     edits.
+//   - In-process LRU cache (60-s TTL, key = `${network}:${tx}`) so a buyer
+//     who replays the same tx for follow-up cards doesn't re-verify on
+//     every call. Cross-route reuse blocked.
 
 import type { Request, Response, NextFunction } from 'express';
-import { createPublicClient, decodeEventLog, http, parseAbi, type PublicClient } from 'viem';
+import {
+  createPublicClient, decodeEventLog, defineChain, http, parseAbi,
+  type PublicClient,
+} from 'viem';
 import { arbitrumSepolia } from 'viem/chains';
 import { env } from './env.js';
 import { TOOLS, type ToolSpec } from './tools.js';
 import { log } from './logger.js';
 
-const NETWORK = 'eip155:421614';
-const USDC = '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d' as const; // Arb Sepolia Circle USDC
 const ERC20_TRANSFER_ABI = parseAbi([
   'event Transfer(address indexed from, address indexed to, uint256 value)',
 ]);
 
-const publicClient: PublicClient = createPublicClient({
-  chain: arbitrumSepolia,
-  transport: http(),
-});
+interface Rail {
+  /** CAIP-2 network id (`eip155:<chainId>`). */
+  network: string;
+  asset: `0x${string}`;
+  payTo: `0x${string}`;
+  tokenSymbol: string;
+  publicClient: PublicClient;
+  /** USD micro-cent (microUSDC) → smallest unit of this rail's token. */
+  priceWei: (microUsdc: bigint) => bigint;
+}
 
-// Tx-hash → expiry-epoch-ms. A spent tx hash can re-authorize the same
-// (route, payer) for `_TX_REUSE_WINDOW_MS` so polite retries (network
-// flake on the GET, etc.) succeed without re-paying. Different routes
-// or amounts force a fresh tx.
-const _spent: Map<string, { route: string; payer: string; valueMicroUsdc: bigint; exp: number }> = new Map();
+// ─── Rail registry ────────────────────────────────────────────────────────
+// Index 0 = default fallback for legacy clients that retry without an
+// `x-payment-network` header (preserves backward-compat with existing buyers).
+const RAILS: [Rail, ...Rail[]] = [
+  // Arb Sepolia — USDC, 6-dec, microUSDC == base unit.
+  {
+    network: 'eip155:421614',
+    asset: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d',
+    payTo: env.PAY_TO_ADDRESS as `0x${string}`,
+    tokenSymbol: 'USDC',
+    publicClient: createPublicClient({ chain: arbitrumSepolia, transport: http() }),
+    priceWei: (mu) => mu,
+  },
+];
+
+const DEFAULT_RAIL: Rail = RAILS[0];
+
+// GOAT testnet (additive). Default token = WGBTC, 18-dec, BTC-priced.
+// Static USD-per-token rate keeps the hot path RPC-free.
+if (env.GOAT_X402_ENABLED) {
+  const payTo = (env.GOAT_X402_PAY_TO ?? env.PAY_TO_ADDRESS) as `0x${string}`;
+  const goatChain = defineChain({
+    id: 48816,
+    name: 'GOAT Testnet',
+    nativeCurrency: { name: 'BTC', symbol: 'BTC', decimals: 18 },
+    rpcUrls: { default: { http: [env.GOAT_X402_RPC_URL] } },
+  });
+  const decimals = 18;
+  // microUSDC * 10^decimals / (1e6 * usdPerToken)
+  const factor = 10n ** BigInt(decimals);
+  const denom = 1_000_000n * BigInt(Math.round(env.GOAT_X402_TOKEN_USD_PRICE));
+  RAILS.push({
+    network: 'eip155:48816',
+    asset: env.GOAT_X402_TOKEN_ADDRESS as `0x${string}`,
+    payTo,
+    tokenSymbol: env.GOAT_X402_TOKEN_SYMBOL,
+    publicClient: createPublicClient({ chain: goatChain, transport: http() }),
+    priceWei: (mu) => {
+      const w = (mu * factor) / denom;
+      return w < 1n ? 1n : w; // dust floor — never let "$0" pass
+    },
+  });
+  log.info('paywall: GOAT rail enabled', {
+    network: 'eip155:48816', token: env.GOAT_X402_TOKEN_SYMBOL,
+    asset: env.GOAT_X402_TOKEN_ADDRESS, payTo, usdPerToken: env.GOAT_X402_TOKEN_USD_PRICE,
+  });
+}
+
+// ─── Cache ────────────────────────────────────────────────────────────────
+const _spent: Map<string, { route: string; payer: string; valueWei: bigint; exp: number }> = new Map();
 const _TX_REUSE_WINDOW_MS = 60_000;
 const _MAX_RECEIPT_RETRIES = 6;
 const _RECEIPT_BACKOFF_MS = 1_500;
 
 const ROUTE_INDEX: Map<string, ToolSpec> = new Map(TOOLS.map((t) => [`/api/v2/agent/${t.name}`, t]));
 
-function buildChallenge(price: bigint): string {
+function buildChallenge(microUsdc: bigint): string {
   const envelope = {
     x402Version: 2,
-    accepts: [{
+    accepts: RAILS.map((r) => ({
       scheme: 'exact',
-      network: NETWORK,
-      maxAmountRequired: price.toString(),
-      asset: USDC,
-      payTo: env.PAY_TO_ADDRESS,
-    }],
+      network: r.network,
+      maxAmountRequired: r.priceWei(microUsdc).toString(),
+      asset: r.asset,
+      payTo: r.payTo,
+      tokenSymbol: r.tokenSymbol,
+    })),
   };
   return Buffer.from(JSON.stringify(envelope)).toString('base64');
 }
 
-function emit402(res: Response, price: bigint, reason?: string): void {
-  res.setHeader('payment-required', buildChallenge(price));
+function emit402(res: Response, microUsdc: bigint, reason?: string): void {
+  res.setHeader('payment-required', buildChallenge(microUsdc));
   res.status(402).json({ error: 'Payment required', protocols: ['x402'], reason });
 }
 
-async function waitForReceipt(hash: `0x${string}`) {
-  // Submit→inclusion can take ~2-5 s on Arb Sepolia. Bounded retry so a
-  // buyer who immediately retries after sending tx isn't 402'd unfairly.
+async function waitForReceipt(rail: Rail, hash: `0x${string}`) {
   for (let i = 0; i < _MAX_RECEIPT_RETRIES; i++) {
     try {
-      return await publicClient.getTransactionReceipt({ hash });
+      return await rail.publicClient.getTransactionReceipt({ hash });
     } catch {
       await new Promise((r) => setTimeout(r, _RECEIPT_BACKOFF_MS));
     }
@@ -93,59 +149,58 @@ interface VerifyResult {
   ok: boolean;
   reason?: string;
   payer?: string;
-  valueMicroUsdc?: bigint;
+  valueWei?: bigint;
 }
 
 async function verifyPaymentTx(
+  rail: Rail,
   txHash: `0x${string}`,
   routeKey: string,
-  minValue: bigint,
+  minValueWei: bigint,
 ): Promise<VerifyResult> {
-  // Cache hit: same tx already validated for the same (route, payer, value)
-  // within the reuse window. Block reuse for a *different* route to prevent
-  // one $0.001 tx authorizing both /decisions and /pools.
-  const cached = _spent.get(txHash);
+  // Cache key includes network so the same tx hash on different chains
+  // (impossible by physics, but cheap defensive coding) doesn't collide.
+  const cacheKey = `${rail.network}:${txHash}`;
+  const cached = _spent.get(cacheKey);
   if (cached) {
     if (cached.exp < Date.now()) {
-      _spent.delete(txHash);
-    } else if (cached.route === routeKey && cached.valueMicroUsdc >= minValue) {
-      return { ok: true, payer: cached.payer, valueMicroUsdc: cached.valueMicroUsdc };
+      _spent.delete(cacheKey);
+    } else if (cached.route === routeKey && cached.valueWei >= minValueWei) {
+      return { ok: true, payer: cached.payer, valueWei: cached.valueWei };
     } else {
       return { ok: false, reason: 'tx_already_spent_on_other_route' };
     }
   }
 
-  const receipt = await waitForReceipt(txHash);
+  const receipt = await waitForReceipt(rail, txHash);
   if (!receipt) return { ok: false, reason: 'receipt_unavailable' };
   if (receipt.status !== 'success') return { ok: false, reason: 'tx_reverted' };
 
-  // Find a Transfer log on the USDC contract with to=PAY_TO and value>=minValue.
+  // Find a Transfer log on this rail's token, to=payTo, value≥minValueWei.
   let payer: `0x${string}` | undefined;
   let value: bigint = 0n;
   for (const lg of receipt.logs) {
-    if (lg.address.toLowerCase() !== USDC.toLowerCase()) continue;
+    if (lg.address.toLowerCase() !== rail.asset.toLowerCase()) continue;
     try {
       const decoded = decodeEventLog({ abi: ERC20_TRANSFER_ABI, topics: lg.topics, data: lg.data });
       if (decoded.eventName !== 'Transfer') continue;
       const { from, to, value: v } = decoded.args as { from: `0x${string}`; to: `0x${string}`; value: bigint };
-      if (to.toLowerCase() === env.PAY_TO_ADDRESS.toLowerCase() && v >= minValue) {
+      if (to.toLowerCase() === rail.payTo.toLowerCase() && v >= minValueWei) {
         payer = from;
         value = v;
         break;
       }
-    } catch {
-      /* not a Transfer event we care about */
-    }
+    } catch { /* not a Transfer event we care about */ }
   }
   if (!payer) return { ok: false, reason: 'no_matching_transfer_to_pay_to' };
 
-  _spent.set(txHash, {
+  _spent.set(cacheKey, {
     route: routeKey,
     payer,
-    valueMicroUsdc: value,
+    valueWei: value,
     exp: Date.now() + _TX_REUSE_WINDOW_MS,
   });
-  return { ok: true, payer, valueMicroUsdc: value };
+  return { ok: true, payer, valueWei: value };
 }
 
 export async function paywall(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -162,25 +217,34 @@ export async function paywall(req: Request, res: Response, next: NextFunction): 
     return;
   }
 
-  const result = await verifyPaymentTx(txHash as `0x${string}`, req.path, tool.priceMicroUsdc);
+  // Pick rail by network header; fall back to DEFAULT_RAIL (Arb Sepolia)
+  // for legacy clients that don't yet send `x-payment-network`.
+  const networkHdr = (req.headers['x-payment-network'] as string | undefined)?.trim();
+  const rail = (networkHdr && RAILS.find((r) => r.network === networkHdr)) || DEFAULT_RAIL;
+  const minValueWei = rail.priceWei(tool.priceMicroUsdc);
+
+  const result = await verifyPaymentTx(rail, txHash as `0x${string}`, req.path, minValueWei);
   if (!result.ok) {
-    log.warn('paywall verify failed', { path: req.path, txHash, reason: result.reason });
+    log.warn('paywall verify failed', {
+      path: req.path, network: rail.network, txHash, reason: result.reason,
+    });
     emit402(res, tool.priceMicroUsdc, result.reason);
     return;
   }
 
-  // Stamp the request so downstream handlers can audit who paid.
-  (req as Request & { payment?: { payer?: string; tx: string; valueMicroUsdc?: bigint } }).payment = {
-    payer: result.payer,
-    tx: txHash,
-    valueMicroUsdc: result.valueMicroUsdc,
+  // Stamp the request so handlers can audit who paid (and on which rail).
+  (req as Request & {
+    payment?: { payer?: string; tx: string; valueWei?: bigint; network: string };
+  }).payment = {
+    payer: result.payer, tx: txHash, valueWei: result.valueWei, network: rail.network,
   };
   next();
 }
 
 /** Discovery — exported for /api/health, agent.json, tools/list. */
-export const SUPPORTED_RAILS = [
-  { chain: 'arbitrum-sepolia', network: NETWORK, asset: USDC, scheme: 'exact' },
-] as const;
-export const SUPPORTED_NETWORK = NETWORK;
-export const SUPPORTED_ASSET = USDC;
+export const SUPPORTED_RAILS = RAILS.map((r) => ({
+  network: r.network, asset: r.asset, scheme: 'exact', tokenSymbol: r.tokenSymbol,
+}));
+/** Default network advertised in legacy single-network discovery fields. */
+export const SUPPORTED_NETWORK = DEFAULT_RAIL.network;
+export const SUPPORTED_ASSET = DEFAULT_RAIL.asset;

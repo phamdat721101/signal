@@ -19,6 +19,24 @@ const Schema = z.object({
 
   /** Receiver of paid USDC on Arbitrum Sepolia. */
   PAY_TO_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'PAY_TO_ADDRESS must be 0x… EVM address'),
+
+  // ── GOAT testnet rail (additive, optional) ──────────────────────────
+  // When ENABLED, the paywall advertises a 2nd `accepts` entry on the
+  // 402 challenge (chain 48816, default token = WGBTC since USDC is
+  // not issued on testnet3). Buyer picks the rail by paying on the
+  // chain of their choice; on retry, `x-payment-network` selects the
+  // rail for verification. Falls back to PAY_TO_ADDRESS if not set.
+  GOAT_X402_ENABLED: z.coerce.boolean().default(false),
+  // Empty string in .env is treated as "not set" so PAY_TO_ADDRESS fallback wins.
+  GOAT_X402_PAY_TO: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
+  ),
+  GOAT_X402_RPC_URL: z.string().url().default('https://rpc.testnet3.goat.network'),
+  GOAT_X402_TOKEN_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/)
+    .default('0xbC10000000000000000000000000000000000000'),
+  GOAT_X402_TOKEN_SYMBOL: z.string().default('WGBTC'),
+  GOAT_X402_TOKEN_USD_PRICE: z.coerce.number().positive().default(65000),
 });
 
 export type Env = z.infer<typeof Schema>;

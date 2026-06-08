@@ -21,6 +21,7 @@ const navItems = [
 const FAUCETS: Record<number, { label: string; url: string }> = {
   2124225178762456: { label: 'Get INIT', url: 'https://app.testnet.initia.xyz/faucet' },
   421614: { label: 'Get Arb Sepolia ETH', url: import.meta.env.VITE_ARBITRUM_SEPOLIA_FAUCET_URL || 'https://www.alchemy.com/faucets/arbitrum-sepolia' },
+  48816: { label: 'Get GOAT BTC', url: import.meta.env.VITE_GOAT_TESTNET_FAUCET_URL || 'https://faucet.testnet3.goat.network' },
 };
 
 function TestnetBanner() {
