@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     # Agentathon additions: executor + B2B verdict market.
     somnia_card_executor_address: str = ""
     somnia_agent_market_address: str = ""
-    # Somnia x402 REST rail (parallel to Base CDP + Morph; route prefix /somnia-api).
+    # Somnia x402 REST rail (parallel to Base CDP; route prefix /somnia-api).
     # Toggle via SOMNIA_X402_ENABLED=true. Receiver falls back to x402_receiver_address.
     somnia_x402_enabled: bool = False
     somnia_x402_network: str = "eip155:50312"
@@ -72,22 +72,6 @@ class Settings(BaseSettings):
     cdp_api_key_id: str = ""
     cdp_api_key_secret: str = ""
 
-    # ── Morph Rails x402 (parallel rail; toggle via morph_x402_enabled) ──
-    # Defaults target Morph Hoodi testnet (chain 2910, facilitator
-    # morph-rails-hoodi.morph.network/x402). Mainnet swap: eip155:2818 +
-    # facilitator morph-rails.morph.network/x402 + USDC
-    # 0xe34c91815d7fc18A9e2148bcD4241d0a5848b693.
-    morph_x402_enabled: bool = False
-    morph_facilitator_url: str = "https://morph-rails-hoodi.morph.network/x402"
-    morph_network: str = "eip155:2910"
-    morph_receiver_address: str = ""        # falls back to x402_receiver_address
-    morph_asset_address: str = "0xEcF966Cc754BC411E1F1106fbb4e343b835E85E4"
-    morph_asset_decimals: int = 18
-    morph_asset_name: str = "HoodiTestToken"
-    morph_asset_version: str = "1.0"
-    morph_access_key: str = ""              # morph_ak_... — from x402 console
-    morph_access_secret: str = ""           # morph_sk_... — never log
-    morph_public_base_url: str = ""         # e.g. https://ai.overguild.com/morph-api
     # Supabase/Postgres
     database_url: str = ""
     # Claude AI (Bedrock)

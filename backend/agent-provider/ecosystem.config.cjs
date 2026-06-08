@@ -1,4 +1,4 @@
-// PM2 process manifest — facilitator + agent-provider as separate apps.
+// PM2 process manifest — single agent-provider app (Arbitrum Sepolia x402).
 //
 // Deploy:
 //   npm run build
@@ -10,21 +10,6 @@
 
 module.exports = {
   apps: [
-    {
-      name: 'morph-hoodi-facilitator',
-      script: 'dist/facilitator/index.js',
-      instances: 1,
-      exec_mode: 'fork',
-      max_restarts: 10,
-      min_uptime: '30s',
-      restart_delay: 2000,
-      max_memory_restart: '256M',
-      kill_timeout: 5000,
-      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-      out_file: './logs/facilitator.out.log',
-      error_file: './logs/facilitator.err.log',
-      env: { NODE_ENV: 'production' },
-    },
     {
       name: 'agent-provider',
       script: 'dist/src/server.js',

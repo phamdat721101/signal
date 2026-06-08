@@ -237,7 +237,7 @@ node scripts/sync-deployments.mjs
 | **Insight** | "Cards ARE LP recipes" — a non-DeFi user opens concentrated liquidity via a card-game gesture. Nobody else ships this. |
 | **Mechanism** | Real Uniswap v4 hook on X Layer enforcing card recipes. 4 callbacks (add/remove/beforeSwap/afterSwap). Dynamic fee from AI risk score. |
 | **Distribution** | 5,816 resolved predictions as social proof. x402 Bazaar auto-indexed. OKX Wallet + Flap ecosystem reach. |
-| **Moat** | 12 months of prediction data no competitor can replicate. ConvictionEngine reputation primitive. Multi-rail agent payments (Base + Morph + X Layer). |
+| **Moat** | 12 months of prediction data no competitor can replicate. ConvictionEngine reputation primitive. Multi-rail agent payments (Base + Arbitrum Sepolia + X Layer). |
 
 ---
 
@@ -250,7 +250,7 @@ node scripts/sync-deployments.mjs
 | Frontend | React 19, TypeScript, Vite, TailwindCSS v4 |
 | Wallet | OKX Wallet / MetaMask (X Layer) + InterwovenKit (Initia) |
 | AI | AWS Bedrock (Nova Lite), multi-agent debate |
-| Agent payments | x402 (USDC on Base), Morph Rails |
+| Agent payments | x402 (USDC on Base + Arbitrum Sepolia) |
 | Database | PostgreSQL (Supabase) |
 
 ---

@@ -6,8 +6,7 @@
 //     support Arbitrum Sepolia (only base-sepolia, solana-devnet, etc.).
 //   - CDP facilitator requires server-side auth that we won't expose to
 //     buyers. Self-hosting another sponsor-facilitator process re-introduces
-//     the operational footprint we just retired with morph-hoodi-facilitator
-//     ("do_not_repeat_sample_mistake").
+//     unwanted operational footprint ("do_not_repeat_sample_mistake").
 //
 // Design — buyer-direct settlement, server verify-only:
 //   1. GET /api/v2/agent/* without `x-payment-tx` → 402 with payment-required

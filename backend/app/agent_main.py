@@ -34,15 +34,6 @@ from app.x402_payment import get_x402_middleware_args
 from app.somnia_payment import get_somnia_x402_middleware_args
 
 
-# Morph rail is now served by the standalone TS agent-provider on Morph Hoodi
-# (see backend/agent-provider/). The legacy Python HMAC rail against
-# morph-rails.morph.network has been retired. Keep this stub so the existing
-# rail-dispatch wiring below stays inert without code churn — it always
-# returns (None, None) which makes every `_morph_server is not None` guard
-# short-circuit cleanly.
-def get_morph_x402_middleware_args(prefix: str = "/morph-api"):
-    return (None, None)
-
 # ─── Logging (mirror main.py — same format, request-id contextvar) ──────
 _request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
 
@@ -64,13 +55,8 @@ logger = logging.getLogger("agent_main")
 # Resource server + per-route configs. Matches against (METHOD, path).
 _x402_routes: dict[str, object] | None = None
 _x402_server = None
-# Morph rail — same shape, different facilitator + network. Routes are keyed
-# with the /morph-api prefix so a single dispatch table can serve both rails.
-_morph_routes: dict[str, object] | None = None
-_morph_server = None
-_MORPH_PREFIX = "/morph-api"
 # Somnia rail — Agentathon REST mirror of the on-chain SomniaAgentMarket.
-# Independent of Base + Morph; failure here leaves the other rails intact.
+# Independent of Base; failure here leaves the Base rail intact.
 _somnia_routes: dict[str, object] | None = None
 _somnia_server = None
 _SOMNIA_PREFIX = "/somnia-api"
@@ -121,17 +107,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("x402 initialize failed: %s — endpoints will serve UNPAID", e)
             _x402_server = None
-    # Morph rail (additive). Independent of Base — failure here leaves Base intact.
-    global _morph_routes, _morph_server
-    _morph_routes, _morph_server = get_morph_x402_middleware_args(prefix=_MORPH_PREFIX)
-    if _morph_server is not None:
-        try:
-            await asyncio.to_thread(_morph_server.initialize)
-            logger.info("Morph rail initialized; %d routes priced", len(_morph_routes or {}))
-        except Exception as e:
-            logger.error("Morph rail initialize failed: %s — Morph endpoints UNPAID", e)
-            _morph_server = None
-    # Somnia rail (additive). Same independence guarantee.
+    # Somnia rail (additive). Independent of Base — failure here leaves Base intact.
     global _somnia_routes, _somnia_server
     _somnia_routes, _somnia_server = get_somnia_x402_middleware_args(prefix=_SOMNIA_PREFIX)
     if _somnia_server is not None:
@@ -196,14 +172,11 @@ def _serialize_settle_resp(resp) -> str:
 
 @app.middleware("http")
 async def x402_gate(request: Request, call_next):
-    # Pick the right rail by path prefix. Somnia + Morph routes are keyed with
-    # their respective prefixes so a single dispatch table can serve all rails.
+    # Pick the right rail by path prefix. Somnia routes are keyed with their
+    # prefix so a single dispatch table can serve both Base and Somnia.
     if request.url.path.startswith(_SOMNIA_PREFIX):
         routes, server = _somnia_routes, _somnia_server
         rail = "somnia"
-    elif request.url.path.startswith(_MORPH_PREFIX):
-        routes, server = _morph_routes, _morph_server
-        rail = "morph"
     else:
         routes, server = _x402_routes, _x402_server
         rail = "base"
@@ -284,22 +257,16 @@ async def x402_gate(request: Request, call_next):
     )
     response.headers["x-request-id"] = response.headers.get("x-request-id", "-")
     response.headers["x-payment-rail"] = rail
-    if rail == "morph":
-        # Morph Reference Key — merchant-facing order ID. Derived from the
-        # SHA256 payload hash so /morph-api/reconcile can resolve it via prefix
-        # match against x402_settlements.payload_hash. No schema change needed.
-        response.headers["x-morph-reference-key"] = f"SIGNAL-{payload_hash[:12].upper()}"
     return response
 
 
 # ─── Mount the agent router (paid endpoints) ────────────────────────────
-# Twice — bare for Base path, /morph-api prefix for Morph rail. The middleware
-# above dispatches to the right facilitator based on path prefix. The Morph
-# mount is gated by the same env flag used to build _morph_routes; without it,
-# the prefix is unmounted (404) so the routes can't accidentally serve unpaid.
+# Twice — bare for Base path, /somnia-api prefix for the Somnia rail. The
+# middleware above dispatches to the right facilitator based on path prefix.
+# The Somnia mount is gated by the same env flag used to build _somnia_routes;
+# without it, the prefix is unmounted (404) so the routes can't accidentally
+# serve unpaid.
 app.include_router(agent_router)
-if get_settings().morph_x402_enabled:
-    app.include_router(agent_router, prefix=_MORPH_PREFIX)
 if get_settings().somnia_x402_enabled:
     app.include_router(agent_router, prefix=_SOMNIA_PREFIX)
 
@@ -328,91 +295,7 @@ async def skill_md():
     return PlainTextResponse(_SKILL_MD, media_type="text/markdown")
 
 
-# ─── Morph Rails — public reconcile + Skill Hub manifest (free) ────────
-@app.get("/morph-api/reconcile")
-@app.get("/api/v2/morph/reconcile")
-async def morph_reconcile(key: str):
-    """Look up an x402 settlement by its Morph Reference Key (SIGNAL-XXXXXXXXXXXX).
-
-    Reverse-engineers the deterministic key into a prefix match against
-    x402_settlements.payload_hash. Returns 404 when not found.
-    Forward-compatible with Morph mainnet's Reference Key API (April 2026 launch).
-    """
-    if not key.startswith("SIGNAL-"):
-        return JSONResponse(status_code=400, content={"error": "invalid_reference_key_format"})
-    prefix = key.removeprefix("SIGNAL-").lower()
-    if not prefix or len(prefix) > 32 or not all(c in "0123456789abcdef" for c in prefix):
-        return JSONResponse(status_code=400, content={"error": "invalid_reference_key_format"})
-    if not db_async.is_ready():
-        return JSONResponse(status_code=503, content={"error": "db_unavailable"})
-    row = await db_async.fetch_one(
-        """
-        SELECT payload_hash, resource, network, payer, amount, tx_hash, status,
-               created_at, settled_at, last_error
-          FROM x402_settlements
-         WHERE payload_hash LIKE $1 || '%'
-         LIMIT 1
-        """,
-        prefix,
-    )
-    if not row:
-        return JSONResponse(status_code=404, content={"error": "not_found", "reference_key": key})
-    return {
-        "reference_key": key,
-        "network": row["network"],
-        "resource": row["resource"],
-        "payer": row["payer"],
-        "amount": row["amount"],
-        "tx_hash": row["tx_hash"],
-        "status": row["status"],
-        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-        "settled_at": row["settled_at"].isoformat() if row["settled_at"] else None,
-        "explorer_url": _morph_explorer_tx(row["tx_hash"], row["network"]) if row["tx_hash"] else None,
-    }
-
-
-def _morph_explorer_tx(tx_hash: str, network: str) -> str | None:
-    """Best-effort explorer URL for a Morph tx hash. Falls back to None for unknown nets."""
-    if network == "eip155:2818":
-        return f"https://explorer.morphl2.io/tx/{tx_hash}"
-    if network == "eip155:2910":
-        return f"https://explorer-hoodi.morph.network/tx/{tx_hash}"
-    return None
-
-
-@app.get("/.well-known/morph-skill.json")
-async def morph_skill_manifest():
-    """Morph Skill Hub manifest — agentic discovery for the Signal API."""
-    s = get_settings()
-    base_url = (s.morph_public_base_url or "").rstrip("/") or "https://ai.overguild.com/morph-api"
-    pay_to = s.morph_receiver_address or s.x402_receiver_address
-    skills = []
-    for path, route in (_morph_routes or {}).items():
-        method, route_path = path.split(" ", 1)
-        opt = route.accepts[0]
-        skills.append({
-            "name": route_path.rsplit("/", 1)[-1],
-            "url": f"{base_url}{route_path[len(_MORPH_PREFIX):]}",
-            "method": method,
-            "description": route.description,
-            "price": opt.price,
-            "network": opt.network,
-            "asset": s.morph_asset_address,
-            "pay_to": pay_to,
-            "scheme": "exact",
-            "x402_version": 2,
-        })
-    return {
-        "name": "signal-trading-intelligence",
-        "version": "1.0.0",
-        "description": "AI crypto trading signals — 60.8% accuracy across 5,816+ on-chain resolved predictions. Settled on Morph Rails (USDC + AltFee gas).",
-        "publisher": {"name": "Initia Signal", "wallet": pay_to},
-        "facilitator": s.morph_facilitator_url,
-        "skills": skills,
-        "tags": ["trading", "signals", "ai", "crypto", "x402", "morph", "altfee"],
-    }
-
-
+# ─── Health ─────────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
     s = get_settings()
@@ -439,9 +322,6 @@ async def health():
         "x402_network": s.x402_network,
         "x402_configured": _x402_server is not None,
         "x402_routes": list((_x402_routes or {}).keys()),
-        "morph_configured": _morph_server is not None,
-        "morph_network": s.morph_network,
-        "morph_routes": list((_morph_routes or {}).keys()),
         "db_async": await db_async.health(),
         "settlements": settle_summary,
         "chain_ops_pending_count": _safe_chain_ops_pending(),

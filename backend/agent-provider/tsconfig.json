@@ -16,5 +16,5 @@
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["src/**/*", "facilitator/**/*"]
+  "include": ["src/**/*"]
 }

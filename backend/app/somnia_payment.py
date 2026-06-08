@@ -9,7 +9,7 @@ defaults to the CDP facilitator URL — an alternative Somnia facilitator can
 be plugged in via `SOMNIA_X402_FACILITATOR_URL`).
 
 This rail is **purely additive**: it returns (None, None) when disabled so
-that agent_main.py's existing Base + Morph rails remain byte-identical.
+that agent_main.py's existing Base rail remains byte-identical.
 Mounted only when `SOMNIA_X402_ENABLED=true` AND a receiver address + asset
 address are configured.
 """

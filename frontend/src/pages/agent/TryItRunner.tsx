@@ -145,10 +145,10 @@ export default function TryItRunner({ bundle, values, disabled }: {
       // 2. Sign EIP-3009 typed data.
       //    Domain MUST match the on-chain values exactly. Circle's canonical
       //    USDC on Arb Sepolia (0x75faf114…46AA4d) reports name()="USD Coin"
-      //    and version()="2". Do NOT copy the Morph Hoodi pinning of
-      //    name="USDC" here — that's the operator-supplied test token, not
-      //    Circle USDC, and using it would make the contract recover a
-      //    different signer and revert with "invalid signature".
+      //    and version()="2". Always pin the domain to the exact contract
+      //    metadata of the asset the buyer is actually paying with —
+      //    mismatched name/version makes the contract recover a different
+      //    signer and revert with "invalid signature".
       setState({ status: 'signing' });
       const now = Math.floor(Date.now() / 1000);
       const auth: EipAuthorization = {

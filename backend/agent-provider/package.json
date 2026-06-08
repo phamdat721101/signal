@@ -2,20 +2,15 @@
   "name": "signal-agent-provider",
   "version": "0.2.0",
   "private": true,
-  "description": "Morph Hoodi x402 payment gateway for Signal Trading Intelligence API (n-payment v0.18)",
+  "description": "x402 payment gateway for Signal Trading Intelligence API on Arbitrum Sepolia (buyer-direct EIP-3009)",
   "type": "module",
   "engines": {
     "node": ">=20.0.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
-    "start:facilitator": "node dist/facilitator/index.js",
+    "start": "node dist/src/server.js",
     "dev": "tsx watch src/server.ts",
-    "dev:facilitator": "tsx watch facilitator/index.ts",
-    "sanity": "tsx scripts/sanity.ts",
-    "smoke": "tsx scripts/smoke.ts",
-    "e2e": "tsx scripts/morph-demo-buyer.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

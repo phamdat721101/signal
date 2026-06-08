@@ -1,4 +1,4 @@
-// Express boot for agent-provider — Morph Hoodi only.
+// Express boot for agent-provider — Arbitrum Sepolia x402 only.
 //
 // Composes: paywall (n-payment v0.18 single-rail) → tools handler.
 // Discovery surfaces: SKILL.md, /.well-known/agent.json, /tools/list, /api/health.
