@@ -303,6 +303,21 @@ def start_scheduler():
     scheduler.add_job(generate_trading_signals, "interval", minutes=10,
                       id="trading_signal_gen", max_instances=1,
                       next_run_time=t + timedelta(seconds=110))
+    # Prediction cards (Prophecy.social mode): kill-switch via
+    # `settings.prophecy_card_gen_enabled` — the function self-skips, so we
+    # always register the job and let config flip it on.
+    from app.prophecy_card_pipeline import scheduled_prophecy_card_gen
+    scheduler.add_job(scheduled_prophecy_card_gen, "interval", minutes=15,
+                      id="prophecy_card_gen", max_instances=1,
+                      next_run_time=t + timedelta(seconds=130))
+    # Cross-chain resolution relay: mainnet 5031 events → testnet 50312
+    # bridge.triggerResolution. 60s tick is well below typical resolution
+    # latency expectations and bridge idempotency makes overlapping ticks
+    # safe. Function self-skips when the kill-switch is off.
+    from app.prophecy_event_poller import scheduled_prophecy_relay
+    scheduler.add_job(scheduled_prophecy_relay, "interval", seconds=60,
+                      id="prophecy_relay", max_instances=1,
+                      next_run_time=t + timedelta(seconds=140))
     from app.agent_runner import run_user_agents, update_agent_preferences
     scheduler.add_job(run_user_agents, "interval", minutes=10, id="user_agents", max_instances=1, next_run_time=t + timedelta(seconds=70))
     scheduler.add_job(update_agent_preferences, "interval", minutes=60, id="agent_learn", max_instances=1, next_run_time=t + timedelta(seconds=200))

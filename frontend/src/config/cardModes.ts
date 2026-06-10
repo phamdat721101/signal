@@ -20,6 +20,17 @@ export type FeedMode = {
   readonly description: string;
   readonly cardTypes: readonly string[];
   readonly hidden?: boolean;
+  /**
+   * Optional chain id required to execute on-chain transactions for this
+   * mode. Reading the deck is unrestricted; only the swipe handler enforces
+   * the chain. Modes without `executionChainId` run on the app's default
+   * chain (Initia testnet) just like every other mode.
+   *
+   * Set to 50312 for the prediction mode so users on Initia / Base can
+   * still browse Prophecy.social cards and only get a switch popup when
+   * they intentionally APE/FADE.
+   */
+  readonly executionChainId?: number;
 };
 
 export const FEED_MODES: readonly FeedMode[] = [
@@ -50,6 +61,18 @@ export const FEED_MODES: readonly FeedMode[] = [
     emoji: '⚡',
     description: 'AI verdicts you can execute on SoDex perps testnet',
     cardTypes: ['trading_signal'],
+  },
+  {
+    // Prophecy.social prediction-card mode. Reads sourced from Somnia
+    // mainnet 5031 by the backend pipeline; swipes lock on testnet 50312
+    // (existing Kinetic surface). Browse-anywhere / write-Somnia is
+    // intentional — the chain switch fires only on a deliberate swipe.
+    id: 'prediction',
+    label: 'Predictions',
+    emoji: '🔮',
+    description: 'Prophecy.social markets — sports, crypto, politics, culture. Swipes lock on Somnia.',
+    cardTypes: ['prediction'],
+    executionChainId: 50312,
   },
   {
     // News mode is hidden from the picker (consumer feed) but still resolves

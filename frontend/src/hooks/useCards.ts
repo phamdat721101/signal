@@ -58,6 +58,11 @@ export interface Card {
   chain_id?: number;
   dex_link?: string;
   volatility_7d_sigma?: number | null;
+  // ── Prediction-card extension (populated for card_type === 'prediction') ──
+  // Source = Prophecy.social on Somnia mainnet 5031; swipes lock on testnet 50312.
+  prophecy_market_id?: number;
+  prophecy_yes_odds_at_gen?: number;       // 0..1
+  prophecy_deadline?: string;              // ISO timestamp
 }
 
 async function fetchCards(offset = 0, limit = 20, cardType?: string | string[]) {

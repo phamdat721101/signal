@@ -50,6 +50,12 @@ contract SomniaCardExecutor is Ownable, ISomniaVerdictConsumer {
     ///         OCP: adding a router = one tx; no contract change.
     mapping(address => bool) public allowedAgentTargets;
 
+    /// @notice Cross-chain executors (e.g. PredictionCardLiFiExecutor) authorised to
+    ///         attribute a swipe to an arbitrary `user` address rather than `msg.sender`.
+    ///         SRP: keeps the LiFi-side contract decoupled from this contract's
+    ///         storage layout — only the explicit hook below grants attribution.
+    mapping(address => bool) public delegatedExecutors;
+
     struct Position {
         address user;          // who settled the swipe (filled in batchExecuteFromQueue)
         string  symbol;
@@ -71,6 +77,7 @@ contract SomniaCardExecutor is Ownable, ISomniaVerdictConsumer {
     mapping(uint256 => uint256) internal _resolvingVerdict;
 
     event TargetWhitelisted(address indexed target, bool allowed);
+    event DelegatedExecutorSet(address indexed executor, bool allowed);
     event CardExecuted(uint256 indexed verdictId, address indexed user, string symbol, address target, bool ok);
     event CardResolved(uint256 indexed verdictId, address indexed user, bool wasCorrect);
     event TierMinted(address indexed user, IProofOfAlpha.Tier tier);
@@ -82,6 +89,8 @@ contract SomniaCardExecutor is Ownable, ISomniaVerdictConsumer {
     error AlreadyResolved();
     error EmptyBatch();
     error LengthMismatch();
+    error NotDelegatedExecutor();
+    error ZeroUser();
 
     constructor(
         address signalAgent,
@@ -102,6 +111,13 @@ contract SomniaCardExecutor is Ownable, ISomniaVerdictConsumer {
         emit TargetWhitelisted(target, allowed);
     }
 
+    /// @notice Whitelist a cross-chain executor that may attribute swipes
+    ///         to an arbitrary user (used by `PredictionCardLiFiExecutor`).
+    function setDelegatedExecutor(address executor, bool allowed) external onlyOwner {
+        delegatedExecutors[executor] = allowed;
+        emit DelegatedExecutorSet(executor, allowed);
+    }
+
     // ─────────────────────── Batch path (the swipe surface) ───────────────
     struct Swipe { string symbol; string context; }
 
@@ -109,6 +125,28 @@ contract SomniaCardExecutor is Ownable, ISomniaVerdictConsumer {
     ///         `executeAgentResult` lands per card via the agent's callback.
     /// @dev    msg.value must cover N × per-call platform deposit (read on-chain).
     function batchExecuteFromQueue(Swipe[] calldata queue) external payable returns (uint256[] memory verdictIds) {
+        return _batchExecute(msg.sender, queue);
+    }
+
+    /// @notice Cross-chain entry point: attribute the swipe to `attributedUser`
+    ///         instead of `msg.sender`. Only callable by a whitelisted delegated
+    ///         executor (`setDelegatedExecutor`). The downstream LLM verdict
+    ///         lands as if `attributedUser` had submitted directly.
+    /// @dev    SRP: no router-policy change — only attribution differs.
+    function batchExecuteFromQueueFor(address attributedUser, Swipe[] calldata queue)
+        external
+        payable
+        returns (uint256[] memory verdictIds)
+    {
+        if (!delegatedExecutors[msg.sender]) revert NotDelegatedExecutor();
+        if (attributedUser == address(0))    revert ZeroUser();
+        return _batchExecute(attributedUser, queue);
+    }
+
+    function _batchExecute(address attributedUser, Swipe[] calldata queue)
+        internal
+        returns (uint256[] memory verdictIds)
+    {
         if (queue.length == 0) revert EmptyBatch();
 
         // Split into parallel arrays for the agent ABI.
@@ -124,8 +162,8 @@ contract SomniaCardExecutor is Ownable, ISomniaVerdictConsumer {
         );
 
         for (uint256 i; i < verdictIds.length; ++i) {
-            userByVerdict[verdictIds[i]]      = msg.sender;
-            _symbolByVerdict[verdictIds[i]]   = queue[i].symbol;
+            userByVerdict[verdictIds[i]]    = attributedUser;
+            _symbolByVerdict[verdictIds[i]] = queue[i].symbol;
         }
     }
 

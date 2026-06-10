@@ -39,6 +39,8 @@ export default function History() {
         <span className="font-label text-[10px] text-[#adaaaa] uppercase tracking-widest">{swipes.length} swipes</span>
       </div>
 
+      <CrossChainSwipesSection userAddress={initiaAddress} />
+
       {isLoading ? (
         <div className="text-center text-[#adaaaa] font-label text-sm py-12">Loading...</div>
       ) : swipes.length === 0 ? (
@@ -101,6 +103,21 @@ export default function History() {
                   </div>
                 ) : null}
 
+                {/* On-chain proof — render an explorer link for any swipe that has a tx hash. */}
+                {s.explorer_url ? (
+                  <div className="pl-13">
+                    <a
+                      href={s.explorer_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[10px] font-label text-sky-400 hover:underline"
+                      aria-label="View transaction on block explorer"
+                    >
+                      🔗 View tx on explorer
+                    </a>
+                  </div>
+                ) : null}
+
                 {/* Vault allocation: confirm button on PENDING rows. */}
                 {isAllocate && s.vault_status === 'pending' && s.vault_allocation_id ? (
                   <div className="pl-13 flex items-center gap-2">
@@ -129,5 +146,119 @@ export default function History() {
         </div>
       )}
     </div>
+  );
+}
+
+
+
+// ─────────────────────────────────────────────────────────────────
+//  CrossChainSwipesSection — v3 cross-chain history surface.
+//  Reads `/api/v3/lifi-intents/by-user/:addr` and renders rows with
+//  verdict + outcome flags + 3 click-through proof links.
+//
+//  SOLID:
+//    - SRP: a self-contained section. The legacy swipe table above
+//      is untouched.
+//    - DIP: depends only on fetch + the typed response shape.
+// ─────────────────────────────────────────────────────────────────
+type CrossChainIntent = {
+  intent_id: string;
+  prophecy_market_id: number;
+  swipe_stake_usdc: number;
+  status: 'PENDING' | 'DELIVERED' | 'EXECUTED' | 'FAILED_REFUNDED';
+  verdict_id: number | null;
+  verdict_str: 'APE' | 'FADE' | null;
+  outcome_resolved: boolean;
+  outcome_correct: boolean | null;
+  arbiscan_url: string | null;
+  somnscan_url: string | null;
+  prophecy_market_url: string | null;
+  created_at: string | null;
+  outcome_resolved_at: string | null;
+};
+
+function CrossChainSwipesSection({ userAddress }: { userAddress: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['cross-chain-history', userAddress],
+    enabled: !!userAddress,
+    refetchInterval: 15_000,
+    queryFn: async () => {
+      const r = await fetch(`${config.backendUrl}/api/v3/lifi-intents/by-user/${userAddress}`);
+      if (!r.ok) throw new Error('Failed');
+      return r.json() as Promise<{ intents: CrossChainIntent[]; total: number }>;
+    },
+  });
+  const intents = data?.intents ?? [];
+
+  if (!userAddress) return null;
+  if (isLoading) return <p className="text-[#adaaaa] text-xs">Loading cross-chain swipes…</p>;
+  if (intents.length === 0) return null;   // hide section entirely if no rows
+
+  return (
+    <section className="bg-[#131313] rounded-xl p-4 space-y-3">
+      <header className="flex items-center justify-between">
+        <h2 className="font-headline text-sm font-bold text-white">Cross-chain swipes</h2>
+        <span className="text-[10px] font-label text-[#adaaaa] uppercase tracking-widest">{intents.length} rows</span>
+      </header>
+      <ul className="space-y-2">
+        {intents.map((i) => <CrossChainSwipeRow key={i.intent_id} intent={i} />)}
+      </ul>
+    </section>
+  );
+}
+
+function CrossChainSwipeRow({ intent }: { intent: CrossChainIntent }) {
+  const stake = (intent.swipe_stake_usdc / 1_000_000).toFixed(2);
+  const verdictColor =
+    intent.verdict_str === 'APE'  ? 'text-emerald-400' :
+    intent.verdict_str === 'FADE' ? 'text-rose-400'    : 'text-zinc-500';
+  const statusBadge =
+    intent.status === 'EXECUTED'        ? { tint: 'bg-sky-500/15',    fg: 'text-sky-300',    label: 'EXECUTED' } :
+    intent.status === 'FAILED_REFUNDED' ? { tint: 'bg-rose-500/15',   fg: 'text-rose-300',   label: 'REFUNDED' } :
+                                          { tint: 'bg-amber-500/15',  fg: 'text-amber-300',  label: intent.status };
+  const outcomeBadge =
+    !intent.outcome_resolved             ? { tint: 'bg-zinc-700/40',     fg: 'text-zinc-400',  label: 'PENDING' } :
+    intent.outcome_correct === true      ? { tint: 'bg-emerald-500/20',  fg: 'text-emerald-300', label: 'WIN'  } :
+    intent.outcome_correct === false     ? { tint: 'bg-rose-500/20',     fg: 'text-rose-300',   label: 'LOSS' } :
+                                           { tint: 'bg-zinc-700/40',     fg: 'text-zinc-400',   label: 'NO VERDICT' };
+
+  return (
+    <li className="bg-[#0d0d0d] rounded-lg p-3 space-y-2 border border-white/5">
+      <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400">
+        <span>market #{intent.prophecy_market_id}</span>
+        <span>${stake}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className={`text-sm font-bold ${verdictColor}`}>
+          {intent.verdict_str ?? '—'}
+        </span>
+        <span className={`text-[10px] px-2 py-0.5 rounded ${statusBadge.tint} ${statusBadge.fg}`}>
+          {statusBadge.label}
+        </span>
+        <span className={`text-[10px] px-2 py-0.5 rounded ${outcomeBadge.tint} ${outcomeBadge.fg}`}>
+          {outcomeBadge.label}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+        {intent.arbiscan_url && (
+          <a href={intent.arbiscan_url} target="_blank" rel="noopener noreferrer"
+             className="text-sky-400 hover:underline" aria-label="View origin transaction on Arbiscan">
+            🔗 Arbiscan
+          </a>
+        )}
+        {intent.somnscan_url && (
+          <a href={intent.somnscan_url} target="_blank" rel="noopener noreferrer"
+             className="text-sky-400 hover:underline" aria-label="View destination transaction on Somnscan">
+            🔗 Somnscan
+          </a>
+        )}
+        {intent.prophecy_market_url && (
+          <a href={intent.prophecy_market_url} target="_blank" rel="noopener noreferrer"
+             className="text-sky-400 hover:underline" aria-label="View prophecy market">
+            🔗 Market
+          </a>
+        )}
+      </div>
+    </li>
   );
 }

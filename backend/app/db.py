@@ -86,6 +86,94 @@ def _ensure_runtime_columns():
                 "CREATE INDEX IF NOT EXISTS vault_alloc_user_idx "
                 "ON vault_allocations (user_address, created_at DESC)"
             )
+            # Prediction cards (Prophecy.social mode) — three nullable columns
+            # on `cards`. ADD COLUMN IF NOT EXISTS is metadata-only on Postgres
+            # when the column already exists, so this is safe to run on every
+            # startup. The unique index makes pipeline regeneration idempotent
+            # without an extra round-trip.
+            for col, defn in [
+                ("prophecy_market_id",       "BIGINT"),
+                ("prophecy_yes_odds_at_gen", "NUMERIC(5,4)"),
+                ("prophecy_deadline",        "TIMESTAMPTZ"),
+            ]:
+                cur.execute(
+                    f"ALTER TABLE cards ADD COLUMN IF NOT EXISTS {col} {defn}"
+                )
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS cards_prophecy_market_id_idx "
+                "ON cards (prophecy_market_id) WHERE prophecy_market_id IS NOT NULL"
+            )
+            # ── v3 cross-chain (LiFi) — additive, idempotent ──
+            # `cross_chain_ready` is set by `prophecy_lifi_pipeline` only when
+            # deadline > 20 min AND market is bound on KineticProphecyBridge.
+            # `min_swipe_stake_usdc` is per-card so v3.1 can vary per market.
+            for col, defn in [
+                ("cross_chain_ready",     "BOOLEAN NOT NULL DEFAULT FALSE"),
+                ("min_swipe_stake_usdc",  "BIGINT NOT NULL DEFAULT 1000000"),
+            ]:
+                cur.execute(
+                    f"ALTER TABLE cards ADD COLUMN IF NOT EXISTS {col} {defn}"
+                )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS cards_cross_chain_ready_idx "
+                "ON cards (cross_chain_ready, created_at) WHERE cross_chain_ready = TRUE"
+            )
+            cur.execute(
+                """CREATE TABLE IF NOT EXISTS lifi_intents (
+                       intent_id            VARCHAR(64) PRIMARY KEY,
+                       user_address         CHAR(42)    NOT NULL,
+                       prophecy_market_id   BIGINT      NOT NULL,
+                       card_id              BIGINT,
+                       origin_chain_id      INTEGER     NOT NULL,
+                       swipe_stake_usdc     BIGINT      NOT NULL,
+                       lifi_origin_tx_hash  CHAR(66),
+                       dest_tx_hash         CHAR(66),
+                       status               VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+                       verdict_id           BIGINT,
+                       card_hash            CHAR(66),
+                       arbiscan_url         TEXT,
+                       somnscan_url         TEXT,
+                       prophecy_market_url  TEXT,
+                       created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                       executed_at          TIMESTAMPTZ,
+                       CONSTRAINT lifi_intents_status_chk CHECK (
+                           status IN ('PENDING','DELIVERED','EXECUTED','FAILED_REFUNDED')
+                       )
+                   )"""
+            )
+            # Result-tracking columns added v3.1 (additive, idempotent)
+            for col, defn in [
+                ("verdict_str",         "VARCHAR(8)"),                 # APE | FADE | NULL pending
+                ("outcome_resolved",    "BOOLEAN NOT NULL DEFAULT FALSE"),
+                ("outcome_correct",     "BOOLEAN"),                    # NULL until resolved
+                ("outcome_resolved_at", "TIMESTAMPTZ"),
+                ("used_stub_quote",     "BOOLEAN NOT NULL DEFAULT FALSE"),  # testnet auto-sim flag
+            ]:
+                cur.execute(f"ALTER TABLE lifi_intents ADD COLUMN IF NOT EXISTS {col} {defn}")
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS lifi_intents_origin_tx_idx "
+                "ON lifi_intents (lifi_origin_tx_hash) WHERE lifi_origin_tx_hash IS NOT NULL"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS lifi_intents_user_status_idx "
+                "ON lifi_intents (user_address, status)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS lifi_intents_status_created_idx "
+                "ON lifi_intents (status, created_at)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS lifi_intents_prophecy_idx "
+                "ON lifi_intents (prophecy_market_id)"
+            )
+            # v3.2 — record swipe tx hash + chain id so the History page can
+            # render a click-through explorer link for every prediction-mode
+            # APE swipe (commitConviction on Somnia 50312, etc.).
+            for col, defn in [
+                ("tx_hash",  "TEXT"),
+                ("chain_id", "INTEGER"),
+            ]:
+                cur.execute(f"ALTER TABLE swipes ADD COLUMN IF NOT EXISTS {col} {defn}")
         # Backfill: an earlier version of POST /api/cards/{id}/execute
         # forgot to call `normalize_address`, so SoDex trades landed in
         # `trades` with raw-lowercase user_address while every read path
@@ -591,10 +679,12 @@ def insert_card(card: dict) -> int:
                 token0_address, token1_address, token0_symbol, token1_symbol,
                 token0_decimals, token1_decimals, pool_address, chain_id,
                 dex_link, volatility_7d_sigma,
-                confidence, trade_plan)
+                confidence, trade_plan,
+                prophecy_market_id, prophecy_yes_odds_at_gen, prophecy_deadline)
                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                       %s,%s)
+                       %s,%s,
+                       %s,%s,%s)
                RETURNING id""",
             (card.get("token_symbol", ""), card.get("token_name", ""),
              card.get("chain", "initia"), card.get("hook", ""), card.get("roast", ""),
@@ -620,12 +710,16 @@ def insert_card(card: dict) -> int:
              card.get("pool_address"), card.get("chain_id"),
              card.get("dex_link"), card.get("volatility_7d_sigma"),
              card.get("confidence"),
-             json.dumps(card["trade_plan"]) if card.get("trade_plan") else None)
+             json.dumps(card["trade_plan"]) if card.get("trade_plan") else None,
+             # Prediction-card extension (Prophecy.social mode) — all None-safe.
+             card.get("prophecy_market_id"),
+             card.get("prophecy_yes_odds_at_gen"),
+             card.get("prophecy_deadline"))
         )
         return cur.fetchone()[0]
 
 
-def get_cards(offset: int = 0, limit: int = 20, status: str = "active", card_type: str | None = None) -> tuple[list[dict], int]:
+def get_cards(offset: int = 0, limit: int = 20, status: str = "active", card_type: str | None = None, cross_chain_ready: bool | None = None) -> tuple[list[dict], int]:
     conn = _get_read_conn()
     if not conn:
         return [], 0
@@ -642,6 +736,15 @@ def get_cards(offset: int = 0, limit: int = 20, status: str = "active", card_typ
         elif len(types) > 1:
             where += " AND card_type = ANY(%s)"
             params.append(types)
+    if cross_chain_ready is not None:
+        where += " AND cross_chain_ready = %s"
+        params.append(cross_chain_ready)
+    # v3.3 — when filtering to prediction cards, hide rows whose prophecy market
+    # deadline has already passed. The feed used to show 35/45 cards with
+    # "⏱ Resolving" countdowns making it look dead. Pipeline keeps generating
+    # short-deadline markets so this is the right place to filter at read time.
+    if "prediction" in types:
+        where += " AND (prophecy_deadline IS NULL OR prophecy_deadline > NOW())"
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(f"SELECT COUNT(*) as cnt FROM cards {where}", params)
         total = cur.fetchone()["cnt"]
@@ -733,14 +836,16 @@ def get_existing_coingecko_ids() -> set[str]:
         return {r[0] for r in cur.fetchall()}
 
 
-def record_swipe(card_id: int, user_address: str, action: str) -> int:
+def record_swipe(card_id: int, user_address: str, action: str,
+                 tx_hash: str | None = None, chain_id: int | None = None) -> int:
     conn = _get_conn()
     if not conn:
         return -1
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO swipes (card_id, user_address, action) VALUES (%s,%s,%s) RETURNING id",
-            (card_id, user_address, action)
+            "INSERT INTO swipes (card_id, user_address, action, tx_hash, chain_id) "
+            "VALUES (%s,%s,%s,%s,%s) RETURNING id",
+            (card_id, user_address, action, tx_hash, chain_id),
         )
         return cur.fetchone()[0]
 
@@ -967,14 +1072,14 @@ def _row_to_card(row: dict) -> dict:
         "market_cap": row["market_cap"],
         "coingecko_id": row.get("coingecko_id", ""),
         "status": row["status"],
-        "created_at": str(row["created_at"]),
+        "created_at": row["created_at"].isoformat() if hasattr(row.get("created_at"), "isoformat") else str(row["created_at"]),
         "verdict": row.get("verdict", "DYOR"),
         "verdict_reason": row.get("verdict_reason", ""),
         "risk_level": row.get("risk_level", "MID"),
         "risk_score": row.get("risk_score", 50),
         "notification_hook": row.get("notification_hook", ""),
         "signals": row.get("signals", []) if isinstance(row.get("signals"), list) else json.loads(row.get("signals", "[]")),
-        "expires_at": str(row["expires_at"]) if row.get("expires_at") else None,
+        "expires_at": row["expires_at"].isoformat() if hasattr(row.get("expires_at"), "isoformat") else (str(row["expires_at"]) if row.get("expires_at") else None),
         "sparkline": row.get("sparkline", []) if isinstance(row.get("sparkline"), list) else json.loads(row.get("sparkline", "[]")),
         "patterns": row.get("patterns", []) if isinstance(row.get("patterns"), list) else json.loads(row.get("patterns", "[]")),
         "ohlc": row.get("ohlc", []) if isinstance(row.get("ohlc"), list) else json.loads(row.get("ohlc", "[]")),
@@ -991,6 +1096,12 @@ def _row_to_card(row: dict) -> dict:
         "research_summary": row["research_summary"] if isinstance(row.get("research_summary"), dict) else (json.loads(row["research_summary"]) if row.get("research_summary") else None),
         "token0_symbol": row.get("token0_symbol"),
         "token1_symbol": row.get("token1_symbol"),
+        # Prediction-card extension (Prophecy.social mode).
+        "prophecy_market_id": row.get("prophecy_market_id"),
+        "prophecy_yes_odds_at_gen": float(row["prophecy_yes_odds_at_gen"]) if row.get("prophecy_yes_odds_at_gen") is not None else None,
+        "prophecy_deadline": row["prophecy_deadline"].isoformat() if hasattr(row.get("prophecy_deadline"), "isoformat") else (str(row["prophecy_deadline"]) if row.get("prophecy_deadline") else None),
+        "cross_chain_ready": bool(row.get("cross_chain_ready", False)),
+        "min_swipe_stake_usdc": int(row.get("min_swipe_stake_usdc") or 100_000),
     }
 
 
@@ -1368,3 +1479,366 @@ def get_agent_notifications(address: str, limit: int = 20) -> list[dict]:
         cur.execute("SELECT * FROM agent_notifications WHERE user_address=%s ORDER BY created_at DESC LIMIT %s",
                     (address, limit))
         return [dict(r) for r in cur.fetchall()]
+
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  v3 cross-chain (LiFi) helpers
+#
+#  SOLID:
+#    - SRP: one helper per use-case; each <20 LOC.
+#    - DIP: callers depend only on the `LifiIntent` dataclass + helper
+#           signatures; the SQL is private.
+#    - OCP: status-state-machine is enforced by a CHECK constraint at
+#           the DB; new states append cleanly.
+#
+#  Idempotency: `lifi_intents.lifi_origin_tx_hash` is the natural unique
+#  key for double-execution prevention. The contract enforces it on-chain
+#  (`processedOriginTx`); we mirror it here for fast lookups.
+#
+#  Caching: `is_prophecy_market_bound` keeps a 5-minute in-process cache
+#  of the on-chain `KineticProphecyBridge.prophecyToCardHash` view. RPC
+#  reads are slow (~50–200 ms) and the bound state is monotonic — once
+#  set, it never reverts — so a stale-true is harmless.
+#
+#  Sync vs async: this module stays sync (psycopg2) to match the rest of
+#  the codebase. Async callers in `lifi_service.py` wrap helpers via
+#  `asyncio.to_thread`. Single source of truth, zero pool duplication.
+# ─────────────────────────────────────────────────────────────────────
+import secrets
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+
+@dataclass
+class LifiIntent:
+    intent_id: str
+    user_address: str
+    prophecy_market_id: int
+    card_id: Optional[int]
+    origin_chain_id: int
+    swipe_stake_usdc: int
+    status: str
+    lifi_origin_tx_hash: Optional[str] = None
+    dest_tx_hash: Optional[str] = None
+    verdict_id: Optional[int] = None
+    card_hash: Optional[str] = None
+    arbiscan_url: Optional[str] = None
+    somnscan_url: Optional[str] = None
+    prophecy_market_url: Optional[str] = None
+    created_at: Optional[datetime] = None
+    executed_at: Optional[datetime] = None
+    # v3.1 result tracking
+    verdict_str: Optional[str] = None              # "APE" | "FADE" | None
+    outcome_resolved: bool = False
+    outcome_correct: Optional[bool] = None         # None until resolved
+    outcome_resolved_at: Optional[datetime] = None
+    used_stub_quote: bool = False                  # testnet auto-sim flag
+
+    @classmethod
+    def from_row(cls, row: dict) -> "LifiIntent":
+        return cls(**{k: row.get(k) for k in cls.__dataclass_fields__})
+
+
+def insert_lifi_intent_pending(
+    *,
+    user_address: str,
+    prophecy_market_id: int,
+    origin_chain_id: int,
+    swipe_stake_usdc: int,
+    card_id: Optional[int] = None,
+    used_stub_quote: bool = False,
+) -> Optional[str]:
+    """Insert a PENDING row before the user signs the origin tx. Returns intent_id."""
+    intent_id = f"lifi-int-{secrets.token_hex(8)}"
+    conn = _get_conn()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO lifi_intents
+                   (intent_id, user_address, prophecy_market_id, card_id,
+                    origin_chain_id, swipe_stake_usdc, status, used_stub_quote, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'PENDING', %s, NOW())""",
+                (intent_id, user_address, prophecy_market_id, card_id,
+                 origin_chain_id, swipe_stake_usdc, used_stub_quote),
+            )
+        return intent_id
+    except Exception as e:
+        logger.warning("insert_lifi_intent_pending failed: %s", e)
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def find_lifi_intents_by_user(user_address: str, limit: int = 50) -> list[LifiIntent]:
+    """History query — most recent first. Used by GET /api/v3/lifi-intents/by-user/:addr."""
+    conn = _get_conn()
+    if not conn:
+        return []
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM lifi_intents WHERE user_address = %s "
+                "ORDER BY created_at DESC LIMIT %s",
+                (user_address, limit),
+            )
+            return [LifiIntent.from_row(dict(r)) for r in cur.fetchall()]
+    finally:
+        _put_conn(conn)
+
+
+def update_lifi_intent_verdict_str(intent_id: str, verdict_str: str) -> None:
+    """JIT verdict resolver — called when on-chain verdict text becomes available."""
+    conn = _get_conn()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE lifi_intents SET verdict_str = %s WHERE intent_id = %s AND verdict_str IS NULL",
+                (verdict_str, intent_id),
+            )
+    except Exception as e:
+        logger.warning("update_lifi_intent_verdict_str(%s) failed: %s", intent_id, e)
+    finally:
+        _put_conn(conn)
+
+
+def mark_lifi_intents_outcome_for_market(prophecy_market_id: int, outcome_yes: bool) -> int:
+    """When prophecy.social market resolves, update every lifi_intent bound to it.
+
+    `outcome_correct` = (verdict_str == 'APE') == outcome_yes — i.e. the
+    swiper's APE/FADE matched the market's YES/NO outcome. Rows whose
+    verdict_str hasn't landed yet stay NULL on outcome_correct (idempotent
+    re-run will fix them later when verdict_str backfills).
+    Returns count of rows updated."""
+    conn = _get_conn()
+    if not conn:
+        return 0
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE lifi_intents
+                   SET outcome_resolved = TRUE,
+                       outcome_resolved_at = NOW(),
+                       outcome_correct = CASE
+                           WHEN verdict_str = 'APE'  THEN %s
+                           WHEN verdict_str = 'FADE' THEN NOT %s
+                           ELSE NULL
+                       END
+                   WHERE prophecy_market_id = %s AND outcome_resolved = FALSE""",
+                (outcome_yes, outcome_yes, prophecy_market_id),
+            )
+            return cur.rowcount or 0
+    except Exception as e:
+        logger.warning("mark_lifi_intents_outcome_for_market(%d) failed: %s", prophecy_market_id, e)
+        return 0
+    finally:
+        _put_conn(conn)
+
+
+def set_lifi_intent_origin_tx(intent_id: str, origin_tx_hash: str, arbiscan_url: str) -> None:
+    """Persist the user-signed origin tx hash + Arbiscan URL once available from the frontend."""
+    conn = _get_conn()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE lifi_intents SET lifi_origin_tx_hash = %s, arbiscan_url = %s "
+                "WHERE intent_id = %s AND lifi_origin_tx_hash IS NULL",
+                (origin_tx_hash, arbiscan_url, intent_id),
+            )
+    except Exception as e:
+        logger.warning("set_lifi_intent_origin_tx(%s) failed: %s", intent_id, e)
+    finally:
+        _put_conn(conn)
+
+
+def find_lifi_intent_by_origin_tx(origin_tx_hash: str) -> Optional[LifiIntent]:
+    conn = _get_conn()
+    if not conn:
+        return None
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM lifi_intents WHERE lifi_origin_tx_hash = %s",
+                (origin_tx_hash,),
+            )
+            row = cur.fetchone()
+        return LifiIntent.from_row(dict(row)) if row else None
+    finally:
+        _put_conn(conn)
+
+
+def get_lifi_intent(intent_id: str) -> Optional[LifiIntent]:
+    conn = _get_conn()
+    if not conn:
+        return None
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM lifi_intents WHERE intent_id = %s", (intent_id,))
+            row = cur.fetchone()
+        return LifiIntent.from_row(dict(row)) if row else None
+    finally:
+        _put_conn(conn)
+
+
+def find_lifi_intents_stale_pending(timeout_seconds: int) -> list[LifiIntent]:
+    conn = _get_conn()
+    if not conn:
+        return []
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM lifi_intents "
+                "WHERE status = 'PENDING' AND created_at < NOW() - (%s || ' seconds')::interval",
+                (timeout_seconds,),
+            )
+            return [LifiIntent.from_row(dict(r)) for r in cur.fetchall()]
+    finally:
+        _put_conn(conn)
+
+
+def update_lifi_intent_executed(
+    *,
+    intent_id: str,
+    verdict_id: int,
+    card_hash: str,
+    dest_tx_hash: str,
+    somnscan_url: str,
+    prophecy_market_url: str,
+) -> None:
+    """Atomic transition PENDING/DELIVERED → EXECUTED with all proof URLs."""
+    conn = _get_conn()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE lifi_intents
+                   SET status = 'EXECUTED',
+                       verdict_id = %s,
+                       card_hash = %s,
+                       dest_tx_hash = %s,
+                       somnscan_url = %s,
+                       prophecy_market_url = %s,
+                       executed_at = NOW()
+                   WHERE intent_id = %s AND status <> 'EXECUTED'""",
+                (verdict_id, card_hash, dest_tx_hash, somnscan_url,
+                 prophecy_market_url, intent_id),
+            )
+    except Exception as e:
+        logger.warning("update_lifi_intent_executed(%s) failed: %s", intent_id, e)
+    finally:
+        _put_conn(conn)
+
+
+def update_lifi_intent_status(intent_id: str, status: str) -> None:
+    """Generic status setter used by the timeout watcher (FAILED_REFUNDED) and tests."""
+    conn = _get_conn()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE lifi_intents SET status = %s WHERE intent_id = %s",
+                (status, intent_id),
+            )
+    except Exception as e:
+        logger.warning("update_lifi_intent_status(%s,%s) failed: %s", intent_id, status, e)
+    finally:
+        _put_conn(conn)
+
+
+def update_card_lifi_flags(
+    card_id: int, *, cross_chain_ready: bool, min_swipe_stake_usdc: int
+) -> None:
+    conn = _get_conn()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE cards SET cross_chain_ready = %s, min_swipe_stake_usdc = %s WHERE id = %s",
+                (cross_chain_ready, min_swipe_stake_usdc, card_id),
+            )
+    except Exception as e:
+        logger.warning("update_card_lifi_flags(%d) failed: %s", card_id, e)
+    finally:
+        _put_conn(conn)
+
+
+def find_cards_with_prophecy_market_since(cutoff: datetime) -> list[dict]:
+    """Used by the LiFi metadata refresher (60s tick)."""
+    conn = _get_conn()
+    if not conn:
+        return []
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """SELECT id, prophecy_market_id, prophecy_deadline,
+                          cross_chain_ready, min_swipe_stake_usdc, created_at
+                   FROM cards
+                   WHERE prophecy_market_id IS NOT NULL
+                     AND created_at > %s""",
+                (cutoff,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    finally:
+        _put_conn(conn)
+
+
+# ── Prophecy-market bound cache (5-min TTL) ──
+_PROPHECY_BOUND_CACHE: dict[int, tuple[bool, datetime]] = {}
+_PROPHECY_BOUND_TTL = timedelta(minutes=5)
+
+
+def is_prophecy_market_bound(prophecy_market_id: int, *, _now: Optional[datetime] = None) -> bool:
+    """Returns True iff KineticProphecyBridge.prophecyToCardHash[id] != 0.
+
+    The on-chain check is delegated to the chain client; we cache the
+    `(bool, observed_at)` tuple in-process for `_PROPHECY_BOUND_TTL` so
+    the LiFi quote endpoint stays fast under load. Failures fall back
+    to live RPC; a permanent stale-true is impossible because the bound
+    state is monotonic (once set, never cleared)."""
+    now = _now or datetime.now(timezone.utc)
+    cached = _PROPHECY_BOUND_CACHE.get(prophecy_market_id)
+    if cached is not None and now - cached[1] < _PROPHECY_BOUND_TTL:
+        return cached[0]
+    bound = _read_prophecy_bound_onchain(prophecy_market_id)
+    _PROPHECY_BOUND_CACHE[prophecy_market_id] = (bound, now)
+    return bound
+
+
+def _read_prophecy_bound_onchain(prophecy_market_id: int) -> bool:
+    """Single RPC view-call. Imported lazily so unit tests can monkey-patch."""
+    try:
+        from web3 import Web3
+        s = get_settings()
+        if not s.prophecy_bridge_address:
+            return False
+        w3 = Web3(Web3.HTTPProvider(s.somnia_testnet_rpc, request_kwargs={"timeout": 5}))
+        bridge = w3.eth.contract(
+            address=Web3.to_checksum_address(s.prophecy_bridge_address),
+            abi=[{
+                "type": "function",
+                "name": "prophecyToCardHash",
+                "stateMutability": "view",
+                "inputs": [{"name": "", "type": "uint256"}],
+                "outputs": [{"name": "", "type": "bytes32"}],
+            }],
+        )
+        ch = bridge.functions.prophecyToCardHash(int(prophecy_market_id)).call()
+        return any(b != 0 for b in ch)
+    except Exception as e:
+        logger.warning("prophecy_bound RPC view failed for %d: %s", prophecy_market_id, e)
+        return False
+
+
+def reset_prophecy_bound_cache() -> None:
+    """Test helper — flushes the 5-min cache."""
+    _PROPHECY_BOUND_CACHE.clear()

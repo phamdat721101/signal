@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 // import { usePrivy } from '@privy-io/react-auth';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { createPublicClient, http } from 'viem';
+import { createPublicClient, http, encodeAbiParameters, encodeFunctionData, keccak256 } from 'viem';
+import { useChainId, useSwitchChain } from 'wagmi';
 import { useCards } from '../hooks/useCards';
 import { useFeaturedGem } from '../hooks/useFeaturedGem';
 import { useFeedMode } from '../hooks/useFeedMode';
@@ -14,6 +15,7 @@ import LpBattleCard from '../components/LpBattleCard';
 import TradingSignalCard from '../components/TradingSignalCard';
 import VaultStrategyCard from '../components/VaultStrategyCard';
 import VaultConfigurator from '../components/VaultConfigurator';
+import PredictionCard from '../components/PredictionCard';
 import { useExecuteSignal } from '../hooks/useExecuteSignal';
 import Onboarding from '../components/Onboarding';
 import Paywall from '../components/Paywall';
@@ -22,6 +24,24 @@ import { useWallet } from '../hooks/useWallet';
 import SummonRitual from '../components/SummonRitual';
 
 const publicClient = createPublicClient({ chain: config.chain, transport: http() });
+
+// ConvictionEngine.commitConviction(bytes32 cardHash, uint8 score, bool isBull)
+// — minimal ABI fragment used only by the Prophecy prediction-card path on
+// Somnia testnet 50312. Inlined here because we don't need a full ABI file
+// for a single 3-arg function (the bridge contract owns the whole record).
+const PROPHECY_CONVICTION_ABI = [
+  {
+    type: 'function',
+    name: 'commitConviction',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'cardHash', type: 'bytes32' },
+      { name: 'score', type: 'uint8' },
+      { name: 'isBull', type: 'bool' },
+    ],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+] as const;
 
 const WIN_LINES = [
   "The chart whispered. You listened.",
@@ -225,6 +245,10 @@ export default function Feed() {
   const [showQuickOnboarding, setShowQuickOnboarding] = useState(() => !localStorage.getItem('onboarded'));
   // Active mode (URL ?mode=) + per-mode swipe index (localStorage). Single source of truth.
   const { activeMode, currentIndex: index, setCurrentIndex: setIndex } = useFeedMode();
+  // Read-everywhere / write-Somnia chain helpers for prediction mode.
+  // Cheap to keep at the top: wagmi hooks return stable refs.
+  const currentChainId = useChainId();
+  const { switchChainAsync } = useSwitchChain();
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [exiting, setExiting] = useState<'left' | 'right' | null>(null);
@@ -259,7 +283,7 @@ export default function Feed() {
 
   const { data, isLoading } = useCards(0, 50, activeMode.cardTypes as string[]);
   const { data: featuredGem } = useFeaturedGem();
-  const { address: initiaAddress, login, isCorrectChain } = useWallet();
+  const { address: initiaAddress, login, isCorrectChain, sendTx } = useWallet();
   const navigate = useNavigate();
   const { apeOnChain } = useApeTransaction();
   const executeSignal = useExecuteSignal();
@@ -450,6 +474,80 @@ export default function Feed() {
     queryClient.invalidateQueries({ queryKey: ['energy'] });
   };
 
+  // ── Prediction-card swipe (Prophecy.social) ────────────────────────
+  // Asymmetric flow by design:
+  //   APE  → strong conviction → on-chain `commitConviction` on Somnia 50312
+  //          (auto-switches chain on intent so users only see the popup
+  //          when they actually swipe APE).
+  //   FADE → "skip / disagree" signal → DB-only, no wallet popup, no chain
+  //          switch. Lower friction on the more common action keeps the
+  //          deck moving and matches the design rule that off-chain inputs
+  //          should never block a swipe.
+  // Backend resolution still pays out everyone who APE'd correctly when
+  // prophecy.social resolves the source market — FADE is a free vote that
+  // counts in our DB-side leaderboard but doesn't earn on-chain reputation.
+  const handlePredictionSwipe = async (action: 'ape' | 'fade') => {
+    if (!current) return;
+    const address = evmAddress || '';
+    const marketId = current.prophecy_market_id;
+    let txHash: string | undefined;
+
+    if (action === 'ape') {
+      const exec = activeMode.executionChainId;
+      if (exec && currentChainId !== exec) {
+        try {
+          await switchChainAsync({ chainId: exec });
+        } catch (err) {
+          console.warn('Prediction APE: chain switch declined', err);
+          return;                                       // user canceled — keep card in deck
+        }
+      }
+      if (address && marketId && config.somnia.convictionEngineAddress &&
+          config.somnia.convictionEngineAddress !== '0x0000000000000000000000000000000000000000') {
+        try {
+          const cardHash = keccak256(
+            encodeAbiParameters(
+              [{ type: 'uint256' }, { type: 'uint256' }],
+              [BigInt(current.id), BigInt(marketId)],
+            ),
+          );
+          const data = encodeFunctionData({
+            abi: PROPHECY_CONVICTION_ABI,
+            functionName: 'commitConviction',
+            args: [cardHash, 75, true],                 // isBull = APE
+          });
+          txHash = await sendTx(
+            config.somnia.convictionEngineAddress,
+            data,
+            50312,
+            undefined,           // value
+            4_000_000n,          // gas — Somnia testnet's eth_estimateGas reports
+                                 // ~3.23M for commitConviction on the existing
+                                 // ConvictionEngine (5,816+ entries already, the
+                                 // VM seems to charge much more than standard EVM
+                                 // for struct-array pushes here). 4M leaves 24%
+                                 // headroom; unused gas is refunded so the user
+                                 // only pays for actual usage.
+          );
+        } catch (err) {
+          console.warn('prediction APE: on-chain commitConviction failed', err);
+        }
+      }
+    }
+
+    // Visual feedback + advance deck (after any on-chain step has landed
+    // or been skipped). FADE reaches here without any wallet interaction.
+    setSwipeFeedback(action);
+    setTimeout(() => { setSwipeFeedback(null); setIndex(i => i + 1); }, 350);
+
+    fetch(`${config.backendUrl}/api/cards/${current.id}/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Wallet-Address': address },
+      body: JSON.stringify({ address, tx_hash: txHash, chain_id: txHash ? 50312 : undefined }),
+    }).catch((err) => console.warn(`prediction ${action} POST failed`, err));
+    queryClient.invalidateQueries({ queryKey: ['energy'] });
+  };
+
   const onDragStart = (clientX: number, clientY: number) => {
     startX.current = clientX;
     startY.current = clientY;
@@ -484,8 +582,19 @@ export default function Feed() {
   const generateCards = async () => {
     setGenerating(true);
     try {
-      await fetch(`${config.backendUrl}/api/cards/generate`, { method: 'POST' });
-      setTimeout(() => { setIndex(0); setGenerating(false); }, 3000);
+      // Mode-aware dispatch: the backend reads `?card_type=` and routes to
+      // the right pipeline (token / prediction / etc). Modes whose primary
+      // card type is the standard "trading" one omit the param.
+      const primaryType = activeMode.cardTypes[0];
+      const url = primaryType && primaryType !== 'trading'
+        ? `${config.backendUrl}/api/cards/generate?card_type=${encodeURIComponent(primaryType)}`
+        : `${config.backendUrl}/api/cards/generate`;
+      await fetch(url, { method: 'POST' });
+      setTimeout(() => {
+        setIndex(0);
+        setGenerating(false);
+        queryClient.invalidateQueries({ queryKey: ['cards'] });
+      }, 3000);
     } catch { setGenerating(false); }
   };
 
@@ -498,14 +607,20 @@ export default function Feed() {
   }
 
   if (!current) {
+    const isPrediction = activeMode.id === 'prediction';
+    const emoji = isPrediction ? '🔮' : '🦍';
+    const subline = isPrediction
+      ? 'Pull live prophecy.social markets'
+      : 'Generate fresh AI-powered token cards';
+    const cta = isPrediction ? '🔮 Pull Prophecy Markets' : '⚡ Generate Cards';
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 px-6 text-center">
-        <span className="text-6xl">🦍</span>
+        <span className="text-6xl">{emoji}</span>
         <p className="text-[#adaaaa] font-label text-sm uppercase tracking-widest">No more cards</p>
-        <p className="text-[#494847] text-xs">Generate fresh AI-powered token cards</p>
+        <p className="text-[#494847] text-xs">{subline}</p>
         <button onClick={generateCards} disabled={generating}
           className="mt-2 ape-gradient px-6 py-3 rounded-lg text-[#0b5800] font-headline font-bold disabled:opacity-50">
-          {generating ? 'Generating...' : '⚡ Generate Cards'}
+          {generating ? 'Generating...' : cta}
         </button>
         <button onClick={() => setIndex(0)} className="bg-[#262626] px-6 py-2 rounded-lg text-[#adaaaa] font-label text-sm">
           Refresh Feed
@@ -688,6 +803,12 @@ export default function Feed() {
                 onFade={handleFade}
                 onExecute={handleExecute}
                 isExecuting={executeSignal.isPending}
+              />
+            ) : current.card_type === 'prediction' ? (
+              <PredictionCard
+                card={current}
+                onApe={() => handlePredictionSwipe('ape')}
+                onFade={() => handlePredictionSwipe('fade')}
               />
             ) : (
               <>

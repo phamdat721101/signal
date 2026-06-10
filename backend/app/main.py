@@ -157,6 +157,27 @@ app.add_middleware(
 from app.agent_api import router as agent_v2_router
 app.include_router(agent_v2_router)
 
+# v3 cross-chain LiFi router (paid /somnia-api/lifi-quote + /api/v3/lifi-intent/*)
+try:
+    from app.lifi_service import router as lifi_router, start_background as _lifi_start
+    app.include_router(lifi_router)
+    @app.on_event("startup")
+    async def _start_lifi_relay() -> None:
+        try:
+            _lifi_start()
+        except Exception as e:                                # noqa: BLE001
+            logger.warning("LiFi background start failed: %s", e)
+    @app.on_event("startup")
+    async def _start_lifi_metadata_refresher() -> None:
+        try:
+            from app.prophecy_lifi_pipeline import run_lifi_metadata_refresher
+            import asyncio as _asyncio
+            _asyncio.create_task(run_lifi_metadata_refresher(), name="lifi-metadata-refresher")
+        except Exception as e:                                # noqa: BLE001
+            logger.warning("prophecy_lifi_refresher start failed: %s", e)
+except Exception as _e:                                       # noqa: BLE001
+    logger.warning("lifi_service router mount skipped: %s", _e)
+
 
 
 @app.exception_handler(Exception)
@@ -274,8 +295,8 @@ async def skill_md():
 # ─── Card API (Ape or Fade) ──────────────────────────────────
 
 @app.get("/api/cards")
-async def get_cards_feed(offset: int = 0, limit: int = Query(default=20, le=50), card_type: str | None = Query(default=None)):
-    cache_key = f"cards:{offset}:{limit}:{card_type or 'all'}"
+async def get_cards_feed(offset: int = 0, limit: int = Query(default=20, le=50), card_type: str | None = Query(default=None), cross_chain_ready: bool | None = Query(default=None)):
+    cache_key = f"cards:{offset}:{limit}:{card_type or 'all'}:cc={cross_chain_ready}"
     hit = cached(cache_key, ttl=60)
     if hit:
         return hit
@@ -283,7 +304,7 @@ async def get_cards_feed(offset: int = 0, limit: int = Query(default=20, le=50),
     if not settings.database_url:
         return {"cards": [], "total": 0}
     from app.db import get_cards
-    cards, total = get_cards(offset, limit, card_type=card_type)
+    cards, total = get_cards(offset, limit, card_type=card_type, cross_chain_ready=cross_chain_ready)
     result = {"cards": cards, "total": total}
     set_cache(cache_key, result)
     return result
@@ -701,9 +722,13 @@ async def ape_card(card_id: int, request: Request):
         if not result["ok"]:
             raise HTTPException(status_code=402, detail="no_energy")
     price = card.get("price", 0)
-    # Non-price cards (macro_desk, whale_alert) — record swipe only, no trade
+    # Non-price cards (macro_desk, whale_alert, prediction) — record swipe only, no trade.
+    # tx_hash comes from frontend when user signed `commitConviction` on Somnia 50312.
     if price <= 0:
-        record_swipe(card_id, address, "ape")
+        chain_id = int(body.get("chain_id") or 50312) if tx_hash else None
+        record_swipe(card_id, address, "ape",
+                     tx_hash=tx_hash if tx_hash else None,
+                     chain_id=chain_id)
         return {"status": "ok", "action": "ape", "trade": None, "conviction": None}
     token_amount = amount_usd / price
     on_chain = bool(tx_hash)
@@ -1049,6 +1074,27 @@ async def get_user_card_history(address: str, offset: int = 0, limit: int = Quer
     address = normalize_address(address)
     from app.db import get_user_swipes, list_vault_allocations
     swipes, total = get_user_swipes(address, offset, limit)
+    # v3.2 — surface explorer URL for any swipe that has an on-chain tx_hash.
+    # Pure mapping; new chains drop in as one entry.
+    _EXPLORER = {
+        50312:  "https://shannon-explorer.somnia.network/tx/",   # Somnia testnet
+        5031:   "https://somnscan.io/tx/",                        # Somnia mainnet
+        421614: "https://sepolia.arbiscan.io/tx/",                # Arbitrum Sepolia
+        42161:  "https://arbiscan.io/tx/",                        # Arbitrum mainnet
+        1952:   "https://www.okx.com/web3/explorer/xlayer-test/tx/",  # X Layer testnet
+        196:    "https://www.okx.com/web3/explorer/xlayer/tx/",   # X Layer mainnet
+    }
+    for s in swipes:
+        # Normalize `created_at` to ISO string so the sort below stays
+        # type-stable when allocations (which are already strings) are
+        # appended. psycopg2 returns native datetime here.
+        ca = s.get("created_at")
+        if hasattr(ca, "isoformat"):
+            s["created_at"] = ca.isoformat()
+        tx = s.get("tx_hash")
+        cid = s.get("chain_id")
+        if tx and cid in _EXPLORER:
+            s["explorer_url"] = f"{_EXPLORER[cid]}{tx}"
     # Merge vault allocations as a synthetic action='allocate' row so the
     # FE History page renders them in the same timeline as ape/fade/execute.
     # SoDex deep-link flow has no on-chain receipt — we surface intent + status.
@@ -1293,11 +1339,29 @@ async def get_metrics():
 
 
 @app.post("/api/cards/generate")
-async def trigger_card_generation():
+async def trigger_card_generation(card_type: str | None = None):
+    """Trigger an on-demand card generation cycle.
+
+    Mode-aware dispatch: `?card_type=prediction` runs the Prophecy.social
+    pipeline; any other value (or omitted) runs the standard token-card
+    cycle. Single endpoint = single source of truth — modes are added in
+    `cardModes.ts` and dispatched here.
+    """
+    if card_type == "prediction":
+        # On-demand path bypasses the scheduler kill-switch — the user has
+        # explicitly asked to generate. Reader still degrades gracefully
+        # if Prophecy isn't reachable (returns empty list, not raise).
+        from app.prophecy_card_pipeline import generate_cards_for_open_markets
+        try:
+            ids = generate_cards_for_open_markets()
+            return {"status": "ok", "card_type": "prediction", "generated": len(ids)}
+        except Exception as e:                                # noqa: BLE001
+            raise HTTPException(status_code=500, detail=str(e))
+
     from app.content_engine import run_card_generation_cycle
     try:
         run_card_generation_cycle()
-        return {"status": "ok"}
+        return {"status": "ok", "card_type": "trading"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

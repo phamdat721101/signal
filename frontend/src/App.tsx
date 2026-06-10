@@ -7,6 +7,7 @@ import Profile from './pages/Profile';
 import TradeSuccess from './pages/TradeSuccess';
 import SettlementSuccess from './pages/SettlementSuccess';
 import Agent from './pages/Agent';
+import CrossChainSwipe from './pages/somnia/CrossChainSwipe';
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/portfolio" element={<Portfolio />} />
         <Route path="/history" element={<History />} />
         <Route path="/profile" element={<Profile />} />
+        <Route path="/somnia/prediction" element={<CrossChainSwipe />} />
 
         <Route path="/trade-success/:id" element={<TradeSuccess />} />
         <Route path="/session/:txHash" element={<SettlementSuccess />} />

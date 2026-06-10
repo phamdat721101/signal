@@ -4,7 +4,6 @@
 >
 > The first product where a non-DeFi user opens a concentrated-liquidity position by performing a card-game gesture.
 
-[![Hook the Future](https://img.shields.io/badge/Hook%20the%20Future-X%20Layer%20×%20Uniswap%20×%20Flap-blueviolet)](https://web3.okx.com/xlayer/build-x-hackathon/hook)
 [![Accuracy](https://img.shields.io/badge/Track%20Record-60.8%25%20across%205%2C816%2B%20predictions-brightgreen)](#track-record)
 [![x402](https://img.shields.io/badge/Agent%20API-x402%20Pay--per--call-blue)](https://ai.overguild.com/agent-api/api/v2/agent/decisions)
 
@@ -122,6 +121,24 @@ The hook doesn't just customize a number — it encodes an entire AI thesis (dir
 
 > **Verify the hook flags:** `python3 -c "print(hex(int('0xa01b3450D9891074d78496133dB8952F17cb0AC0', 16) & 0x3FFF))"` → `0xac0` (BEFORE_ADD_LIQUIDITY | BEFORE_REMOVE_LIQUIDITY | BEFORE_SWAP | AFTER_SWAP)
 
+### Deployed on Somnia (Prediction Cards · v3 cross-chain via LiFi)
+
+The prediction-card mode lives on **Somnia testnet 50312**. The validator-consensus AI verdict (Qwen3-30B subcommittee) runs through `SomniaSignalAgent`, settles into `SomniaCardExecutor`, and commits reputation via `ConvictionEngine`. The v3 cross-chain glue (`PredictionCardLiFiExecutor`) atomically composes "bridge USDC + run AI verdict + bind prophecy market" inside one destination-chain tx.
+
+| Contract | Address (Somnia testnet 50312) | Explorer |
+|---|---|---|
+| ConvictionEngine | `0x11dd5247E7F1c5349E075BAff3CC37dFF74a56DB` | [View ↗](https://shannon-explorer.somnia.network/address/0x11dd5247E7F1c5349E075BAff3CC37dFF74a56DB) |
+| ProofOfAlpha | `0x6a1061dc00B8D636000c2C2e95a28e40c1096A7d` | [View ↗](https://shannon-explorer.somnia.network/address/0x6a1061dc00B8D636000c2C2e95a28e40c1096A7d) |
+| SomniaSignalAgent | `0x77C5cA799029991Ac8590BDa998ad1fDc2630426` | [View ↗](https://shannon-explorer.somnia.network/address/0x77C5cA799029991Ac8590BDa998ad1fDc2630426) |
+| SomniaOracleAdapter | `0x3DaE79dbc6cbA441d0C67606e607a94Dd2ca2c6E` | [View ↗](https://shannon-explorer.somnia.network/address/0x3DaE79dbc6cbA441d0C67606e607a94Dd2ca2c6E) |
+| **SomniaCardExecutor** | `0xF94bEBfC920990E284c28039A5359301578c6640` | [View ↗](https://shannon-explorer.somnia.network/address/0xF94bEBfC920990E284c28039A5359301578c6640) |
+| **KineticProphecyBridge** | `0x754C83162976222A70Fc258CAf941aa892F225A9` | [View ↗](https://shannon-explorer.somnia.network/address/0x754C83162976222A70Fc258CAf941aa892F225A9) |
+| **PredictionCardLiFiExecutor** | `0x0E97095455E7EC50bdD85C57D844C9610258af32` | [View ↗](https://shannon-explorer.somnia.network/address/0x0E97095455E7EC50bdD85C57D844C9610258af32) |
+| MockLiFiCaller (testnet sim) | `0xad264Ed679cC871312e68C1B757D3Ad88414CA9e` | [View ↗](https://shannon-explorer.somnia.network/address/0xad264Ed679cC871312e68C1B757D3Ad88414CA9e) |
+| MockUSDC (testnet, 6-dec) | `0x6f16cB586920ef5AF078F26F88C83F1943859152` | [View ↗](https://shannon-explorer.somnia.network/address/0x6f16cB586920ef5AF078F26F88C83F1943859152) |
+
+Single source of truth: [`contracts/deployments/50312.json`](contracts/deployments/50312.json). Deploy + 3 wirings reproducible via `forge script script/06_DeployPredictionCardLiFi.s.sol`.
+
 ---
 
 ## The 10-Second User Journey
@@ -227,6 +244,106 @@ forge script script/04_DeployRealV4.s.sol --rpc-url xlayer_testnet --broadcast -
 # Sync env files from deployment JSON (single source of truth)
 node scripts/sync-deployments.mjs
 ```
+
+### Prediction-card mode (Prophecy.social on Somnia)
+
+A 4th feed mode — 🔮 Predictions — reads Prophecy.social markets from Somnia
+mainnet 5031 and lets users APE/FADE on Somnia testnet 50312 (paper PST).
+Read-everywhere, write-Somnia: the deck renders on any chain; the chain
+switch fires only on a deliberate swipe.
+
+#### How a prediction card flows end-to-end
+
+```
+┌─ Somnia mainnet 5031 ──────────────────────────────────────────────┐
+│ Prophecy.social MarketCreated / MarketResolved events              │
+└──────┬─────────────────────────────────────────────────────────────┘
+       │ (1) read-only RPC view + HTTP fallback (15-min cache)
+       ▼
+┌─ backend/app/prophecy_social_reader.py ────────────────────────────┐
+│ Typed `ProphecyMarket` dataclasses · graceful degrade to HTTP      │
+│ when RPC is unhappy · IPFS-resolved metadata for question text     │
+└──────┬─────────────────────────────────────────────────────────────┘
+       │ (2) APScheduler tick (every 5 min)
+       ▼
+┌─ backend/app/prophecy_card_pipeline.py ────────────────────────────┐
+│ Filters: open + deadline > 15 min + question ≤ 280 chars           │
+│ Synthesizes verdict (v1: deterministic crowd-follow heuristic)     │
+│ Inserts `cards` row · UNIQUE (prophecy_market_id) → idempotent     │
+└──────┬─────────────────────────────────────────────────────────────┘
+       │ (3) bind market_id → cardHash on Somnia testnet 50312
+       ▼
+┌─ KineticProphecyBridge.bindMarketToCard ───────────────────────────┐
+│ Authorized binders only · `cardHash = keccak256(cardId, marketId)` │
+└──────┬─────────────────────────────────────────────────────────────┘
+       │ (4) frontend Feed.tsx renders the prophecy card
+       ▼
+┌─ User swipes APE on `/?mode=prediction` ───────────────────────────┐
+│ Wallet signs `ConvictionEngine.commitConviction(cardHash, 75, true)│
+│ Tx hash + chain_id persisted in `swipes` table                     │
+└──────┬─────────────────────────────────────────────────────────────┘
+       │ (5) Prophecy market resolves on mainnet 5031 (24h-7d later)
+       ▼
+┌─ backend/app/prophecy_event_poller.py ─────────────────────────────┐
+│ Sees `MarketResolved` → `KineticProphecyBridge.triggerResolution`  │
+│ → `ConvictionEngine.resolveCard` → reputation updates for every    │
+│ APE/FADE swiper · `lifi_intents.outcome_correct` filled for v3 rows│
+└────────────────────────────────────────────────────────────────────┘
+```
+
+| Data point | Source |
+|---|---|
+| `prophecy_market_id`, deadline, YES/NO odds at gen | `ProphecyMarket` struct on mainnet 5031 (`prophecy_market_address`) |
+| Market question text + image | IPFS metadata (3 gateway fallbacks) |
+| Open-markets list | `ProphecyMarket.openMarkets()` view, 15-min in-process cache |
+| Resolution outcome | `MarketResolved` event log scan, last 5,000 mainnet blocks |
+| Settlement on Somnia testnet | `KineticProphecyBridge.triggerResolution` → `ConvictionEngine.resolveCard` |
+| Cross-chain swipe outcome | `mark_lifi_intents_outcome_for_market` propagates per-intent rows |
+
+```bash
+# 1. Verify Prophecy.social contract addresses on browser.somnia.network
+#    and populate backend/.env: PROPHECY_MARKET_ADDRESS, PROPHECY_PST_TOKEN_ADDRESS
+
+# 2. Deploy the testnet bridge (assumes SOMNIA_CONVICTION_ENGINE_ADDRESS exists):
+bash deploy-somnia-prophecy.sh
+
+# 3. Restart backend; the prophecy_card_gen + prophecy_relay scheduler
+#    jobs come up automatically via the kill-switch flip.
+bash restart_signal.sh
+```
+
+Full architecture, env vars, and module map: see `product_context.md` §15.
+
+### Cross-chain prediction-card (v3 · LiFi · Arbitrum → Somnia)
+
+A 5th surface at **`/somnia/prediction`** lets a user holding USDC on Arbitrum
+Sepolia (or mainnet, post-promotion) swipe a prophecy card with **one signature**.
+The bet binds atomically on Somnia — bridge + verdict + prophecy-market binding
+all happen inside a single `executeFromLiFi` transaction.
+
+Every successful swipe persists three click-through proof URLs (Arbiscan +
+Somnscan + prophecy market) so a Somnia core-team reviewer can verify the
+entire flow on-chain without any local setup.
+
+```bash
+# 1. Deploy executor + (testnet) MockUSDC + MockLiFiCaller + 3 wirings:
+cd contracts
+PRIVATE_KEY=0x… SOMNIA_CARD_EXECUTOR=0x… KINETIC_PROPHECY_BRIDGE=0x… \
+KINETIC_NETWORK=testnet \
+forge script script/06_DeployPredictionCardLiFi.s.sol \
+    --rpc-url https://api.infra.testnet.somnia.network --broadcast --via-ir
+
+# 2. Backend env: LIFI_QUOTE_ENABLED=true, LIFI_RELAY_ENABLED=true,
+#    PREDICTION_CARD_LIFI_EXECUTOR_ADDRESS=…, SOMNIA_USDC_ADDRESS=…
+
+# 3. Frontend env: VITE_KINETIC_NETWORK=testnet, VITE_SOMNIA_USDC_ADDRESS=…
+
+# 4. Restart and open https://ai.overguild.com/somnia/prediction
+bash restart_signal.sh
+```
+
+Full reviewer playbook + mainnet-promotion gate:
+[`docs/PRDs/v3-cross-chain-prediction-card/SMOKE-TESTNET.md`](docs/PRDs/v3-cross-chain-prediction-card/SMOKE-TESTNET.md).
 
 ---
 

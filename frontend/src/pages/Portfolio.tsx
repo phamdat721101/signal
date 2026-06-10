@@ -192,6 +192,10 @@ export default function Portfolio() {
 
   return (
     <div className="p-5 space-y-5 pb-24">
+      {/* Prediction swipes (on-chain) — shows explorer URL per swipe so the user
+          can click through to verify any commitConviction tx. */}
+      <PredictionTxHistory address={address} />
+
       {/* Live SoDex perps positions — only shown when there's something open. */}
       {sodex && sodex.enabled && sodex.positions.length > 0 && (
         <div className="bg-[#0e1a0e] border-2 border-[#8eff71]/40 rounded-xl p-4">
@@ -407,5 +411,95 @@ function SummonRow({ s }: { s: SummonTx }) {
         <div className="font-label text-[11px] text-[#bf81ff]">{s.tx_hash.slice(0, 10)}… ↗</div>
       </div>
     </a>
+  );
+}
+
+
+
+// ─────────────────────────────────────────────────────────────────
+//  PredictionTxHistory — surfaces on-chain swipes with explorer links
+//
+//  SOLID:
+//    - SRP: this block only renders rows that have a verifiable on-chain
+//      tx (filter `tx_hash` is non-null). Trade rows + SoDex perps stay
+//      in their own panels.
+//    - DIP: depends on the existing `/api/cards/user/:addr` shape, which
+//      now includes `tx_hash` + `explorer_url` after the v3.2 patch.
+//
+//  Auto-hides when the user has no on-chain prediction swipes.
+//  Auto-refreshes every 15s so a fresh swipe lands quickly.
+// ─────────────────────────────────────────────────────────────────
+type SwipeRow = {
+  id: number | string;
+  action: 'ape' | 'fade' | 'execute' | 'allocate';
+  token_symbol?: string;
+  token_name?: string;
+  hook?: string;
+  created_at?: string;
+  tx_hash?: string | null;
+  chain_id?: number | null;
+  explorer_url?: string | null;
+};
+
+function PredictionTxHistory({ address }: { address: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['portfolio-prediction-tx', address],
+    enabled: !!address,
+    refetchInterval: 15_000,
+    queryFn: async () => {
+      const r = await fetch(`${config.backendUrl}/api/cards/user/${address}?limit=100`);
+      if (!r.ok) return { swipes: [] as SwipeRow[] };
+      return r.json() as Promise<{ swipes: SwipeRow[] }>;
+    },
+  });
+
+  const onchain = (data?.swipes ?? [])
+    .filter((s) => !!s.tx_hash && !!s.explorer_url)
+    .slice(0, 10);
+
+  if (isLoading || !address) return null;
+  if (onchain.length === 0) return null;
+
+  return (
+    <section className="bg-[#131313] rounded-xl p-4 space-y-3">
+      <header className="flex items-center justify-between">
+        <h2 className="font-headline text-sm font-bold text-white">Prediction swipes (on-chain)</h2>
+        <span className="text-[10px] font-label text-[#adaaaa] uppercase tracking-widest">
+          {onchain.length} tx
+        </span>
+      </header>
+      <ul className="space-y-2">
+        {onchain.map((s) => {
+          const isApe = s.action === 'ape';
+          const tone = isApe
+            ? { tint: 'bg-[#8eff71]/10', fg: 'text-[#8eff71]', label: 'APE'  }
+            : { tint: 'bg-[#ff7166]/10', fg: 'text-[#ff7166]', label: 'FADE' };
+          const ts = s.created_at ? new Date(s.created_at).toLocaleString() : '';
+          return (
+            <li key={s.id} className="bg-[#0d0d0d] rounded-lg p-3 border border-white/5">
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-headline font-bold text-white text-sm">${s.token_symbol || '—'}</span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded ${tone.tint} ${tone.fg}`}>{tone.label}</span>
+                </div>
+                <span className="text-[10px] text-[#adaaaa] font-mono">{ts}</span>
+              </div>
+              {s.hook && (
+                <p className="text-[11px] text-[#adaaaa] line-clamp-2 mb-1">{s.hook}</p>
+              )}
+              <a
+                href={s.explorer_url!}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="View transaction on block explorer"
+                className="text-[11px] text-sky-400 hover:underline font-mono break-all"
+              >
+                🔗 {s.tx_hash!.slice(0, 14)}…{s.tx_hash!.slice(-6)}
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }

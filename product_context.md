@@ -537,3 +537,127 @@ frontend/src/
 ```
 
 **Out of scope for v1.** Programmatic vault deposit/withdraw (blocked on SoDex Trading API), automated MAG7.ssi acquisition, vault APR ingestion (no public API), in-app withdrawal flow, paid agent SKU for vault listings (rides on existing `/lp-recipes` mirror later), 14-day unstake countdown surface (Phase 2).
+
+
+---
+
+## 15. Prediction Cards — Prophecy.social mode (added 2026-06-09)
+
+**Wedge.** Prophecy.social runs the most expensive parts of agentic prediction
+markets — market creation, AI-agent resolution, public receipts — for free
+on Somnia. v1 composes rather than competes: Kinetic reads Prophecy markets
+on mainnet 5031, generates a swipe card per market, lets users APE / FADE on
+testnet 50312 (paper PST), then settles every swipe when prophecy.social
+resolves.
+
+**Cross-chain split (read mainnet, write testnet).**
+
+- Reads — `prophecy_social_reader.py` calls Somnia mainnet 5031 RPC; falls
+  back to `https://api.prophecy.social/markets` via `http_client` (service
+  tag `prophecy_api` shows up in `/api/health.circuits`). 15-minute cache
+  on open lists, infinite cache on resolved.
+- Writes — `KineticProphecyBridge.sol` lives on Somnia testnet 50312 next
+  to the existing `ConvictionEngine`. Two ACL maps (`authorizedBinders`
+  and `authorizedRelays`) gate the only two write functions.
+- Cardhash convention — `keccak256(abi.encode(uint256 cardId, uint256 marketId))`.
+  Same formula in `prophecy_card_pipeline.compute_card_hash` (Python),
+  `viem keccak256(encodeAbiParameters(...))` (FE), and the bridge contract.
+
+**Card pipeline.** `prophecy_card_pipeline.py` runs every 15 min, re-uses
+the project's standard 5-stage shape:
+
+| Stage | Source |
+|---|---|
+| 1 — Harvest | `prophecy_social_reader.fetch_open_markets` |
+| 2 — Signals | pure logic — pool imbalance + time remaining |
+| 3 — Verdict | deterministic crowd-following (v1); swap point for v2 Somnia LLM Inference |
+| 4 — Visual | minimal — the FE `PredictionCard.tsx` does the visual |
+| 5 — Assemble | `db.insert_card(card_type='prediction', source='prophecy', chain='somnia')` + `_bind_card_on_bridge` post-insert |
+
+`cards` table gains 3 nullable columns (`prophecy_market_id`,
+`prophecy_yes_odds_at_gen`, `prophecy_deadline`) plus a partial unique index
+on `prophecy_market_id`, all created idempotently in `_ensure_runtime_columns`.
+The unique index makes pipeline re-runs race-safe at the DB layer.
+
+**Resolution relay.** `prophecy_event_poller.py` runs every 60 s and calls
+`KineticProphecyBridge.triggerResolution(marketId, outcome, receiptUri)`
+on testnet for every recently-resolved mainnet market. Idempotency layered
+3 ways: (a) `chain_ops`-style SHA256 check is unnecessary because the bridge
+itself owns `resolutionPropagated[mid]`; (b) DB lookup short-circuits markets
+we never carded; (c) `AlreadyPropagated` reverts are swallowed as success.
+
+**Frontend — read-everywhere, write-Somnia.**
+`FEED_MODES['prediction']` carries an optional `executionChainId: 50312`.
+The deck renders on every chain — value precedes friction. `Feed.tsx`'s
+`handlePredictionSwipe` only triggers `wagmi.switchChainAsync` when the user
+APE/FADEs from a non-Somnia chain. After the switch (or if already on 50312)
+it computes the cardHash via viem and calls
+`ConvictionEngine.commitConviction(cardHash, 75, isBull)` directly via the
+existing `useWallet.sendTx` helper. Failures (rejected switch, gas fail,
+unconfigured engine address) degrade gracefully to a DB-only paper swipe.
+
+**APE vs FADE asymmetry (added 2026-06-09).** Only `APE` triggers the chain
+switch + on-chain `commitConviction` on Somnia 50312. `FADE` is a DB-only
+off-chain vote: no wallet popup, no chain switch, no gas. Rationale:
+   - FADE is the more frequent action — keeping it frictionless preserves
+     deck velocity (Frame 11 / convenience moat).
+   - FADE = "skip / disagree" semantics. It's a leaderboard signal, not a
+     conviction-staking event, so it doesn't deserve gas.
+   - APE = strong commitment → earns on-chain reputation in
+     `ConvictionEngine` when prophecy.social resolves the source market
+     (via `KineticProphecyBridge.triggerResolution`). FADE is recorded
+     in the `swipes` table only.
+The PredictionCard footer makes this contract explicit:
+`🟢 APE locks on Somnia · FADE off-chain`.
+
+**Module map.**
+
+```
+backend/app/
+  prophecy_social_reader.py     NEW   ~448 LOC  RPC + HTTP, inline dataclasses
+  prophecy_card_pipeline.py     NEW   ~330 LOC  pipeline + compute_card_hash + _bind_card_on_bridge
+  prophecy_event_poller.py      NEW   ~160 LOC  cross-chain relay (mainnet logs → testnet bridge)
+  abis/prophecy_market.json     NEW   data file (Day-0 verify on browser.somnia.network)
+  config.py                     +9    7 prophecy keys + somnia_mainnet_rpc + somnia_testnet_rpc
+  db.py                         +25   3 cards columns + insert_card + _row_to_card
+  scheduler.py                  +12   prophecy_card_gen (15m) + prophecy_relay (60s)
+
+contracts/
+  src/KineticProphecyBridge.sol            NEW  ~122 LOC  permissioned settlement adapter
+  test/KineticProphecyBridge.t.sol         NEW  ~155 LOC  13 tests
+  script/06_DeployProphecyBridge.s.sol     NEW  ~55  LOC  one-shot deploy + ACL setup
+
+frontend/src/
+  components/PredictionCard.tsx            NEW  ~132 LOC  feed card; inline odds bar
+  config/cardModes.ts                      +     `executionChainId?: number` + 'prediction' mode
+  config/index.ts                          +     somnia.{convictionEngineAddress, prophecyBridgeAddress}
+  hooks/useCards.ts                        +     3 prediction fields on Card type
+  pages/Feed.tsx                           +     handlePredictionSwipe + render branch + ABI fragment
+
+deploy-somnia-prophecy.sh        NEW  ~93 LOC  one-shot: forge script → upsert .env files → restart hint
+```
+
+**Env vars (essential 7).**
+
+```bash
+# Read side (Somnia mainnet 5031)
+SOMNIA_MAINNET_RPC=https://api.infra.mainnet.somnia.network
+PROPHECY_MARKET_ADDRESS=0x...                   # Day-0 verify on browser.somnia.network
+PROPHECY_PST_TOKEN_ADDRESS=0x...                # informational
+PROPHECY_API_BASE_URL=https://api.prophecy.social
+
+# Write side (Somnia testnet 50312)
+SOMNIA_TESTNET_RPC=https://api.infra.testnet.somnia.network
+PROPHECY_BRIDGE_ADDRESS=0x...                   # populated by deploy-somnia-prophecy.sh
+PROPHECY_CARD_GEN_ENABLED=true                  # kill-switch; default false
+```
+
+**Deploy.** `bash deploy-somnia-prophecy.sh` — assumes the existing Somnia
+stack is already deployed (`SOMNIA_CONVICTION_ENGINE_ADDRESS` set in
+`backend/.env`). Idempotent re-runs deploy a fresh bridge and stamp the
+addresses into `backend/.env`, `frontend/.env`, and `contracts/deployments/50312.json`.
+
+**Out of scope for v1.** Programmatic PST staking on prophecy.social,
+LLM-Inference verdict synthesis (deferred to v2 Somnia-Native sister sprint),
+reactive Solidity (cross-chain design forbids it; the poller is canonical),
+mainnet 5031 deploy of Kinetic contracts.

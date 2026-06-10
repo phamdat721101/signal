@@ -23,7 +23,7 @@ export function useWallet(opts?: { expectedChainId?: number }) {
   const expectedChainId = opts?.expectedChainId ?? config.chain.id;
   const isCorrectChain = !isConnected || currentChainId === expectedChainId;
 
-  const sendTx = async (to: string, data: string, chainId?: number, value?: bigint): Promise<string> => {
+  const sendTx = async (to: string, data: string, chainId?: number, value?: bigint, gas?: bigint): Promise<string> => {
     const hash = await sendTransactionAsync({
       to: to as `0x${string}`,
       data: data as `0x${string}`,
@@ -34,6 +34,11 @@ export function useWallet(opts?: { expectedChainId?: number }) {
       // SomniaCardExecutor.batchExecuteFromQueue requires N × per-call STT).
       // Optional — existing callers (Initia) leave undefined → 0.
       value: value ?? 0n,
+      // Explicit gas limit — some wallets (Phantom, custom-network mode)
+      // do NOT auto-estimate gas for unknown contract calls and end up
+      // submitting tx with `gas: 0` → "Simulation Not Supported" wall.
+      // Caller passes a sensible ceiling; wagmi/viem clamps to actual usage.
+      ...(gas !== undefined ? { gas } : {}),
     });
     return hash;
   };

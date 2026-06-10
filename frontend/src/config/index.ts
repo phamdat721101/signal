@@ -91,6 +91,8 @@ export const config = {
     cardExecutorAddress: import.meta.env.VITE_SOMNIA_CARD_EXECUTOR_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
     signalAgentAddress: import.meta.env.VITE_SOMNIA_SIGNAL_AGENT_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
     agentMarketAddress: import.meta.env.VITE_SOMNIA_AGENT_MARKET_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+    convictionEngineAddress: import.meta.env.VITE_SOMNIA_CONVICTION_ENGINE_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
+    prophecyBridgeAddress: import.meta.env.VITE_SOMNIA_PROPHECY_BRIDGE_ADDRESS as `0x${string}` || '0x0000000000000000000000000000000000000000',
   },
 
   // Arbitrum Sepolia (paid agent-data services rail — standard x402, buyer pays gas)

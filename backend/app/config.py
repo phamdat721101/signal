@@ -54,6 +54,20 @@ class Settings(BaseSettings):
     # Agentathon additions: executor + B2B verdict market.
     somnia_card_executor_address: str = ""
     somnia_agent_market_address: str = ""
+    # ── Prophecy.social integration (mainnet 5031 read, testnet 50312 write) ──
+    # Cross-chain split: data is read from Somnia mainnet (where Prophecy lives);
+    # swipes + bridge settlement live on testnet 50312 (existing Kinetic surface).
+    # All addresses populated post Day-0 contract verification on browser.somnia.network;
+    # leave empty to disable the feature without any code change (`prophecy_card_gen_enabled`
+    # is the kill-switch consumed by scheduler + pipeline).
+    somnia_mainnet_rpc: str = "https://api.infra.mainnet.somnia.network"
+    somnia_testnet_rpc: str = "https://api.infra.testnet.somnia.network"
+    prophecy_market_address: str = ""           # mainnet 5031 — read-only
+    prophecy_pst_token_address: str = ""        # mainnet 5031 — read-only (informational)
+    prophecy_api_base_url: str = "https://prophecy.social"  # SSR home page (Next.js RSC) is the canonical fallback
+    prophecy_cache_ttl_seconds: int = 900       # 15 min for open-markets list; resolved cached forever
+    prophecy_bridge_address: str = ""           # testnet 50312 — KineticProphecyBridge.sol
+    prophecy_card_gen_enabled: bool = False     # kill-switch; flip to true after Day-0 verify
     # Somnia x402 REST rail (parallel to Base CDP; route prefix /somnia-api).
     # Toggle via SOMNIA_X402_ENABLED=true. Receiver falls back to x402_receiver_address.
     somnia_x402_enabled: bool = False
@@ -61,6 +75,26 @@ class Settings(BaseSettings):
     somnia_x402_facilitator_url: str = "https://api.cdp.coinbase.com/platform/v2/x402"
     somnia_x402_receiver_address: str = ""
     somnia_x402_public_base_url: str = ""
+    # ── Kinetic v3 cross-chain (LiFi · Arbitrum→Somnia) ──
+    # Single env-driven flag controls testnet ($0.10) vs mainnet ($1.00). Same
+    # bytecode + same backend module + same frontend bundle.
+    kinetic_network: str = "testnet"                              # "testnet" | "mainnet"
+    lifi_quote_enabled: bool = False
+    lifi_relay_enabled: bool = False
+    lifi_metadata_refresher_enabled: bool = True
+    lifi_api_base: str = "https://li.quest/v1"
+    lifi_timeout_seconds: int = 600                                # 10 min
+    lifi_relay_poll_seconds: int = 5                               # event poll cadence
+    prediction_card_lifi_executor_address: str = ""
+    mock_lifi_caller_address: str = ""                             # testnet only
+    somnia_usdc_address: str = ""                                  # MockUSDC on testnet, real on mainnet
+    arbitrum_usdc_address: str = "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d"  # Arb-Sepolia USDC
+    arbitrum_chain_id: int = 421614                                # Sepolia testnet by default
+    arbiscan_tx_base_url: str = "https://sepolia.arbiscan.io/tx/"
+    somnscan_tx_base_url: str = "https://shannon-explorer.somnia.network/tx/"
+    prophecy_market_url_template: str = "https://prophecy.social/market/{id}"
+    cross_chain_deadline_buffer_minutes: int = 20
+    default_min_swipe_stake_usdc: int = 100_000                    # $0.10 testnet floor
     # ── GOAT testnet x402 rail (chain 48816, /goat-api prefix; verify-only) ──
     # No facilitator: buyer signs & broadcasts the ERC-20 transfer themselves
     # (mirrors backend/agent-provider/src/paywall.ts pattern for Arb Sepolia).

@@ -1,0 +1,50 @@
+[
+  {
+    "type": "function",
+    "name": "marketCount",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [{"name": "", "type": "uint256"}]
+  },
+  {
+    "type": "function",
+    "name": "getMarket",
+    "stateMutability": "view",
+    "inputs": [{"name": "marketId", "type": "uint256"}],
+    "outputs": [
+      {"name": "question",            "type": "string"},
+      {"name": "creator",              "type": "address"},
+      {"name": "category",             "type": "uint8"},
+      {"name": "deadline",             "type": "uint256"},
+      {"name": "resolutionCriteria",  "type": "string"},
+      {"name": "status",               "type": "uint8"},
+      {"name": "yesPool",              "type": "uint256"},
+      {"name": "noPool",               "type": "uint256"},
+      {"name": "consensusThreshold",  "type": "uint8"},
+      {"name": "outcome",              "type": "bool"},
+      {"name": "resolutionReceiptUri","type": "string"}
+    ]
+  },
+  {
+    "type": "event",
+    "name": "MarketCreated",
+    "inputs": [
+      {"name": "id",        "type": "uint256", "indexed": true},
+      {"name": "creator",   "type": "address", "indexed": true},
+      {"name": "question",  "type": "string",  "indexed": false},
+      {"name": "category",  "type": "uint8",   "indexed": false},
+      {"name": "deadline",  "type": "uint256", "indexed": false}
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "MarketResolved",
+    "inputs": [
+      {"name": "marketId",   "type": "uint256", "indexed": true},
+      {"name": "outcome",    "type": "bool",    "indexed": false},
+      {"name": "receiptUri", "type": "string",  "indexed": false}
+    ],
+    "anonymous": false
+  }
+]
